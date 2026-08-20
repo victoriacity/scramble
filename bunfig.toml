@@ -1,6 +1,9 @@
 [test]
 coverage = true
 coverageReporter = ["text"]
-# 100% coverage is a goal constraint, enforced here so `bun test` fails below it.
-coverageThreshold = { line = 1.0, function = 1.0, statement = 1.0 }
+# 100% coverage is a goal constraint, enforced here so `bun test` EXITS NONZERO
+# below it. Must be the SCALAR form: bun 1.3.14 silently IGNORES the inline-table
+# form (`{ line = 1.0, function = 1.0 }`) and exits 0 at partial coverage --
+# verified both directions, 57% -> rc=1 and 100% -> rc=0.
+coverageThreshold = 1
 coverageSkipTestFiles = true

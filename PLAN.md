@@ -32,6 +32,60 @@ the existing TS toolchain). Single package, no framework: `Bun.serve` + `fetch`.
 2. `.akari/` scaffold on the scramble repo so lanes/fleets target it.
 3. File the epic + the unit tasks below in tt (dispatch is automatic).
 
+## Dispatch (how the units actually run)
+
+Units run as akari workers against this repo via laneless dispatch:
+
+```
+cd /opt/akari/scramble
+export AKARI_SERVER_CONTROL_TOKEN="$(grep -m1 '^AKARI_SERVER_CONTROL_TOKEN=' \
+  /opt/akari/akrust/scripts/lead/systemd-staging/akari-fix.env | cut -d= -f2-)"
+export AKARI_WORKSPACE_DIR=/opt/akari/scramble
+export AKARI_BASE_URL=http://127.0.0.1:8771
+nohup akari run /opt/akari/scramble/scramble.workflow.ts > run.log 2>&1 &
+```
+
+Four things that cost a round when learned the hard way:
+
+1. **A worker runs in a lane overlay, not in this directory.** The server seeds
+   `/opt/akari/akari/.akari/lanes/lane-NN-default` from this repo, runs the
+   worker there, gates it, then reconciles the writes back here as a
+   green-gated commit. So `/api/workers` showing a `lane_id` and a `merge` tool
+   call is NORMAL, not a misdispatch. Do not cancel on that evidence.
+2. **The control token is required** (POST /api/projects is 401 without it) and
+   `akari-fix.env` is systemd-format: `source` dies on its unquoted
+   AKARI_PROVIDER_CHAIN JSON, and its PATH line drops the dir holding the
+   `akari` shim. Extract the one line, as above.
+3. **Verify exactly one client**: `ps aux | grep "dispatch/src/cli.ts run" |
+   grep -v grep | wc -l` must print 1. A failed `source` does not abort the
+   shell line, so a broken attempt can still leave a run behind and two
+   concurrent runs will duplicate every unit.
+4. **`.akari/gate.toml` must declare every new top-level path** the units add,
+   or each worker spends turns teaching the structural gate about its own
+   deliverable.
+
+## Coverage rules (read before writing any module)
+
+The gate is `bun test --coverage` with `coverageThreshold = 1` — 100% of lines
+and functions in every file a test loads. Two consequences that decide how you
+structure a module:
+
+1. **Process entrypoints go in `src/bin.ts`, which NO test imports.** A
+   `Bun.serve(...)` call and an `if (import.meta.main) main(...)` body can
+   never be executed by a test, so if they sit in a file a test loads they are
+   permanently uncovered and the gate can never go green. bun only reports
+   files that were loaded during the run, so an entrypoint file no test imports
+   is invisible to coverage. `src/cli.ts` exports `main(argv, io)`;
+   `src/server.ts` exports `createHandler(store, opts)`; `src/bin.ts` is the
+   only place that binds a port or reads `process.argv`.
+2. **An untestable branch is a branch to delete.** Defensive code for a state
+   the types make impossible is the usual offender. If you cannot write a test
+   that reaches it, it is not protection, it is uncovered weight.
+
+`coverageThreshold` MUST stay the scalar form: bun 1.3.14 silently ignores the
+inline-table form and exits 0 at partial coverage (verified 57% -> rc=1 scalar,
+rc=0 table).
+
 ## Units (akari AGENT tasks — goal + deliverable + invariants, not steps)
 
 Dependency DAG; width bounded by the lane pool. Units in the same round fire
