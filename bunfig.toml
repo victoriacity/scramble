@@ -1,0 +1,6 @@
+[test]
+coverage = true
+coverageReporter = ["text"]
+# 100% coverage is a goal constraint, enforced here so `bun test` fails below it.
+coverageThreshold = { line = 1.0, function = 1.0, statement = 1.0 }
+coverageSkipTestFiles = true
