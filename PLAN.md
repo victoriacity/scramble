@@ -62,7 +62,12 @@ Four things that cost a round when learned the hard way:
    concurrent runs will duplicate every unit.
 4. **`.akari/gate.toml` must declare every new top-level path** the units add,
    or each worker spends turns teaching the structural gate about its own
-   deliverable.
+   deliverable. Write it as ONE inline array on ONE line, no comments:
+   akari's `parse_gate_toml`
+   (`lane/crates/akari-lane/src/gate_green/extra_steps.rs:169`) is line-based
+   and accepts only inline arrays of double-quoted strings. A multi-line array
+   makes the gate fail with `key must be a string at line 1 column 2`, and the
+   worker then spends its turns reading akari's Rust parser.
 
 ## Coverage rules (read before writing any module)
 
