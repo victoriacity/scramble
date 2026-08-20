@@ -41,6 +41,46 @@ TOKEN="$(grep -m1 '^AKARI_SERVER_CONTROL_TOKEN=' "$ENV_FILE" | cut -d= -f2-)"
 #    worker spends turns teaching the gate about its own deliverable.
 [ -r "$REPO/.akari/gate.toml" ] || fail "$REPO/.akari/gate.toml missing"
 
+# 4b) gate.toml SHAPE. akari's parse_gate_toml
+#     (lane/crates/akari-lane/src/gate_green/extra_steps.rs:169) is LINE-BASED:
+#     it accepts only inline single-line arrays of double-quoted strings. A
+#     multi-line array makes the gate fail with `key must be a string at line 1
+#     column 2`, and the worker then spends its turns reading akari's Rust
+#     parser instead of writing its unit (that happened on 2026-08-20).
+python3 - "$REPO/.akari/gate.toml" <<'PYEOF' || fail "see the gate.toml shape error above"
+import json, re, sys
+path = sys.argv[1]
+lines = open(path).read().splitlines()
+bad = []
+for i, line in enumerate(lines, 1):
+    s = line.strip()
+    if not s or s.startswith("[") :
+        continue
+    if s.startswith("#"):
+        bad.append(f"line {i}: comment -- the parser surface is line-based, keep this file comment-free: {s}")
+        continue
+    if "=" not in s:
+        bad.append(f"line {i}: not a `key = value` line (a multi-line array continuation?): {s}")
+        continue
+    val = s.split("=", 1)[1].strip()
+    if val.startswith("["):
+        if not val.endswith("]"):
+            bad.append(f"line {i}: array is not closed on the SAME line (multi-line arrays are rejected): {s}")
+        else:
+            try:
+                parsed = json.loads(val)
+                if not all(isinstance(x, str) for x in parsed):
+                    bad.append(f"line {i}: array must hold only double-quoted strings: {s}")
+            except Exception:
+                bad.append(f"line {i}: array is not a valid inline JSON-style array: {s}")
+if bad:
+    print("dispatch: REFUSED -- .akari/gate.toml would break akari's line-based parser:")
+    for b in bad:
+        print(f"  {b}")
+    sys.exit(1)
+sys.exit(0)
+PYEOF
+
 [ -r "$WORKFLOW" ] || fail "workflow not readable: $WORKFLOW"
 
 # 5) The daemon must answer before we claim a launch.
