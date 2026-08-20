@@ -100,6 +100,7 @@ deviation from this table is a defect in the deviating unit, not a new contract.
 | `history <room>` | `--since <n>` | prints messages, one JSON line each | 0 |
 | `join <room>` | `--as <name>`, `--persona <text>` | resolves the workspace, reads `.scramble/persona.md`, scaffolds `.scramble/` when absent, registers with the daemon | 0 |
 | `serve` | `--bind <addr>`, `--token <t>`, `--data <dir>` | runs the daemon | — |
+| `slack` | `--url`, `--token`, `--dry-run` | runs the Slack bridge: reads `.scramble/slack.json`, connects Socket Mode, publishes every firehose room message to Slack, routes inbound Slack messages into rooms. `--dry-run` prints the wired Slack calls it WOULD make (channel map + identity tiers) without connecting | 0; 1 on missing/invalid config |
 
 Global: `SCRAMBLE_URL` / `SCRAMBLE_TOKEN` env win over the workspace
 `.scramble/config.json`, which wins over `http://127.0.0.1:7737`. Every

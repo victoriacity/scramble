@@ -55,6 +55,8 @@ export interface SlackConfig {
   botIds?: string[];
   /** App token, used for every persona-tier post (chat:write.customize). */
   token?: string;
+  /** App-level token (xapp-, scope connections:write) for Socket Mode connect. */
+  appToken?: string;
   /** Read-only channel for agent <-> agent DM mirror (default "#scramble-dms"). */
   dmMirrorChannel?: string;
   /** Record would-be calls instead of hitting the transport. */
