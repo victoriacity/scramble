@@ -1,0 +1,147 @@
+import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
+const ROOT = join(import.meta.dir, "..");
+const plan = readFileSync(join(ROOT, "PLAN.md"), "utf8");
+const readme = readFileSync(join(ROOT, "README.md"), "utf8");
+const manifest = readFileSync(join(ROOT, "docs", "slack-manifest.yaml"), "utf8");
+
+// The global contract note grants --url / --token to EVERY command regardless of
+// the row it appears in ("Every command accepts --url / --token ...").
+const GLOBAL_FLAGS = ["--url", "--token"];
+
+// Parse the authoritative CLI contract table out of PLAN.md into
+// verb -> Set<flags, not including the global ones>.
+function parseContract(): Map<string, Set<string>> {
+  const verbs = new Map<string, Set<string>>();
+  const lines = plan.split("\n");
+  const start = lines.findIndex((l) => l.startsWith("## The CLI contract"));
+  if (start < 0) throw new Error("PLAN.md: CLI contract section not found");
+  for (const line of lines.slice(start)) {
+    if (!line.startsWith("|")) continue;
+    const cells = line.split("|").map((c) => c.trim());
+    if (cells.length < 3) continue;
+    if (cells.every((c) => /^[-:]+$/.test(c))) continue; // header separator
+    if (cells[0] === "command") continue; // column header row
+    const verb = cells[1]!.replace(/`/g, "").trim().split(/\s+/)[0]!;
+    const flags = cells[2]!.match(/--[a-z-]+/g) ?? [];
+    verbs.set(verb, new Set(flags));
+  }
+  return verbs;
+}
+
+const CONTRACT = parseContract();
+function allowedFlags(verb: string): Set<string> {
+  const base = new Set(CONTRACT.get(verb) ?? []);
+  for (const f of GLOBAL_FLAGS) base.add(f);
+  return base;
+}
+
+// Pull every command-like line out of the README: the contents of fenced code
+// blocks plus any inline `code` spans, split into logical lines.
+function codeLines(md: string): string[] {
+  const chunks: string[] = [];
+  let inFence = false;
+  for (const raw of md.split("\n")) {
+    if (/^\s*`{3,}/.test(raw)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) {
+      chunks.push(raw);
+      continue;
+    }
+    for (const span of raw.match(/`([^`]+)`/g) ?? []) {
+      chunks.push(span.slice(1, -1));
+    }
+  }
+  return chunks;
+}
+
+function scrambleCommands(md: string): string[] {
+  const out: string[] = [];
+  for (const rawLine of codeLines(md)) {
+    // strip a shell prompt marker, if present
+    const line = rawLine.replace(/^\s*\$?\s*/, "");
+    const tokens = line.split(/\s+/).filter((t) => t !== "");
+    const i = tokens.indexOf("scramble");
+    if (i >= 0) out.push(tokens.slice(i).join(" "));
+  }
+  return out;
+}
+
+describe("README documents only contract commands", () => {
+  const commands = scrambleCommands(readme);
+
+  test("parses the six contract verbs out of PLAN.md", () => {
+    for (const verb of ["post", "listen", "history", "next", "join", "serve"]) {
+      expect(CONTRACT.has(verb), `verb ${verb} in contract`).toBe(true);
+    }
+  });
+
+  test("every scramble command uses a contract verb and contract flags", () => {
+    expect(commands.length).toBeGreaterThan(0);
+    for (const cmd of commands) {
+      const tokens = cmd.split(/\s+/);
+      const payload = tokens.slice(1); // drop the leading "scramble"
+      const verb = payload[0]!;
+      expect(CONTRACT.has(verb), `verb "${verb}" from README is not in the contract`).toBe(true);
+      const flags = payload.slice(1).filter((t) => /^--[a-z-]+$/.test(t));
+      const allowed = allowedFlags(verb);
+      for (const f of flags) {
+        expect(allowed.has(f), `flag ${f} on "scramble ${verb}" is not contract-callable`).toBe(true);
+      }
+    }
+  });
+});
+
+describe("README content", () => {
+  test("opens with three sentences covering what scramble is", () => {
+    const second = readme.split("\n\n");
+    const intro = second[1] ?? second[0] ?? "";
+    expect(intro).toContain("chat room");
+    expect(intro).toContain("already-running");
+    expect(intro).toContain("shell command");
+  });
+
+  test("documents the two read modes table", () => {
+    expect(readme).toContain("stream");
+    expect(readme).toContain("blocking");
+    expect(readme).toContain("no supported-vendor list");
+  });
+
+  test("points the Slack setup at the manifest", () => {
+    expect(readme).toContain("docs/slack-manifest.yaml");
+    expect(readme).toContain("chat:write.customize");
+  });
+
+  test("documents cross-machine setup of SCRAMBLE_URL and the token", () => {
+    expect(readme).toContain("SCRAMBLE_URL");
+    expect(readme).toContain("SCRAMBLE_TOKEN");
+    expect(readme).toContain("ssh -L");
+  });
+
+  test("describes the .scramble/ workspace layout", () => {
+    expect(readme).toContain("persona.md");
+    expect(readme).toContain("config.json");
+    expect(readme).toContain("knowledge/");
+  });
+});
+
+describe("Slack manifest", () => {
+  test("declares the four bot scopes", () => {
+    for (const scope of ["chat:write", "chat:write.customize", "channels:history", "im:history"]) {
+      expect(manifest).toContain(scope);
+    }
+  });
+
+  test("subscribes the two bot events", () => {
+    expect(manifest).toContain("message.channels");
+    expect(manifest).toContain("message.im");
+  });
+
+  test("enables socket mode", () => {
+    expect(manifest).toContain("socket_mode_enabled: true");
+  });
+});
