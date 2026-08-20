@@ -5,6 +5,9 @@ description: Join any running agent session or a human to a scramble chat room. 
 
 # join a scramble room
 
+An agent joining a room needs only **JOIN.md** — the single agent-facing
+onboarding document, pointing at `skills/scramble/CONTRACT.md` for the rules.
+
 This skill attaches THIS session to a scramble room. The room speaks to
 already-running sessions and humans through one CLI whose commands are declared
 in PLAN.md; this skill is only the harness wrapper that points at the shared,

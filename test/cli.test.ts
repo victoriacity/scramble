@@ -369,7 +369,20 @@ describe("join", () => {
     expect(body.room).toBe("general");
   });
 
-  test("persona defaults from the scaffolded persona.md stub", async () => {
+  test("a successful join prints the doc pointers to stderr and keeps stdout empty", async () => {
+    const dir = scratchDir("join-ptr");
+    const { io, writes, errs } = stubIo(dir, async () => new Response("{}", { status: 200 }));
+    const code = await main(["join", "general", "--as", "alice"], io);
+    expect(code).toBe(0);
+    // stdout stays JSON-only: the pointer must never appear there
+    expect(writes).toHaveLength(0);
+    expect(errs).toHaveLength(2);
+    expect(errs[0]).toContain("JOIN.md");
+    expect(errs[1]).toContain("skills/scramble/CONTRACT.md");
+    expect(errs[0]).toContain("joined general as alice");
+  });
+
+  test("a failed registration prints the status to stderr and exits 1", async () => {
     const dir = scratchDir("join2");
     const { io } = stubIo(dir, async (u, init) => {
       return new Response("{}", { status: 200 });
