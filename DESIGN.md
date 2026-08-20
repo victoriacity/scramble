@@ -44,16 +44,42 @@ The gap is a conjunction: (a) join by an EXISTING externally-running session,
    openai/codex#29865). Delivery into a live TUI is turn-boundary only, via a Stop
    hook that blocks stop when the room queue is non-empty.
 
+### Harness-agnostic by construction
+
+scramble ships NO per-harness code. The product is the daemon plus one CLI, and
+a harness joins through whichever of two read modes it can already do:
+
+| Read mode | Command | Fits a harness that | Used by |
+|---|---|---|---|
+| stream | `scramble listen` | can run a background process and be woken when it prints | Claude Code (its monitor facility) |
+| blocking | `scramble next --timeout N` | can run a shell command and wait for it to exit | codex, and any agent with only a shell |
+
+The blocking mode is the floor: an agent that can run one command and read its
+output can participate fully — receive, then answer with `scramble post`. That
+is a lower bar than MCP, than a plugin API, than a wake-up mechanism, so
+"supported harnesses" is not a list scramble maintains. Nothing in the daemon,
+the CLI, or the wire format names a vendor.
+
+Per-harness material is therefore documentation, not code: `JOIN.md` states the
+join procedure in harness-neutral terms, and each harness gets a thin wrapper
+that points at it (for Claude Code, a skill; for codex, an AGENTS.md snippet).
+A new harness costs a paragraph.
+
 These give scramble its core concept: **two attach modes, one room.**
 
 - **monitor-attach** (agent pulls its own wake): the session runs
   `scramble listen <room> --as <name>` in the background and monitors it. Each new
   message prints one line; the harness wakes the agent; the agent replies with
   `scramble post`. Used by: Claude Code interactive sessions (the headline use case).
-- **driver-attach** (daemon pushes turns): the daemon delivers each message by
-  injecting a turn into the session through the harness's programmatic surface.
-  Used by: codex (`exec resume` per message, or app-server for full duplex),
-  `claude -p` / Agent SDK participants, and any future harness with a resume API.
+- **blocking-attach** (agent parks a turn on a read): the session runs
+  `scramble next --as <name>`, which returns when a message arrives; the agent
+  answers with `scramble post` and parks again. Used by: codex, and any harness
+  whose only capability is running a shell command. No daemon-side driver and no
+  vendor API, so this mode is what makes the system harness-agnostic.
+
+A third path exists but ships nothing: an external process CAN inject turns into
+a session that exposes a resume API (`codex exec resume`, `claude -p`). It is
+unnecessary once blocking-attach works, so scramble has no driver code.
 
 Every harness surveyed fits one of the two. New harness support = one small adapter.
 
@@ -96,10 +122,13 @@ hosts), no new protocol (newline-delimited JSON over HTTP).
   so one listener + one monitor covers all of a session's conversations. This is
   the whole monitor-attach surface.
 - `scramble history <room> [--since N]`
-- `scramble drive codex --room <room> --as <name> [--resume <session-id>]` — the
-  codex driver: subscribes to the room, delivers each message via
-  `codex exec resume` (serialized per session), captures the reply from `--json`
-  output, posts it back to the room.
+- `scramble next --as <name> [--timeout <secs>] [<room>...]` — BLOCKS until one
+  message arrives (or the timeout), prints it as one JSON line, exits 0. Exits 64
+  on timeout with nothing to report. This is the second read mode and the reason
+  scramble needs no per-harness code: an agent that can run a shell command and
+  wait for it can join, even with no wake-on-output facility at all. A codex
+  agent chats by parking a turn on `scramble next` and answering with
+  `scramble post`.
 - `scramble serve [--slack]`
 
 ### Join recipe: existing Claude Code session (one command)
@@ -118,7 +147,10 @@ every message and all replying is the failure mode every multi-bot room hits
 
 ### Join recipe: codex
 
-- Headless participant: `scramble drive codex --as <name>` (spawn or resume a thread).
+- A codex agent joins with the SAME CLI everything else uses: park a turn on
+  `scramble next --as <name>`, answer with `scramble post`, park again. Nothing
+  codex-specific ships — no driver, no app-server client, no vendor flags to
+  track. The AGENTS.md snippet in JOIN.md is the whole integration.
 - A session a human uses in the TUI: `notify = ["scramble-notify"]` posts each
   completed turn's last message to the room (outbound), and a Stop hook pulls queued
   room messages at turn boundaries (inbound, turn-boundary latency). Full push

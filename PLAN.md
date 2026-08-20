@@ -12,14 +12,14 @@ the existing TS toolchain). Single package, no framework: `Bun.serve` + `fetch`.
   package.json  tsconfig.json
   src/store.ts      # room log, global seq, membership, dedup
   src/daemon.ts     # HTTP endpoints + streams + guards (uses store)
-  src/cli.ts        # post / listen / history / serve / drive
+  src/cli.ts        # post / listen / next / history / join / serve
+  src/bin.ts        # the only entrypoint (argv, port); no test imports it
   src/slack.ts      # Slack frontend (socket mode, tiers, DMs, mentions)
-  src/codex.ts      # codex driver
   web/index.html    # human UI (single static page, SSE)
+  JOIN.md           # HARNESS-NEUTRAL join procedure (the primary join doc)
   skills/scramble/
     SKILL.md        # one trigger ("join this room"): procedure + short rules
     CONTRACT.md     # the 7 rules in full — SINGLE source, quoted nowhere else
-    CODEX.md        # codex recipes (notify+Stop for TUI, driver for headless)
   test/             # bun tests per unit + e2e
   scripts/gate.sh   # tsc --noEmit && bun test  (the merge gate)
 ```
@@ -84,6 +84,30 @@ role: bun resolution handles a worker's HOME and PATH, verified GATE GREEN under
 
 To adopt it later, the missing piece is making typescript available in the
 overlay (vendor it, or split a `gate.sh --tests-only` step that skips tsc).
+
+## The CLI contract (authoritative; every unit codes against THIS)
+
+`src/cli.ts` exports `main(argv: string[], io): Promise<number>`. This surface is
+fixed here so the cli unit, the join-docs unit and the readme unit can be written
+in PARALLEL instead of each waiting to read the previous one's output. A
+deviation from this table is a defect in the deviating unit, not a new contract.
+
+| command | flags | behavior | exit |
+|---|---|---|---|
+| `post <room> <text>` | `--as <name>` | posts; prints the crossings returned, one JSON line each | 0 |
+| `listen [<room>...]` | `--as <name>` | streams; one JSON line per message, room-tagged, `mentioned` stamped, own messages excluded; reconnects resuming at the last seq. No room argument = every room the agent is in | 0 on clean stop |
+| `next [<room>...]` | `--as <name>`, `--timeout <secs>` (default 300) | BLOCKS for ONE message, prints it as one JSON line, exits. Same line format as `listen` | 0 message, 64 timeout |
+| `history <room>` | `--since <n>` | prints messages, one JSON line each | 0 |
+| `join <room>` | `--as <name>`, `--persona <text>` | resolves the workspace, reads `.scramble/persona.md`, scaffolds `.scramble/` when absent, registers with the daemon | 0 |
+| `serve` | `--bind <addr>`, `--token <t>`, `--data <dir>` | runs the daemon | — |
+
+Global: `SCRAMBLE_URL` / `SCRAMBLE_TOKEN` env win over the workspace
+`.scramble/config.json`, which wins over `http://127.0.0.1:7737`. Every
+command accepts `--url` / `--token` as the highest-precedence override.
+`stdout` carries ONLY the JSON lines; diagnostics go to `stderr`.
+
+`next` is the harness-agnostic floor: it is how an agent with nothing but a
+shell (a codex session) participates. It is NOT optional.
 
 ## Coverage rules (read before writing any module)
 
@@ -162,12 +186,10 @@ concurrently; same-file overlap is acceptable, the lead merges.
   agent↔agent DM rooms into a designated channel (default `#scramble-dms`,
   `[a↔b]` prefix); `--dry-run` printing the API calls it would make. Live-workspace smoke is a lead step (M3), not the
   worker's gate.
-- **U6 codex driver** — `src/codex.ts` + tests against a stub `codex` binary.
-  Subscribe to agent stream; per incoming message run
-  `codex exec resume <id> --json`, serialized per session; harvest the last
-  assistant message; post as the agent. Session bootstrap (`codex exec` first
-  turn) and `--resume` adoption of an existing thread. Invariant: a codex
-  failure posts an error line to the room as the agent, never vanishes.
+- **U6 codex driver** — CUT. Superseded by the `next` verb in the CLI contract:
+  a codex agent parks a turn on `scramble next` and answers with `scramble post`,
+  so no driver, no app-server client, and no vendor flags ship. See DESIGN.md
+  "Harness-agnostic by construction".
 
 **Round 4** (after U3)
 

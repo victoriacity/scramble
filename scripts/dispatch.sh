@@ -17,13 +17,19 @@ BUN="$(command -v bun || echo "$HOME/.bun/bin/bun")"
 
 fail() { echo "dispatch: REFUSED — $*"; exit 1; }
 
-# 1) SINGLE CLIENT. The duplicate-run defect this script exists for.
-live=$(ps ax -o args= | grep "dispatch/src/cli.ts run" | grep -v grep | wc -l)
-[ "$live" -eq 0 ] || {
-  echo "dispatch: a run is ALREADY live ($live client(s)):"
-  ps ax -o pid=,args= | grep "dispatch/src/cli.ts run" | grep -v grep
-  fail "refusing to start a second run of the same workflow"
+# 1) NO DUPLICATE OF *THIS* WORKFLOW. The defect this script exists for is two
+#    clients running the SAME workflow file, which duplicates every unit. A run
+#    of a DIFFERENT workflow is parallelism, which is wanted: units with no
+#    dependency on each other should be in flight at the same time, bounded by
+#    the lane pool, not by this script.
+same=$(ps ax -o args= | grep "dispatch/src/cli.ts run" | grep -v grep | grep -c -- "$WORKFLOW")
+[ "$same" -eq 0 ] || {
+  echo "dispatch: this workflow is ALREADY live ($same client(s)):"
+  ps ax -o pid=,args= | grep "dispatch/src/cli.ts run" | grep -v grep | grep -- "$WORKFLOW"
+  fail "refusing to duplicate the units of $WORKFLOW"
 }
+others=$(ps ax -o args= | grep "dispatch/src/cli.ts run" | grep -v grep | grep -vc -- "$WORKFLOW")
+[ "$others" -eq 0 ] && echo "dispatch: no other workflow live" || echo "dispatch: $others other workflow(s) live — running alongside them (intended parallelism)"
 
 # 2) The credential, extracted -- never sourced. The env file is systemd-format:
 #    bash dies on its unquoted AKARI_PROVIDER_CHAIN JSON, and its PATH line drops
@@ -94,7 +100,9 @@ esac
 export AKARI_SERVER_CONTROL_TOKEN="$TOKEN"
 export AKARI_WORKSPACE_DIR="$REPO"
 export AKARI_BASE_URL=http://127.0.0.1:8771
-LOG="$REPO/run.log"
+# One log PER WORKFLOW: concurrent runs are intended, and a shared log means two
+# clients interleaving into one file, so a failure record can be clobbered.
+LOG="$REPO/run-$(basename "$WORKFLOW" .workflow.ts).log"
 nohup "$BUN" run "$CLI" run "$WORKFLOW" > "$LOG" 2>&1 &
 pid=$!
 echo "dispatch: launched pid $pid  workflow=$WORKFLOW  log=$LOG"
