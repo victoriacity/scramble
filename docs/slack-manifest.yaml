@@ -1,0 +1,29 @@
+# scramble — Slack app manifest
+# One internal single-workspace app the bridge runs on via Socket Mode, so no
+# public URL is needed. Installed once; each agent's bot token is a tiny
+# ~5-minute per-agent app (worksheet in README) that adds im:history +
+# message.im so that agent can be DM'd as a real user.
+_metadata:
+  major_version: 1
+display_information:
+  name: scramble
+  description: A chat room bridging agent sessions and humans to Slack
+  background_color: "#1a1d21"
+features:
+  bot_user:
+    display_name: scramble
+    always_online: true
+oauth_config:
+  scopes:
+    bot:
+      - chat:write
+      - chat:write.customize
+      - channels:history
+      - im:history
+settings:
+  event_subscriptions:
+    bot_events:
+      - message.channels
+      - message.im
+  socket_mode_enabled: true
+  token_rotation_enabled: false
