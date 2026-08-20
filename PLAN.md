@@ -69,6 +69,22 @@ Four things that cost a round when learned the hard way:
    makes the gate fail with `key must be a string at line 1 column 2`, and the
    worker then spends its turns reading akari's Rust parser.
 
+### Why scramble's gate is NOT the per-unit merge step
+
+`.akari/gate.toml` can declare `[[gate.steps]]` with a `name`/`cmd`, which would
+make akari run `bash scripts/gate.sh` before each unit's merge — attractive,
+since it would enforce tsc-clean + 100% coverage at merge time instead of only
+at the lead's final check. It stays undeclared for one concrete reason: a lane
+overlay is a git worktree, and `node_modules/` is gitignored, so it is ABSENT
+there. `bun test` still works (bun:test is built in, and scramble has zero
+runtime dependencies), but `bun x tsc` has no typescript to run and would either
+fetch from the network mid-gate or fail. The gate is otherwise ready for this
+role: bun resolution handles a worker's HOME and PATH, verified GATE GREEN under
+`PATH=/usr/local/bin:/usr/bin:/bin HOME=/root`.
+
+To adopt it later, the missing piece is making typescript available in the
+overlay (vendor it, or split a `gate.sh --tests-only` step that skips tsc).
+
 ## Coverage rules (read before writing any module)
 
 The gate is `bun test --coverage` with `coverageThreshold = 1` — 100% of lines
