@@ -11,5 +11,10 @@
     "noEmit": true,
     "skipLibCheck": true
   },
-  "include": ["src", "test", "*.ts"]
+  // src + test only. scramble.workflow.ts is an akari dispatch script, not
+  // product code: it runs under akari's workflow runtime, where `agent`,
+  // `phase`, `parallel` and a top-level `return` are provided by the host. Type
+  // checking it here reports those as errors and turns the gate red on a file
+  // that ships nothing.
+  "include": ["src", "test"]
 }
