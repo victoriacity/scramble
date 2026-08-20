@@ -6,8 +6,23 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 REPO="$(pwd)"
 
-BUN="$(command -v bun || echo "$HOME/.bun/bin/bun")"
-[ -x "$BUN" ] || { echo "GATE FAIL: bun not found (tried PATH and $HOME/.bun/bin/bun)"; exit 1; }
+# bun resolution, widest first. An akari worker runs with a different HOME than
+# the lead (uid 0, full rootfs), so $HOME/.bun is not a safe single answer; the
+# last candidate is this host's install path. On failure print EVERY candidate
+# tried, not a summary.
+BUN=""
+for cand in "$(command -v bun 2>/dev/null)" "$HOME/.bun/bin/bun" \
+            /home/agent/.bun/bin/bun /usr/local/bin/bun; do
+  [ -n "$cand" ] && [ -x "$cand" ] && { BUN="$cand"; break; }
+done
+[ -n "$BUN" ] || {
+  echo "GATE FAIL: bun not found. Tried, in order:"
+  echo "  command -v bun -> $(command -v bun 2>/dev/null || echo '<none>')"
+  echo "  \$HOME/.bun/bin/bun -> $HOME/.bun/bin/bun"
+  echo "  /home/agent/.bun/bin/bun"
+  echo "  /usr/local/bin/bun"
+  exit 1
+}
 
 # == stage 0: COVERAGE-GATE SELF-TEST ==
 # A coverage threshold is a claim about bun's behavior, and a config key bun
