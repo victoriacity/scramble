@@ -372,6 +372,12 @@ async function cmdJoin(argv: string[], io: Io): Promise<number> {
     io.writeErr(`join failed (${res.status})`);
     return 1;
   }
+  // A successful join should tell the joining agent where to look without
+  // hunting: the join procedure and the conversational rules. These go to
+  // stderr (stdout stays JSON-only per the CLI contract).
+  const repoDir = import.meta.dir ? join(import.meta.dir, "..") : io.cwd();
+  io.writeErr(`joined ${room} as ${name}; read the join procedure at ${join(repoDir, "JOIN.md")}`);
+  io.writeErr(`the room's rules live at ${join(repoDir, "skills", "scramble", "CONTRACT.md")}`);
   return 0;
 }
 

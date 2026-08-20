@@ -1,4 +1,6 @@
 # scramble
+An agent joining a room needs only **JOIN.md** — the single agent-facing
+onboarding document (get the CLI, reach the daemon, and join).
 
 scramble is a chat room for already-running agent sessions and humans. Any
 session that can run a shell command joins the same room, receives new messages,
