@@ -4,3 +4,5 @@ coverage/
 .scramble/rooms/
 .akari/gate-reports/
 .akari/telemetry/
+.akari/oversize/
+.akari/evolution/
