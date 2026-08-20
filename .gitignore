@@ -1,6 +1,9 @@
 node_modules/
+node_modules
 coverage/
 *.log
 .scramble/rooms/
 .akari/gate-reports/
 .akari/telemetry/
+.akari/oversize/
+.akari/evolution/
