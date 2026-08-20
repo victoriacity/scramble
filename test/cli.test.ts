@@ -1,0 +1,456 @@
+import { describe, expect, test } from "bun:test";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import type { RoomStore } from "../src/store";
+import { createStore } from "../src/store";
+import { createHandler } from "../src/server";
+import { main, type Io } from "../src/cli";
+
+function scratchDir(name: string): string {
+  const d = join(tmpdir(), `zz-${name}-${process.pid}-${Math.random().toString(36).slice(2)}`);
+  rmSync(d, { recursive: true, force: true });
+  mkdirSync(d, { recursive: true });
+  return d;
+}
+
+function msg(seq: number | string, from: string, text: string, mentions: string[] = []) {
+  return {
+    seq,
+    ts: "2026-01-01T00:00:00.000Z",
+    room: "general",
+    from,
+    text,
+    id: `id${seq}`,
+    mentions,
+    mentioned: mentions.length > 0,
+  };
+}
+
+function ndjs(lines: unknown[], mode: "close" | "error" = "close"): Response {
+  const enc = new TextEncoder();
+  // Two-phase pull: the first pull delivers the lines; the second ends the
+  // stream (close -> clean stop, error -> dropped connection). Erroring a
+  // stream discards anything enqueued in the same pull, so the terminate
+  // must be a separate pull to guarantee the lines are actually read first.
+  let phase = 0;
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (phase === 0) {
+        phase = 1;
+        for (const l of lines) controller.enqueue(enc.encode(JSON.stringify(l) + "\n"));
+        return;
+      }
+      if (mode === "close") controller.close();
+      else controller.error(new Error("drop"));
+    },
+  });
+  return new Response(body, { status: 200 });
+}
+
+function stubIo(cwd: string, fetch: Io["fetch"]): { io: Io; writes: string[]; errs: string[]; urls: string[] } {
+  const writes: string[] = [];
+  const errs: string[] = [];
+  const urls: string[] = [];
+  const io: Io = {
+    write: (l) => writes.push(l),
+    writeErr: (l) => errs.push(l),
+    fetch: async (input, init) => {
+      urls.push(input);
+      return fetch(input, init);
+    },
+    env: () => undefined,
+    cwd: () => cwd,
+    sleep: async () => {},
+    serve: async () => 0,
+  };
+  return { io, writes, errs, urls };
+}
+
+describe("config resolution", () => {
+  test("--url/--token beat env beat config.json beat localhost default", async () => {
+    const cwd = scratchDir("cfg");
+    mkdirSync(join(cwd, ".scramble"), { recursive: true });
+    writeFileSync(
+      join(cwd, ".scramble", "config.json"),
+      JSON.stringify({ url: "http://config:9", token: "cfgtok" }),
+    );
+    // (a) config wins over localhost default when neither env nor flag present
+    const a = stubIo(cwd, async (u) => new Response("[]", { status: 200 }));
+    await main(["history", "general"], a.io);
+    expect(a.urls[0]).toContain("http://config:9");
+    // (b) env wins over config
+    const b = stubIo(cwd, async (u) => new Response("[]", { status: 200 }));
+    b.io.env = (n) => (n === "SCRAMBLE_URL" ? "http://env:8" : undefined);
+    await main(["history", "general"], b.io);
+    expect(b.urls[0]).toContain("http://env:8");
+    // (c) --url wins over env
+    const c = stubIo(cwd, async (u) => new Response("[]", { status: 200 }));
+    c.io.env = (n) => (n === "SCRAMBLE_URL" ? "http://env:8" : undefined);
+    await main(["history", "general", "--url", "http://flag:1"], c.io);
+    expect(c.urls[0]).toContain("http://flag:1");
+    // (d) localhost default when nothing configured
+    const bare = scratchDir("bare");
+    const dres = stubIo(bare, async (u) => new Response("[]", { status: 200 }));
+    await main(["history", "general"], dres.io);
+    expect(dres.urls[0]).toContain("http://127.0.0.1:7737");
+    // (e) --token override produces a bearer header
+    const e = stubIo(cwd, async (u, init) => {
+      expect((init?.headers as Record<string, string>)?.authorization).toBe("Bearer flagtok");
+      return new Response("[]", { status: 200 });
+    });
+    await main(["history", "general", "--token", "flagtok"], e.io);
+  });
+
+  test("SCRAMBLE_TOKEN env yields a bearer header; token is sent when required", async () => {
+    const cwd = scratchDir("tok");
+    const { io } = stubIo(cwd, async (u, init) => new Response("[]", { status: 200 }));
+    io.env = (n) => (n === "SCRAMBLE_TOKEN" ? "envtok" : undefined);
+    let auth: string | undefined;
+    io.fetch = async (u, init) => {
+      auth = (init?.headers as Record<string, string>)?.authorization;
+      return new Response("[]", { status: 200 });
+    };
+    await main(["history", "general"], io);
+    expect(auth).toBe("Bearer envtok");
+  });
+
+  test("a non-string config value falls through to env/localhost", async () => {
+    const cwd = scratchDir("cfg2");
+    mkdirSync(join(cwd, ".scramble"), { recursive: true });
+    writeFileSync(join(cwd, ".scramble", "config.json"), JSON.stringify({ url: 42, token: true }));
+    // env provides the real url when config fields are the wrong type
+    const s = stubIo(cwd, async (u) => new Response("[]", { status: 200 }));
+    s.io.env = (n) => (n === "SCRAMBLE_URL" ? "http://env:7" : undefined);
+    await main(["history", "general"], s.io);
+    expect(s.urls[0]).toContain("http://env:7");
+  });
+});
+
+describe("post", () => {
+  test("posts and prints the crossings as one JSON line each", async () => {
+    const cwd = scratchDir("post");
+    const handler = createHandler(createStore(scratchDir("st1")));
+    // seed a crossing from bob
+    await handler(
+      new Request("http://x/rooms/general", {
+        method: "POST",
+        body: JSON.stringify({ from: "bob", text: "first", id: "j1", lastSeen: 0 }),
+      }),
+    );
+    const { io, writes } = stubIo(cwd, (u, init) => handler(new Request(u, init)));
+    const code = await main(["post", "general", "hello ana", "--as", "ana"], io);
+    expect(code).toBe(0);
+    expect(writes).toHaveLength(1);
+    expect(JSON.parse(writes[0]!)).toMatchObject({ from: "bob", text: "first" });
+  });
+
+  test("a post with no crossing prints nothing but still exits 0", async () => {
+    const cwd = scratchDir("post2");
+    const handler = createHandler(createStore(scratchDir("st2")));
+    const { io, writes } = stubIo(cwd, (u, init) => handler(new Request(u, init)));
+    const code = await main(["post", "general", "hi", "--as", "ana"], io);
+    expect(code).toBe(0);
+    expect(writes).toHaveLength(0);
+  });
+
+  test("missing text is a usage error", async () => {
+    const cwd = scratchDir("post3");
+    const { io, errs } = stubIo(cwd, async () => {
+      throw new Error("no fetch expected");
+    });
+    const code = await main(["post", "general"], io);
+    expect(code).toBe(1);
+    expect(errs[0]).toContain("usage");
+  });
+
+  test("a server failure posts the status to stderr and exits 1", async () => {
+    const cwd = scratchDir("post4");
+    const { io, errs } = stubIo(cwd, async () => new Response("{}", { status: 500 }));
+    const code = await main(["post", "general", "hi", "--as", "x"], io);
+    expect(code).toBe(1);
+    expect(errs[0]).toContain("500");
+  });
+});
+
+describe("listen", () => {
+  test("reconnects resuming at the last seq and stops cleanly", async () => {
+    const cwd = scratchDir("listen");
+    const seenSince: number[] = [];
+    let call = 0;
+    const { io, writes } = stubIo(cwd, async (input) => {
+      const u = new URL(input);
+      seenSince.push(Number(u.searchParams.get("since")));
+      const n = call++;
+      if (n === 0) return ndjs([msg(5, "bob", "one")], "error"); // drop mid-stream
+      return ndjs([msg(7, "bob", "two")], "close"); // clean stop
+    });
+    const code = await main(["listen", "--as", "ana"], io);
+    expect(code).toBe(0);
+    // resume at the last seen seq
+    expect(seenSince).toEqual([0, 5]);
+    const lines = writes.map((l) => JSON.parse(l) as { seq: number; mentioned: boolean });
+    expect(lines.map((l) => l.seq)).toEqual([5, 7]);
+    expect(lines[0]!.mentioned).toBe(false);
+  });
+
+  test("explicit rooms stream per-room with the agent excluded and mentioned stamped", async () => {
+    const cwd = scratchDir("listen2");
+    const { io, writes } = stubIo(cwd, async (input) => {
+      const u = new URL(input);
+      expect(u.pathname).toBe("/rooms/general/stream");
+      expect(u.searchParams.get("exclude")).toBe("ana");
+      return ndjs([msg("b1", "bob", "@ana hello", ["ana"])], "close");
+    });
+    const code = await main(["listen", "general", "--as", "ana"], io);
+    expect(code).toBe(0); // clean close of a single-room stream
+    const line = JSON.parse(writes[0]!);
+    expect(line.mentioned).toBe(true);
+    expect(line.text).toBe("@ana hello");
+  });
+
+  test("recovers when the connection itself fails", async () => {
+    const cwd = scratchDir("listen3");
+    let call = 0;
+    const { io, writes } = stubIo(cwd, async () => {
+      const n = call++;
+      if (n === 0) throw new Error("connection refused");
+      return ndjs([{ ...msg(9, "bob", "back"), mentioned: false }], "close");
+    });
+    const code = await main(["listen", "--as", "ana"], io);
+    expect(code).toBe(0);
+    expect(writes.map((l) => JSON.parse(l).seq)).toEqual([9]);
+  });
+
+  test("a null-body stream reads as a clean stop and never loiters", async () => {
+    const cwd = scratchDir("listen4");
+    const { io } = stubIo(cwd, async () => new Response(null, { status: 200 }));
+    const code = await main(["listen", "--as", "ana"], io);
+    expect(code).toBe(0);
+  });
+
+  test("a non-200 stream response reconnects rather than stopping", async () => {
+    const cwd = scratchDir("listen5");
+    let call = 0;
+    const { io, writes } = stubIo(cwd, async () => {
+      const n = call++;
+      if (n === 0) return new Response("bad", { status: 503 });
+      return ndjs([{ ...msg(11, "bob", "retry"), mentioned: false }], "close");
+    });
+    const code = await main(["listen", "--as", "ana"], io);
+    expect(code).toBe(0);
+    expect(writes.map((l) => JSON.parse(l).seq)).toEqual([11]);
+  });
+});
+
+describe("next", () => {
+  test("blocks for one message and exits 0", async () => {
+    const cwd = scratchDir("next");
+    const handler = createHandler(createStore(scratchDir("nstore")));
+    const { io, writes } = stubIo(cwd, (u, init) => handler(new Request(u, init)));
+    io.sleep = (ms: number) => new Promise((r) => setTimeout(r, Math.min(ms, 5)));
+    const pending = main(["next", "general", "--as", "ana", "--timeout", "5"], io);
+    await new Promise((r) => setTimeout(r, 30));
+    await handler(
+      new Request("http://x/rooms/general", {
+        method: "POST",
+        body: JSON.stringify({ from: "bob", text: "hey ana", id: "n1", lastSeen: 0 }),
+      }),
+    );
+    const code = await pending;
+    expect(code).toBe(0);
+    expect(JSON.parse(writes[0]!)).toMatchObject({ from: "bob", text: "hey ana" });
+  });
+
+  test("exits 64 on timeout with nothing printed", async () => {
+    const cwd = scratchDir("next2");
+    const { io, writes } = stubIo(cwd, async () => {
+      // a stream that stays open, never delivering a line
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start() {},
+        }),
+        { status: 200 },
+      );
+    });
+    // bare `--timeout` (no value) parses to the 0s default fallback -> immediate 64
+    const code = await main(["next", "--timeout"], io);
+    expect(code).toBe(64);
+    expect(writes).toHaveLength(0);
+  });
+
+  test("a failed stream request still times out cleanly", async () => {
+    const cwd = scratchDir("next3");
+    const { io, writes } = stubIo(cwd, async () => {
+      throw new Error("stream refused");
+    });
+    const code = await main(["next", "--timeout", "0"], io);
+    expect(code).toBe(64);
+    expect(writes).toHaveLength(0);
+  });
+
+  test("a non-200 stream response still times out cleanly", async () => {
+    const cwd = scratchDir("next4");
+    const { io, writes } = stubIo(cwd, async () => new Response("nope", { status: 400 }));
+    const code = await main(["next", "--timeout", "0"], io);
+    expect(code).toBe(64);
+    expect(writes).toHaveLength(0);
+  });
+
+  test("delivers a line from a stream that drops right after", async () => {
+    const cwd = scratchDir("next5");
+    const { io, writes } = stubIo(cwd, async () => ndjs([msg("e1", "bob", "dropped", ["ana"])], "error"));
+    const code = await main(["next", "general", "--as", "ana", "--timeout", "5"], io);
+    expect(code).toBe(0);
+    expect(JSON.parse(writes[0]!)).toMatchObject({ from: "bob", text: "dropped" });
+  });
+});
+
+describe("history", () => {
+  test("prints one JSON line per message", async () => {
+    const cwd = scratchDir("hist");
+    const { io, writes } = stubIo(cwd, async (input) => {
+      const u = new URL(input);
+      expect(u.searchParams.get("since")).toBe("0");
+      return new Response(JSON.stringify([msg("h1", "bob", "one"), msg("h2", "ana", "two")]), {
+        status: 200,
+      });
+    });
+    const code = await main(["history", "general"], io);
+    expect(code).toBe(0);
+    expect(writes.map((l) => JSON.parse(l).text)).toEqual(["one", "two"]);
+  });
+
+  test("missing room is an error", async () => {
+    const { io, errs } = stubIo(scratchDir("hist2"), async () => {
+      throw new Error("unreachable");
+    });
+    const code = await main(["history"], io);
+    expect(code).toBe(1);
+    expect(errs[0]).toContain("room");
+  });
+
+  test("a server failure prints the status to stderr and exits 1", async () => {
+    const cwd = scratchDir("hist3");
+    const { io, errs } = stubIo(cwd, async () => new Response("{}", { status: 401 }));
+    const code = await main(["history", "general"], io);
+    expect(code).toBe(1);
+    expect(errs[0]).toContain("401");
+  });
+
+  test("the --since=NNN equals form is parsed", async () => {
+    const cwd = scratchDir("hist4");
+    const seen: string[] = [];
+    const { io } = stubIo(cwd, async (input) => {
+      const u = new URL(input);
+      seen.push(u.searchParams.get("since")!);
+      return new Response("[]", { status: 200 });
+    });
+    await main(["history", "general", "--since=3"], io);
+    expect(seen[0]).toBe("3");
+  });
+});
+
+describe("join", () => {
+  test("scaffolds the workspace, reads --persona, registers the agent", async () => {
+    const dir = scratchDir("join");
+    const sent: { url: string; init?: RequestInit }[] = [];
+    const { io } = stubIo(dir, async (u, init) => {
+      sent.push({ url: u, init });
+      return new Response("{}", { status: 200 });
+    });
+    const code = await main(["join", "general", "--as", "alice", "--persona", "i join rooms"], io);
+    expect(code).toBe(0);
+    expect(existsSync(join(dir, ".scramble", "persona.md"))).toBe(true);
+    expect(existsSync(join(dir, ".scramble", "knowledge", "INDEX.md"))).toBe(true);
+    expect(sent[0]!.url).toContain("/agents/alice");
+    const body = JSON.parse(sent[0]!.init!.body as string);
+    expect(body.persona).toBe("i join rooms");
+    expect(body.room).toBe("general");
+  });
+
+  test("persona defaults from the scaffolded persona.md stub", async () => {
+    const dir = scratchDir("join2");
+    const { io } = stubIo(dir, async (u, init) => {
+      return new Response("{}", { status: 200 });
+    });
+    const code = await main(["join", "general", "--as", "bob"], io);
+    expect(code).toBe(0);
+    // the scaffolded stub persona was read and sent
+    const stub = readFileSync(join(dir, ".scramble", "persona.md"), "utf8");
+    expect(stub.length).toBeGreaterThan(0);
+  });
+
+  test("missing room is an error", async () => {
+    const { io, errs } = stubIo(scratchDir("join3"), async () => {
+      throw new Error("unreachable");
+    });
+    const code = await main(["join"], io);
+    expect(code).toBe(1);
+    expect(errs[0]).toContain("room");
+  });
+
+  test("a failed registration prints the status to stderr and exits 1", async () => {
+    const cwd = scratchDir("join4");
+    const { io, errs } = stubIo(cwd, async () => new Response("{}", { status: 500 }));
+    const code = await main(["join", "general", "--as", "x"], io);
+    expect(code).toBe(1);
+    expect(errs[0]).toContain("500");
+  });
+});
+
+describe("serve", () => {
+  test("delegates to io.serve with the store and options", async () => {
+    const dir = scratchDir("serve");
+    const { io } = stubIo(dir, async () => {
+      throw new Error("no fetch for serve");
+    });
+    let store: RoomStore | undefined;
+    let opts: unknown;
+    io.serve = async (s, o) => {
+      store = s;
+      opts = o;
+      return 0;
+    };
+    const code = await main(["serve", "--data", dir, "--token", "t", "--bind", "0.0.0.0"], io);
+    expect(code).toBe(0);
+    expect(store).toBeDefined();
+    expect((opts as { token: string }).token).toBe("t");
+    expect((opts as { bind: string }).bind).toBe("0.0.0.0");
+  });
+
+  test("uses HOME/.scramble when --data is absent", async () => {
+    const home = scratchDir("servehome");
+    const cwd = scratchDir("servecwd");
+    const { io } = stubIo(cwd, async () => {
+      throw new Error("no fetch");
+    });
+    io.env = (n) => (n === "HOME" ? home : undefined);
+    let code = await main(["serve"], io);
+    expect(code).toBe(0);
+    // HOME present -> survives (the store under $HOME/.scramble is created)
+    expect(existsSync(join(home, ".scramble"))).toBe(true);
+  });
+
+  test("falls back to <cwd>/.scramble when HOME is unset", async () => {
+    const cwd = scratchDir("serve2");
+    const { io } = stubIo(cwd, async () => {
+      throw new Error("no fetch");
+    });
+    io.env = () => undefined;
+    const code = await main(["serve"], io);
+    expect(code).toBe(0);
+    expect(existsSync(join(cwd, ".scramble"))).toBe(true);
+  });
+});
+
+describe("unknown command", () => {
+  test("reports and exits 1", async () => {
+    const { io, errs } = stubIo(scratchDir("unk"), async () => {
+      throw new Error("unreachable");
+    });
+    const code = await main(["frobnicate"], io);
+    expect(code).toBe(1);
+    expect(errs[0]).toContain("frobnicate");
+  });
+});
