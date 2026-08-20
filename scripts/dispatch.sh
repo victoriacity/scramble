@@ -57,7 +57,8 @@ for i, line in enumerate(lines, 1):
     if not s or s.startswith("[") :
         continue
     if s.startswith("#"):
-        bad.append(f"line {i}: comment -- the parser surface is line-based, keep this file comment-free: {s}")
+        # The parser skips comment lines (extra_steps.rs: `line.starts_with('#')
+        # { continue }`), so a comment is fine. Only the ARRAY shape matters.
         continue
     if "=" not in s:
         bad.append(f"line {i}: not a `key = value` line (a multi-line array continuation?): {s}")
