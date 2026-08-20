@@ -1,3 +1,0 @@
-/opt/akari/akari/.akari/lanes/lane-00-default
-/opt/akari/akari/.akari/lanes/lane-00-default
-{
