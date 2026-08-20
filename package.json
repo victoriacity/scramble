@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "bin": { "scramble": "./src/cli.ts" },
+  "bin": { "scramble": "./src/bin.ts" },
   "scripts": {
     "test": "bun test",
     "gate": "bash scripts/gate.sh"

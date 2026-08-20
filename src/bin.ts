@@ -1,3 +1,4 @@
+#!/usr/bin/env bun
 // src/bin.ts — the ONLY entrypoint. Binds ports and reads process.argv here so
 // no test imports this file (keeping the coverage gate green). Everything else
 // is delegated to src/cli.ts's main(argv, io).
