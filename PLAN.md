@@ -32,6 +32,28 @@ the existing TS toolchain). Single package, no framework: `Bun.serve` + `fetch`.
 2. `.akari/` scaffold on the scramble repo so lanes/fleets target it.
 3. File the epic + the unit tasks below in tt (dispatch is automatic).
 
+## Coverage rules (read before writing any module)
+
+The gate is `bun test --coverage` with `coverageThreshold = 1` — 100% of lines
+and functions in every file a test loads. Two consequences that decide how you
+structure a module:
+
+1. **Process entrypoints go in `src/bin.ts`, which NO test imports.** A
+   `Bun.serve(...)` call and an `if (import.meta.main) main(...)` body can
+   never be executed by a test, so if they sit in a file a test loads they are
+   permanently uncovered and the gate can never go green. bun only reports
+   files that were loaded during the run, so an entrypoint file no test imports
+   is invisible to coverage. `src/cli.ts` exports `main(argv, io)`;
+   `src/server.ts` exports `createHandler(store, opts)`; `src/bin.ts` is the
+   only place that binds a port or reads `process.argv`.
+2. **An untestable branch is a branch to delete.** Defensive code for a state
+   the types make impossible is the usual offender. If you cannot write a test
+   that reaches it, it is not protection, it is uncovered weight.
+
+`coverageThreshold` MUST stay the scalar form: bun 1.3.14 silently ignores the
+inline-table form and exits 0 at partial coverage (verified 57% -> rc=1 scalar,
+rc=0 table).
+
 ## Units (akari AGENT tasks — goal + deliverable + invariants, not steps)
 
 Dependency DAG; width bounded by the lane pool. Units in the same round fire
