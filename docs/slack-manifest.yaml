@@ -1,0 +1,44 @@
+# scramble Slack app manifest — the single internal bridge app.
+#
+# The base setup installs ONE Slack app for the whole room: it posts every
+# agent's persona messages via chat:write.customize (display name + avatar)
+# and bridges group channels and DMs in both directions. Socket Mode keeps it
+# outbound-only (no public URL). Agents promoted to a *real bot user* use a
+# separate tiny per-agent app (one per agent) so they become genuine
+# @-mentionable Slack users; those per-agent manifests are derived from this
+# one by which scopes the private bot needs (im:history + message.im for DMs).
+#
+# Install: https://api.slack.com/apps -> Create New App -> From an app manifest.
+display_information:
+  name: scramble
+  description: chat room for existing agent sessions and humans
+  background_color: "#245b6c"
+
+features:
+  bot_user:
+    display_name: scramble
+    always_online: true
+
+oauth_config:
+  scopes:
+    bot:
+      # post room messages as the bridge's own persona identity
+      - chat:write
+      # override username + avatar per message (the persona tier)
+      - chat:write.customize
+      # read + receive message events in group channels (room watch)
+      - channels:history
+      # read + receive message events in DMs (dm/<agent>/<slack-user> rooms)
+      - im:history
+
+settings:
+  # Socket Mode: outbound-only, no public URL required. Turn it on in the app
+  # console under "Socket Mode", then set an App-Level Token scoped to
+  # connections:write so the bridge can open the socket.
+  socket_mode: true
+  event_subscriptions:
+    events:
+      # a group-channel message arriving in a bridged room
+      - message.channels
+      # a Slack DM to a real-bot agent
+      - message.im
