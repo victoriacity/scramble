@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import type { RoomStore } from "../src/store";
 import { createStore } from "../src/store";
 import { createHandler } from "../src/server";
-import { main, type Io } from "../src/cli";
+import { main, parseBind, type Io } from "../src/cli";
 
 function scratchDir(name: string): string {
   const d = join(tmpdir(), `zz-${name}-${process.pid}-${Math.random().toString(36).slice(2)}`);
@@ -416,7 +416,56 @@ describe("serve", () => {
     expect(code).toBe(0);
     expect(store).toBeDefined();
     expect((opts as { token: string }).token).toBe("t");
-    expect((opts as { bind: string }).bind).toBe("0.0.0.0");
+    expect((opts as { hostname: string }).hostname).toBe("0.0.0.0");
+    expect((opts as { port?: number }).port).toBeUndefined();
+  });
+
+  test("host:port --bind parses into typed hostname + port", async () => {
+    const dir = scratchDir("serve2");
+    const { io } = stubIo(dir, async () => {
+      throw new Error("no fetch for serve");
+    });
+    let opts: unknown;
+    io.serve = async (s, o) => {
+      opts = o;
+      return 0;
+    };
+    const code = await main(["serve", "--data", dir, "--bind", "127.0.0.1:7799"], io);
+    expect(code).toBe(0);
+    expect((opts as { hostname: string }).hostname).toBe("127.0.0.1");
+    expect((opts as { port: number }).port).toBe(7799);
+  });
+
+  test("a bare port --bind maps to port with default hostname", async () => {
+    const dir = scratchDir("serve3");
+    const { io } = stubIo(dir, async () => {
+      throw new Error("no fetch for serve");
+    });
+    let opts: unknown;
+    io.serve = async (s, o) => {
+      opts = o;
+      return 0;
+    };
+    const code = await main(["serve", "--data", dir, "--bind", "7799"], io);
+    expect(code).toBe(0);
+    expect((opts as { port?: number }).port).toBe(7799);
+    expect((opts as { hostname?: string }).hostname).toBeUndefined();
+  });
+
+  test("a malformed --bind is reported on stderr and exits nonzero", async () => {
+    const dir = scratchDir("serve4");
+    const { io, errs } = stubIo(dir, async () => {
+      throw new Error("no fetch for serve");
+    });
+    let served = 0;
+    io.serve = async () => {
+      served++;
+      return 0;
+    };
+    const code = await main(["serve", "--data", dir, "--bind", "127.0.0.1:notaport"], io);
+    expect(code).toBe(1);
+    expect(served).toBe(0);
+    expect(errs[0]).toContain("invalid --bind");
   });
 
   test("uses HOME/.scramble when --data is absent", async () => {
@@ -441,6 +490,49 @@ describe("serve", () => {
     const code = await main(["serve"], io);
     expect(code).toBe(0);
     expect(existsSync(join(cwd, ".scramble"))).toBe(true);
+  });
+});
+
+describe("parseBind", () => {
+  test("host:port splits into typed hostname and port", () => {
+    const r = parseBind("127.0.0.1:7799");
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.spec.hostname).toBe("127.0.0.1");
+      expect(r.spec.port).toBe(7799);
+    }
+  });
+
+  test("a bare port maps to port with no hostname", () => {
+    const r = parseBind("7799");
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.spec.port).toBe(7799);
+      expect(r.spec.hostname).toBeUndefined();
+    }
+  });
+
+  test("a bare host maps to hostname with no port", () => {
+    const r = parseBind("0.0.0.0");
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.spec.hostname).toBe("0.0.0.0");
+      expect(r.spec.port).toBeUndefined();
+    }
+  });
+
+  test("a malformed value is reported, never silently defaulted", () => {
+    for (const bad of ["127.0.0.1:notaport", "127.0.0.1:", "1:2:3", ""]) {
+      const r = parseBind(bad);
+      expect(r.ok).toBe(false);
+    }
+  });
+
+  test("valid races and portbounds are accepted", () => {
+    expect(parseBind("0").ok).toBe(true);
+    expect(parseBind("65535").ok).toBe(true);
+    expect(parseBind("70000").ok).toBe(false);
+    expect(parseBind("localhost:8080").ok).toBe(true);
   });
 });
 
