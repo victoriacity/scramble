@@ -9,6 +9,7 @@ import { basename, join } from "node:path";
 import { createStore, type RoomStore } from "./store";
 import type { Message, PostResult } from "./types";
 import type { ServeOptions } from "./server";
+import { createBridge, type SlackConfig, type SlackTransport } from "./slack";
 
 const DEFAULT_URL = "http://127.0.0.1:7737";
 const MAX_BACKOFF = 2000; // ms cap on reconnect delay
@@ -25,6 +26,10 @@ export interface Io {
   sleep(ms: number): Promise<void>;
   /** the daemon bind seam; the real wiring (a port bind) lives in src/bin.ts. */
   serve(store: RoomStore, opts: ServeOptions): Promise<number>;
+  /** Build the Slack transport for a bridge. The real socket factory and
+   *  network bind live in src/bin.ts; tests inject a fake transport so main()
+   *  needs no network. */
+  createTransport(cfg: SlackConfig): SlackTransport;
 }
 
 /** The CLI owns --bind string parsing. The one interpretation site: it turns a
@@ -407,6 +412,166 @@ async function cmdServe(argv: string[], io: Io): Promise<number> {
   return io.serve(store, opts);
 }
 
+/** Load the bridge master config from <workspace>/.scramble/slack.json. The
+ *  config governs which rooms map to which channels, each agent's identity
+ *  tier, the DM mirror, and the app-level/bot tokens. Returns null when the
+ *  file is absent or malformed (the caller reports it). */
+export function loadSlackConfig(io: Io): Omit<SlackConfig, "postToRoom"> | null {
+  try {
+    const raw = readFileSync(join(io.cwd(), ".scramble", "slack.json"), "utf8");
+    const j = JSON.parse(raw) as Record<string, unknown>;
+    const channels = j.channels as Record<string, string> | undefined;
+    const agents = j.agents as Record<string, { token?: string; icon?: string }> | undefined;
+    if (!channels || typeof channels !== "object" || !agents || typeof agents !== "object") {
+      return null;
+    }
+    return {
+      channels,
+      agents,
+      dmChannels: (j.dmChannels as Record<string, string>) ?? {},
+      roster: (j.roster as Record<string, string>) ?? {},
+      botIds: (j.botIds as string[]) ?? [],
+      token: typeof j.token === "string" ? j.token : undefined,
+      appToken: typeof j.appToken === "string" ? j.appToken : undefined,
+      dmMirrorChannel:
+        typeof j.dmMirrorChannel === "string" ? j.dmMirrorChannel : undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Valid bridge config must carry the app-level token used to open the Socket
+ *  Mode connection. This reports the first missing required token. */
+function slackTokenError(cfg: Pick<SlackConfig, "appToken" | "token">): string | null {
+  if (!cfg.appToken) return "missing appToken (the xapp- Socket Mode app-level token)";
+  return null;
+}
+
+/** Fire an inbound Slack message into a room through the daemon's POST seam.
+ *  postToRoom is a sync void seam (the bridge's contract), so the async POST
+ *  fires and forgets; a failure surfaces only in the daemon log. */
+function postToRoom(
+  io: Io,
+  url: string,
+  token: string | undefined,
+  room: string,
+  from: string,
+  text: string,
+): void {
+  void io
+    .fetch(`${url}/rooms/${encodeURIComponent(room)}`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...authHeader(token) },
+      body: JSON.stringify({ from, text, id: newMessageId() }),
+    })
+    .catch(() => {});
+}
+
+/** Feed one firehose response's messages into the bridge's publish path,
+ *  pulling the NDJSON stream to its end. */
+async function feedFirehose(
+  io: Io,
+  res: Response,
+  onMessage: (m: Message) => void,
+): Promise<void> {
+  const reader = res.body!.getReader();
+  const dec = new TextDecoder();
+  let buf = "";
+  let { done, value } = await reader.read();
+  while (!done) {
+    buf += dec.decode(value, { stream: true });
+    let idx = buf.indexOf("\n");
+    while (idx >= 0) {
+      const line = buf.slice(0, idx).trim();
+      buf = buf.slice(idx + 1);
+      if (line) onMessage(JSON.parse(line) as Message);
+      idx = buf.indexOf("\n");
+    }
+    ({ done, value } = await reader.read());
+  }
+}
+
+async function cmdSlack(argv: string[], io: Io): Promise<number> {
+  const { flags } = parseArgs(argv);
+  const dryRun = flags.has("dry-run");
+  const cfg = loadSlackConfig(io);
+  if (cfg === null) {
+    io.writeErr(".scramble/slack.json is missing or malformed");
+    return 1;
+  }
+  const tokenErr = slackTokenError(cfg);
+  if (tokenErr !== null) {
+    io.writeErr(tokenErr);
+    return 1;
+  }
+  const { url, token } = resolveConfig(flags, io);
+  // Inbound Slack text lands in the room through the daemon's POST path.
+  const slack: SlackConfig = { ...cfg, postToRoom: (room, from, text) => postToRoom(io, url, token, room, from, text) };
+  slack.dryRun = dryRun;
+  try {
+    const transport = io.createTransport(slack);
+    const bridge = createBridge(slack, transport);
+    if (dryRun) {
+      // Never connect: prove the config maps to actionable Slack calls.
+      printBridgeSummary(slack, url, io);
+      return 0;
+    }
+    bridge.connect();
+    // Every room message streams on the firehose; publish each into Slack.
+    let backoff = 100;
+    let staying = true;
+    while (staying) {
+      let res: Response;
+      try {
+        res = await io.fetch(`${url}/stream`, { headers: authHeader(token) });
+      } catch {
+        await io.sleep(backoff);
+        backoff = Math.min(backoff * 2, MAX_BACKOFF);
+        continue;
+      }
+      if (res.status !== 200 || res.body === null) {
+        await io.sleep(backoff);
+        backoff = Math.min(backoff * 2, MAX_BACKOFF);
+        continue;
+      }
+      try {
+        await feedFirehose(io, res, (m) => bridge.publish(m));
+        staying = false; // the daemon closed the stream: a clean stop
+      } catch {
+        await io.sleep(backoff);
+        backoff = Math.min(backoff * 2, MAX_BACKOFF);
+      }
+    }
+    return 0;
+  } catch {
+    io.writeErr("slack bridge failed to start");
+    return 1;
+  }
+}
+
+/** Print the dry-run plan to stderr: the wired channel mappings and identity
+ *  tiers the bridge would act on, so an operator verifies the config before
+ *  going live with no network connection involved. */
+function printBridgeSummary(cfg: SlackConfig, base: string, io: Io): void {
+  io.writeErr(`slack dry-run for ${base}`);
+  for (const [room, ch] of Object.entries(cfg.channels)) {
+    io.writeErr(`  room ${room} -> channel ${ch}`);
+  }
+  for (const [name, agent] of Object.entries(cfg.agents)) {
+    const tier = agent.token ? "real bot-user" : "persona";
+    const icon = agent.icon ? ` icon=${agent.icon}` : "";
+    io.writeErr(`  ${name}: ${tier}${icon}`);
+  }
+  if (cfg.dmChannels !== undefined) {
+    for (const [ch, agent] of Object.entries(cfg.dmChannels)) {
+      io.writeErr(`  DM channel ${ch} -> ${agent}`);
+    }
+  }
+  if (cfg.dmMirrorChannel) io.writeErr(`  DM mirror -> ${cfg.dmMirrorChannel}`);
+  io.writeErr(`dry-run OK: no transport was connected`);
+}
+
 export async function main(argv: string[], io: Io): Promise<number> {
   switch (argv[0]) {
     case "post":
@@ -421,6 +586,8 @@ export async function main(argv: string[], io: Io): Promise<number> {
       return cmdJoin(argv.slice(1), io);
     case "serve":
       return cmdServe(argv.slice(1), io);
+    case "slack":
+      return cmdSlack(argv.slice(1), io);
     default:
       io.writeErr(`unknown command: ${argv[0] ?? "(none)"}`);
       return 1;

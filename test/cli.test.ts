@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import type { RoomStore } from "../src/store";
 import { createStore } from "../src/store";
 import { createHandler } from "../src/server";
-import { main, parseBind, type Io } from "../src/cli";
+import { main, parseBind, loadSlackConfig, type Io } from "../src/cli";
 
 function scratchDir(name: string): string {
   const d = join(tmpdir(), `zz-${name}-${process.pid}-${Math.random().toString(36).slice(2)}`);
@@ -63,6 +63,10 @@ function stubIo(cwd: string, fetch: Io["fetch"]): { io: Io; writes: string[]; er
     cwd: () => cwd,
     sleep: async () => {},
     serve: async () => 0,
+    createTransport: () => ({
+      connect: () => {},
+      postMessage: async () => {},
+    }),
   };
   return { io, writes, errs, urls };
 }
@@ -557,5 +561,327 @@ describe("unknown command", () => {
     const code = await main(["frobnicate"], io);
     expect(code).toBe(1);
     expect(errs[0]).toContain("frobnicate");
+  });
+});
+
+// --- the `scramble slack` verb ------------------------------
+// The bridge config lives at <workspace>/.scramble/slack.json, and the real
+// transport is created through io.createTransport so tests inject a fake.
+
+import type { SlackEvent, SlackPostOptions, SlackTransport } from "../src/slack";
+
+/** The event handler the bridge registers on a transport; tests fire inbound
+ *  Slack events through the captured handler. */
+interface Captured {
+  h?: (ev: SlackEvent) => void;
+}
+
+function writeSlackConfig(cwd: string, cfg: Record<string, unknown>): void {
+  mkdirSync(join(cwd, ".scramble"), { recursive: true });
+  writeFileSync(join(cwd, ".scramble", "slack.json"), JSON.stringify(cfg));
+}
+
+function validSlackCfg(): Record<string, unknown> {
+  return {
+    appToken: "xapp-1",
+    token: "xoxb-1",
+    channels: { general: "C1" },
+    agents: { alice: { token: "T_A" }, bob: { icon: ":robot:" } },
+    dmChannels: { D1: "alice" },
+    roster: {},
+    botIds: ["B1"],
+    dmMirrorChannel: "#audit",
+  };
+}
+
+/** A fake transport the CLI tests mount, capturing the event handler the
+ *  bridge registers (so inbound Slack messages can be fired through it) and
+ *  recording outbound posts. */
+function fakeTransport(posts: SlackPostOptions[], captured: { h?: (ev: SlackEvent) => void }): SlackTransport {
+  return {
+    connect: (on) => {
+      captured.h = on;
+    },
+    postMessage: async (o) => {
+      posts.push(o);
+    },
+  };
+}
+
+/** A daemon-neutered firehose that streams lines then closes cleanly. */
+function firehose(lines: Array<Record<string, unknown>>): Response {
+  const enc = new TextEncoder();
+  let phase = 0;
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (phase === 0) {
+        phase = 1;
+        for (const l of lines) controller.enqueue(enc.encode(JSON.stringify(l) + "\n"));
+        return;
+      }
+      controller.close();
+    },
+  });
+  return new Response(body, { status: 200 });
+}
+
+function slackIo(cwd: string, transport: SlackTransport): { io: Io; posts: SlackPostOptions[]; errs: string[] } {
+  const posts: SlackPostOptions[] = [];
+  const errs: string[] = [];
+  const io: Io = {
+    write: () => {},
+    writeErr: (l) => errs.push(l),
+    fetch: async () => new Response("[]", { status: 200 }),
+    env: () => undefined,
+    cwd: () => cwd,
+    sleep: async () => {},
+    serve: async () => 0,
+    createTransport: () => transport,
+  };
+  return { io, posts, errs };
+}
+
+describe("scramble slack", () => {
+  test("exits 1 with a stderr message when .scramble/slack.json is missing", async () => {
+    const cwd = scratchDir("noslack");
+    const posts: SlackPostOptions[] = [];
+    const captured: Captured = {};
+    const { io, errs } = slackIo(cwd, fakeTransport(posts, captured));
+    const code = await main(["slack"], io);
+    expect(code).toBe(1);
+    expect(errs[0]).toContain("slack.json");
+  });
+
+  test("exits 1 with a stderr message when the config is malformed", async () => {
+    const cwd = scratchDir("slackbad");
+    mkdirSync(join(cwd, ".scramble"), { recursive: true });
+    writeFileSync(join(cwd, ".scramble", "slack.json"), "not json");
+    const { io, errs } = stubIo(cwd, async () => new Response("{}", { status: 200 }));
+    const code = await main(["slack"], io);
+    expect(code).toBe(1);
+    expect(errs[0]).toContain("slack.json");
+  });
+
+  test("exits 1 when the config lacks the required app-level token", async () => {
+    const cwd = scratchDir("slack-notoken");
+    writeSlackConfig(cwd, { ...validSlackCfg(), appToken: undefined });
+    const posts: SlackPostOptions[] = [];
+    const captured: { h?: (ev: SlackEvent) => void } = {};
+    const { io, errs } = slackIo(cwd, fakeTransport(posts, captured));
+    const code = await main(["slack"], io);
+    expect(code).toBe(1);
+    expect(errs[0]).toContain("appToken");
+  });
+
+  test("--dry-run prints the wiring plan, never connects, and exits 0", async () => {
+    const cwd = scratchDir("slack-dry");
+    writeSlackConfig(cwd, validSlackCfg());
+    const posts: SlackPostOptions[] = [];
+    const captured: Captured = {};
+    const transport = fakeTransport(posts, captured);
+    const { io, errs } = slackIo(cwd, transport);
+    const code = await main(["slack", "--dry-run"], io);
+    expect(code).toBe(0);
+    // the plan is printed to stderr
+    expect(errs.some((l) => l.includes("general -> channel C1"))).toBe(true);
+    expect(errs.some((l) => l.includes("alice: real bot-user"))).toBe(true);
+    expect(errs.some((l) => l.includes("dry-run OK"))).toBe(true);
+    // transport never connected, never posted
+    expect(captured.h).toBeUndefined();
+    expect(posts).toHaveLength(0);
+  });
+
+  test("live mode connects the bridge and publishes firehose messages to Slack", async () => {
+    const cwd = scratchDir("slack-live");
+    writeSlackConfig(cwd, validSlackCfg());
+    const posts: SlackPostOptions[] = [];
+    const captured: Captured = {};
+    const transport = fakeTransport(posts, captured);
+    const { io } = slackIo(cwd, transport);
+    io.fetch = async (input) => {
+      // the firehose delivers one room message then closes
+      return firehose([
+        { seq: 1, ts: "t", room: "general", from: "alice", text: "hi", id: "i1", mentions: [] },
+      ]);
+    };
+    const code = await main(["slack"], io);
+    expect(code).toBe(0);
+    // the fake transport's postMessage was called for the firehose message
+    expect(posts.length).toBeGreaterThan(0);
+    expect(posts.some((p) => p.text === "hi")).toBe(true);
+    // the bridge called transport.connect
+    expect(captured.h).toBeDefined();
+  });
+
+  test("inbound Slack messages route into the room via the daemon POST seam", async () => {
+    const cwd = scratchDir("slack-inbound");
+    writeSlackConfig(cwd, validSlackCfg());
+    const posts: SlackPostOptions[] = [];
+    const captured: Captured = {};
+    const transport = fakeTransport(posts, captured);
+    const { io } = slackIo(cwd, transport);
+    const posted: Array<{ url: string; body: string }> = [];
+    io.fetch = async (input, init) => {
+      if (String(input).includes("/rooms/")) {
+        posted.push({ url: String(input), body: String(init?.body) });
+        return new Response(JSON.stringify({ seq: 9, crossings: [] }), { status: 200 });
+      }
+      return firehose([]); // the firehose closes cleanly
+    };
+    const code = await main(["slack"], io);
+    expect(code).toBe(0);
+    // after live mode connected, fire an inbound channel message
+    captured.h?.({ type: "message", channel: "C1", user: "U111", text: "from slack" });
+    // the postToRoom wiring produced a daemon POST for room "general"
+    const roomPosts = posted.filter((p) => p.url.includes("/rooms/general"));
+    expect(roomPosts).toHaveLength(1);
+    expect(JSON.parse(roomPosts[0]!.body)).toMatchObject({ from: "U111", text: "from slack" });
+  });
+
+  test("an inbound room POST rejection is swallowed (fire-and-forget) without failing the command", async () => {
+    const cwd = scratchDir("slack-inbound-reject");
+    writeSlackConfig(cwd, validSlackCfg());
+    const posts: SlackPostOptions[] = [];
+    const captured: Captured = {};
+    const transport = fakeTransport(posts, captured);
+    const { io } = slackIo(cwd, transport);
+    io.fetch = async (input) => {
+      if (String(input).includes("/rooms/")) throw new Error("room POST failed");
+      return firehose([]);
+    };
+    const code = await main(["slack"], io);
+    expect(code).toBe(0);
+    captured.h?.({ type: "message", channel: "C1", user: "U111", text: "swallowed" });
+    // give the swallowed rejection a microtask turn to settle
+    await new Promise((r) => setTimeout(r, 5));
+  });
+
+  test("recovers from a firehose fetch failure with backoff", async () => {
+    const cwd = scratchDir("slack-retry");
+    writeSlackConfig(cwd, validSlackCfg());
+    const posts: SlackPostOptions[] = [];
+    const captured: Captured = {};
+    const transport = fakeTransport(posts, captured);
+    const { io } = slackIo(cwd, transport);
+    let call = 0;
+    io.fetch = async () => {
+      call++;
+      if (call === 1) throw new Error("daemon down");
+      return firehose([
+        { seq: 2, ts: "t", room: "general", from: "bob", text: "retry", id: "i2", mentions: [] },
+      ]);
+    };
+    const code = await main(["slack"], io);
+    expect(code).toBe(0);
+    expect(posts.some((p) => p.text === "retry")).toBe(true);
+    expect(call).toBe(2);
+  });
+
+  test("recovers from a non-200 firehose response with backoff", async () => {
+    const cwd = scratchDir("slack-non200");
+    writeSlackConfig(cwd, validSlackCfg());
+    const posts: SlackPostOptions[] = [];
+    const captured: Captured = {};
+    const transport = fakeTransport(posts, captured);
+    const { io } = slackIo(cwd, transport);
+    let call = 0;
+    io.fetch = async () => {
+      call++;
+      if (call === 1) return new Response("nope", { status: 503 });
+      return firehose([
+        { seq: 3, ts: "t", room: "general", from: "alice", text: "back", id: "i3", mentions: [] },
+      ]);
+    };
+    const code = await main(["slack"], io);
+    expect(code).toBe(0);
+    expect(posts.some((p) => p.text === "back")).toBe(true);
+    expect(call).toBe(2);
+  });
+
+  test("recovers when the firehose stream drops mid-drain", async () => {
+    const cwd = scratchDir("slack-drop");
+    writeSlackConfig(cwd, validSlackCfg());
+    const posts: SlackPostOptions[] = [];
+    const captured: Captured = {};
+    const transport = fakeTransport(posts, captured);
+    const { io } = slackIo(cwd, transport);
+    let call = 0;
+    io.fetch = async () => {
+      call++;
+      if (call === 1) return ndjs([msg(4, "bob", "dropped")], "error");
+      return firehose([
+        { seq: 5, ts: "t", room: "general", from: "alice", text: "stable", id: "i5", mentions: [] },
+      ]);
+    };
+    const code = await main(["slack"], io);
+    expect(code).toBe(0);
+    expect(posts.some((p) => p.text === "dropped")).toBe(true);
+    // on the retry, the "stable" message is also published
+    expect(posts.some((p) => p.text === "stable")).toBe(true);
+  });
+
+  test("a transport create failure is reported and exits 1", async () => {
+    const cwd = scratchDir("slack-boom");
+    writeSlackConfig(cwd, validSlackCfg());
+    const posts: SlackPostOptions[] = [];
+    const errs: string[] = [];
+    const io: Io = {
+      write: () => {},
+      writeErr: (l) => errs.push(l),
+      fetch: async () => new Response("{}", { status: 200 }),
+      env: () => undefined,
+      cwd: () => cwd,
+      sleep: async () => {},
+      serve: async () => 0,
+      createTransport: () => {
+        throw new Error("boom");
+      },
+    };
+    const code = await main(["slack"], io);
+    expect(code).toBe(1);
+    expect(errs[0]).toContain("failed");
+  });
+});
+
+describe("loadSlackConfig", () => {
+  function sluckIo(cwd: string): Io {
+    return {
+      write: () => {},
+      writeErr: () => {},
+      fetch: async () => new Response("{}", { status: 200 }),
+      env: () => undefined,
+      cwd: () => cwd,
+      sleep: async () => {},
+      serve: async () => 0,
+      createTransport: () => ({ connect: () => {}, postMessage: async () => {} }),
+    };
+  }
+
+  test("defaults optional fields and reads string scalars", () => {
+    const cwd = scratchDir("loadcfg-mid");
+    writeSlackConfig(cwd, { channels: { general: "C1" }, agents: {} });
+    const cfg = loadSlackConfig(sluckIo(cwd));
+    expect(cfg).not.toBeNull();
+    if (cfg) {
+      expect(cfg.channels.general).toBe("C1");
+      expect(cfg.token).toBeUndefined();
+      expect(cfg.appToken).toBeUndefined();
+      expect(cfg.dmMirrorChannel).toBeUndefined();
+      expect(cfg.botIds).toEqual([]);
+      expect(cfg.dmChannels).toEqual({});
+      expect(cfg.roster).toEqual({});
+    }
+  });
+
+  test("rejects a config whose channels field is malformed", () => {
+    const cwd = scratchDir("slackcfg-badch");
+    writeSlackConfig(cwd, { channels: "not-an-object", agents: {} });
+    expect(loadSlackConfig(sluckIo(cwd))).toBeNull();
+  });
+
+  test("rejects a config whose agents field is malformed", () => {
+    const cwd = scratchDir("slackcfg-badag");
+    writeSlackConfig(cwd, { channels: {}, agents: 42 });
+    expect(loadSlackConfig(sluckIo(cwd))).toBeNull();
   });
 });
