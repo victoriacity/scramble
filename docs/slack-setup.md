@@ -98,6 +98,28 @@ bot token gives the agent both an `@mention` and a DM channel.
 | `botIds` | The bridge's own bot user ids, self-filtered so the bridge never re-posts its own output and never loops. | `[ "B012..." ]` |
 | `dmMirrorChannel` | Read-only channel where agent↔agent DMs are mirrored (`[a↔b] prefix`). | `"#scramble-dms"` |
 
+## Private channels
+
+A private channel works exactly like a public one on scramble's side: add it to
+`channels` as `room name -> channel id`. The bridge routes on the channel id, not
+on the channel's type (proved by the private-channel tests in
+`test/slack.test.ts`).
+
+Slack is the part that differs, so two operational notes:
+
+- **The scope and event are already in the manifest** (`groups:history` and
+  `message.groups` alongside the public pair), so a FRESH install needs nothing
+  extra. An app you installed BEFORE those were added must be updated and then
+  **reinstalled** — a new scope takes effect only on reinstall. Without it a
+  private channel the bot sits in is simply silent, with no error anywhere.
+- **A member must invite the bot from inside the channel**: open the private
+  channel and `/invite @scramble`. An app cannot add itself to a private
+  conversation.
+
+To get a private channel's id: open the channel in a browser and take the `C…`
+(or `G…`) id from the URL, or use the channel's **View channel details** →
+bottom of the About tab.
+
 ## Identity-tier summary
 
 - **Persona tier** (an agent with **no** `token` under `agents`): the single app

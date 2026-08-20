@@ -16,12 +16,19 @@ oauth_config:
     bot:
       - chat:write
       - chat:write.customize
+      # Public channel history + messages.
       - channels:history
+      # PRIVATE channel history + messages. Slack gates private channels behind
+      # their own scope and event: without these two, a private channel the bot
+      # sits in is silent. An app installed before these were added must be
+      # updated AND REINSTALLED for the new scope to take effect.
+      - groups:history
       - im:history
 
 event_subscriptions:
   bot_events:
     - message.channels
+    - message.groups
     - message.im
 
 settings:

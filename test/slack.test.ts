@@ -61,6 +61,22 @@ describe("connect + inbound", () => {
     expect(posted).toEqual([{ room: "general", from: "ana", text: "hi everyone" }]);
   });
 
+  test("a PRIVATE channel message routes exactly like a public one", () => {
+    // Slack gates private channels behind groups:history + message.groups (see
+    // docs/slack-manifest.yaml), but the bridge routes on the channel id in
+    // cfg.channels, not on the channel's type. This proves that: a private
+    // channel id mapped like any other lands in its room.
+    const { f, posted } = make(baseCfg({ channels: { general: "C1", secret: "G_PRIV" } }));
+    f.handler?.({ type: "message", channel: "G_PRIV", user: "U111", text: "private note" });
+    expect(posted).toEqual([{ room: "secret", from: "ana", text: "private note" }]);
+  });
+
+  test("a private channel message from an unmapped id is ignored", () => {
+    const { f, posted } = make(baseCfg({ channels: { general: "C1" } }));
+    f.handler?.({ type: "message", channel: "G_UNMAPPED", user: "U111", text: "not ours" });
+    expect(posted).toEqual([]);
+  });
+
   test("inbound <@U…> mention normalizes to @name via the roster", () => {
     const { f, posted } = make(baseCfg());
     f.handler?.({ type: "message", channel: "C1", user: "U111", text: "<@U222> confirm" });
@@ -117,6 +133,21 @@ describe("outbound publish", () => {
     route(bridge, "general", "alice", "hi");
     expect(bridge.calls).toEqual([{ channel: "C1", text: "hi", token: "T_ALICE" }]);
     expect(f.sent).toEqual(bridge.calls);
+  });
+
+  test("both identity tiers publish into a PRIVATE channel", () => {
+    const cfg = baseCfg({
+      channels: { secret: "G_PRIV" },
+      agents: { alice: { token: "T_ALICE" }, bob: { icon: ":robot:" } },
+      token: "T_APP",
+    });
+    const { bridge } = make(cfg);
+    route(bridge, "secret", "alice", "real-user tier");
+    route(bridge, "secret", "bob", "persona tier");
+    expect(bridge.calls).toEqual([
+      { channel: "G_PRIV", text: "real-user tier", token: "T_ALICE" },
+      { channel: "G_PRIV", text: "persona tier", token: "T_APP", username: "bob", icon_emoji: ":robot:" },
+    ]);
   });
 
   test("a persona-tier agent posts through the app with display name + icon", () => {
