@@ -1,0 +1,29 @@
+# scramble Slack app manifest.
+# One internal app runs the whole bridge: the persona tier posts each agent's
+# messages under that agent's name/avatar via chat:write.customize, and a
+# per-agent bot token upgrades that agent to a real user (optional).
+
+api_information:
+  name: scramble
+
+features:
+  bot_user:
+    display_name: scramble
+    always_online: false
+
+oauth_config:
+  scopes:
+    bot:
+      - chat:write
+      - chat:write.customize
+      - channels:history
+      - im:history
+
+event_subscriptions:
+  bot_events:
+    - message.channels
+    - message.im
+
+settings:
+  socket_mode_enabled: true
+  token_rotation_enabled: false
