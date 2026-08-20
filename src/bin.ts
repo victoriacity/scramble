@@ -24,7 +24,7 @@ const io = {
   sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
   },
-  serve(store: RoomStore, opts: ServeOptions & { bind?: string }): Promise<number> {
+  serve(store: RoomStore, opts: ServeOptions): Promise<number> {
     const srv = serve(store, opts);
     return new Promise(() => {});
   },

@@ -2,10 +2,12 @@
 import { DEFAULTS, type Message, type PostResult, type ServerOptions } from "./types";
 import type { RoomStore } from "./store";
 
-/** serve() merges the server-only knobs (bind/port) onto the shared ones. */
+/** serve() merges the server-only knobs (hostname/port) onto the shared ones.
+ *  Typed fields only: the CLI owns --bind string parsing and hands serve() a
+ *  concrete hostname and/or port, so there is exactly one interpretation site. */
 export interface ServeOptions extends ServerOptions {
   port?: number;
-  bind?: string;
+  hostname?: string;
 }
 
 function json(status: number, body: unknown): Response {
@@ -239,7 +241,7 @@ export function createHandler(store: RoomStore, opts: ServerOptions = {}) {
 export function serve(store: RoomStore, opts: ServeOptions = {}) {
   return Bun.serve({
     port: opts.port ?? DEFAULTS.port,
-    hostname: opts.bind ?? "127.0.0.1",
+    hostname: opts.hostname ?? "127.0.0.1",
     fetch: createHandler(store, opts),
   });
 }

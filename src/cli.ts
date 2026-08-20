@@ -24,7 +24,39 @@ export interface Io {
   /** injectable wait so tests need no real delay. */
   sleep(ms: number): Promise<void>;
   /** the daemon bind seam; the real wiring (a port bind) lives in src/bin.ts. */
-  serve(store: RoomStore, opts: ServeOptions & { bind?: string }): Promise<number>;
+  serve(store: RoomStore, opts: ServeOptions): Promise<number>;
+}
+
+/** The CLI owns --bind string parsing. The one interpretation site: it turns a
+ *  `--bind` value ("host:port", "port", or "host") into typed hostname/port
+ *  fields that serve() consumes. A malformed value is reported, never silently
+ *  defaulted. */
+export interface BindSpec {
+  hostname?: string;
+  port?: number;
+}
+
+export function parseBind(raw: string): { ok: true; spec: BindSpec } | { ok: false; error: string } {
+  if (raw === "") return { ok: false, error: "empty --bind" };
+  const colon = raw.indexOf(":");
+  if (colon >= 0) {
+    const host = raw.slice(0, colon);
+    const portStr = raw.slice(colon + 1);
+    if (portStr.includes(":")) return { ok: false, error: `invalid --bind: ${raw}` };
+    if (portStr === "") return { ok: false, error: `missing port in --bind: ${raw}` };
+    const port = Number(portStr);
+    if (!Number.isInteger(port) || port < 0 || port > 65535)
+      return { ok: false, error: `invalid port in --bind: ${portStr}` };
+    return { ok: true, spec: { hostname: host === "" ? undefined : host, port } };
+  }
+  // No colon: a bare port (all digits) or a bare hostname.
+  if (/^\d+$/.test(raw)) {
+    const port = Number(raw);
+    if (!Number.isInteger(port) || port < 0 || port > 65535)
+      return { ok: false, error: `invalid port: ${raw}` };
+    return { ok: true, spec: { port } };
+  }
+  return { ok: true, spec: { hostname: raw } };
 }
 
 interface Parsed {
@@ -353,9 +385,17 @@ function dataDir(flags: Map<string, string>, io: Io): string {
 async function cmdServe(argv: string[], io: Io): Promise<number> {
   const { flags } = parseArgs(argv);
   const store = createStore(dataDir(flags, io));
-  const opts: ServeOptions & { bind?: string } = {};
+  const opts: ServeOptions = {};
   const bind = flags.get("bind");
-  if (bind) opts.bind = bind;
+  if (bind !== undefined) {
+    const parsed = parseBind(bind);
+    if (!parsed.ok) {
+      io.writeErr(`invalid --bind: ${parsed.error}`);
+      return 1;
+    }
+    if (parsed.spec.hostname !== undefined) opts.hostname = parsed.spec.hostname;
+    if (parsed.spec.port !== undefined) opts.port = parsed.spec.port;
+  }
   const token = flags.get("token");
   if (token) opts.token = token;
   return io.serve(store, opts);
