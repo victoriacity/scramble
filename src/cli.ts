@@ -694,6 +694,26 @@ export function staleConfigWarning(cfg: SlackBackendConfig | null, agent: string
   return "";
 }
 
+/** The Slack CLI's app-configuration token, when this host has one. Only this
+ *  credential can read another app's description, so a host without the CLI
+ *  simply gets no peer descriptions rather than a broken lookup. */
+export function slackCliToken(io: Io): string | undefined {
+  const home = io.env("HOME");
+  if (home === undefined || home === "") return undefined;
+  try {
+    const creds = JSON.parse(readFileSync(join(home, ".slack", "credentials.json"), "utf8")) as Record<
+      string,
+      { token?: string }
+    >;
+    for (const v of Object.values(creds)) {
+      if (typeof v.token === "string" && v.token !== "") return v.token;
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
+
 function slackBackend(io: Io): { backend?: SlackBackend; error?: string } {
   const cfg = loadSlackConfig(io);
   if (cfg === null) return { error: `${slackConfigPath(io)} is missing or malformed` };
@@ -709,6 +729,7 @@ function slackBackend(io: Io): { backend?: SlackBackend; error?: string } {
       dmChannels: cfg.dmChannels,
       filesDir: slackFilesDir(io),
       humanUserId: cfg.humanUserId,
+      cliToken: slackCliToken(io),
     },
     { fetch: io.fetch, createSocket: io.createSocket, sleep: io.sleep },
   );
@@ -985,7 +1006,7 @@ async function messageCheckSlack(flags: Map<string, string>, io: Io): Promise<nu
     const cursor = started[channel];
     // `oldest` is inclusive in Slack, so re-filter to strictly-newer lines: the
     // cursor line itself must not re-drain on a repeat `message check`.
-    const r = await s.backend.history(channel, cursor === undefined ? undefined : cursor, tts, name);
+    const r = await s.backend.history(channel, cursor === undefined ? undefined : cursor, tts, name, true);
     for (const p of r.problems) io.writeErr(`slack: ${p}`);
     if (r.code !== 0) {
       // ONE UNREACHABLE CHANNEL MUST NOT SILENCE THE REST. This loop walks EVERY
@@ -1008,7 +1029,10 @@ async function messageCheckSlack(flags: Map<string, string>, io: Io): Promise<nu
       // The SAME identity set the backend delivers with: a mention of this
       // agent's Slack handle addresses this agent, and computing it here from
       // the name alone is what made a real mention arrive with mentioned:false.
-      const mentioned = ids.some((id) => m.mentions.includes(id));
+      // The BACKEND decides this for a drain, including a thread the agent is in,
+      // which a name match here cannot see. No local fallback: a second way to
+      // compute `mentioned` is a second answer that will disagree with the first.
+      const mentioned = (m as { mentioned?: boolean }).mentioned === true;
       const line = { ...m, mentioned };
       // `message check` is a DELIVERY verb: its drain hands the agent what has
       // ARRIVED FOR it, and its own post has not arrived for anybody. Skip the

@@ -51,6 +51,13 @@ export interface Delivery extends Message {
    *  the config records no `humanUserId`, since operator cannot be told apart
    *  from teammate then. */
   sender?: "operator" | "teammate" | "agent";
+  /** The sender's own one-line description of what it is for, when one is
+   *  published and readable. A peer agent's REMIT, which is a different thing
+   *  from its role: role says who may change the workspace, remit says whose
+   *  claim to weigh on what. Self-authored, so it is a claim rather than a
+   *  verified fact, and a wrong description is still a wrong description.
+   *  Absent when unpublished or unreadable from this host. */
+  description?: string;
 }
 
 /** A joined participant. `persona` is the 2-4 sentence goal+lens text read

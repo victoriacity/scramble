@@ -87,6 +87,12 @@ export interface SlackBackendConfig {
   agents: Record<string, { token?: string; appToken?: string; handle?: string; appId?: string }>;
   /** Slack user id of the human who authorized this machine's session. */
   humanUserId?: string;
+  /** The Slack CLI's app-configuration token, when this host has one. It is the
+   *  ONLY credential that can read another app's description
+   *  (apps.manifest.export), since users.info returns an empty title for a bot
+   *  and bots.info carries no description at all. Absent on a host without the
+   *  CLI, where peer descriptions are simply unavailable. */
+  cliToken?: string;
   /** slack user id -> name, for <@U…> -> @name normalization. */
   roster: Record<string, string>;
   /** DM channel id -> agent whose bot that DM belongs to. */
@@ -191,6 +197,9 @@ export class SlackBackend {
   private readonly channels: Record<string, string>;
   private readonly agents: Record<string, { token?: string; appToken?: string; handle?: string; appId?: string }>;
   private readonly humanUserId?: string;
+  private readonly cliToken?: string;
+  /** Slack user id -> its published description, or "" when it has none. */
+  private readonly describeCache = new Map<string, string>();
   /** `<channel>/<root>/<agent>` -> is that agent in that thread. */
   private readonly threadCache = new Map<string, boolean>();
   private readonly roster: Record<string, string>;
@@ -210,6 +219,7 @@ export class SlackBackend {
     this.appToken = cfg.appToken;
     this.agents = cfg.agents;
     this.humanUserId = cfg.humanUserId;
+    this.cliToken = cfg.cliToken;
     this.roster = cfg.roster;
     this.filesDir = cfg.filesDir;
     this.dmChannels = cfg.dmChannels;
@@ -267,6 +277,41 @@ export class SlackBackend {
 
   private addressesAgent(mentions: string[], agent: string): boolean {
     return this.identities(agent).some((id) => mentions.includes(id));
+  }
+
+  /** The sender's published description, or undefined when there is none to
+   *  read. Two hops, cached per user: users.info gives the speaker's
+   *  `api_app_id`, and apps.manifest.export under the CLI credential gives that
+   *  app's description. A peer agent's remit read from its first line is worth
+   *  the hops, since otherwise an agent learns what a peer is for only when the
+   *  peer explains itself (peer agent, 2026-08-21). */
+  private async describeSender(token: string, ev: SlackInboundEvent): Promise<string | undefined> {
+    const user = ev.user;
+    if (this.cliToken === undefined || this.cliToken === "" || user === undefined || user === "") return undefined;
+    const cached = this.describeCache.get(user);
+    if (cached !== undefined) return cached === "" ? undefined : cached;
+    const who = await readOk<{ user?: { profile?: { api_app_id?: string } } }>(
+      this.fetch,
+      `${USERS_INFO_URL}?user=${encodeURIComponent(user)}`,
+      { headers: { authorization: `Bearer ${token}` } },
+    );
+    const appId = who.ok ? who.data.user?.profile?.api_app_id : undefined;
+    if (appId === undefined || appId === "") {
+      this.describeCache.set(user, "");
+      return undefined;
+    }
+    const m = await readOk<{ manifest?: { display_information?: { description?: string } } }>(
+      this.fetch,
+      "https://slack.com/api/apps.manifest.export",
+      {
+        method: "POST",
+        headers: { authorization: `Bearer ${this.cliToken}`, "content-type": "application/json; charset=utf-8" },
+        body: JSON.stringify({ app_id: appId }),
+      },
+    );
+    const d = m.ok ? m.data.manifest?.display_information?.description ?? "" : "";
+    this.describeCache.set(user, d);
+    return d === "" ? undefined : d;
   }
 
   /** Is this agent IN that thread? A reply inside a thread you started, or
@@ -460,6 +505,15 @@ export class SlackBackend {
     const ts = ev.ts ?? new Date().toISOString();
     const mentions = computeMentions(channelName, text, from);
     const thread = ev.thread_ts !== undefined && ev.thread_ts !== ts ? ev.thread_ts : undefined;
+    // Only on the DELIVERY path: history strips per-recipient state and a
+    // transcript does not need a lookup per row.
+    // The GUARD is on the call, not inside it: an `await` on the delivery path
+    // costs a turn of the event loop even when the function returns at once, and
+    // this lookup is impossible without the CLI credential anyway.
+    const description =
+      wantThreadWake && this.cliToken !== undefined && this.cliToken !== ""
+        ? await this.describeSender(token, ev)
+        : undefined;
     const dl = await this.downloadFiles(token, ev.files);
     const delivery: Delivery = {
       seq: 0,
@@ -474,6 +528,7 @@ export class SlackBackend {
         (wantThreadWake && thread !== undefined && (await this.inThread(token, channel, thread, as))),
       ...(thread !== undefined ? { thread } : {}),
       ...(this.senderKind(ev) !== undefined ? { sender: this.senderKind(ev) } : {}),
+      ...(wantThreadWake && description !== undefined ? { description } : {}),
     };
     if (dl.files.length > 0) delivery.files = dl.files;
     return { delivery, problems: dl.problems };
@@ -578,11 +633,14 @@ export class SlackBackend {
     seq: number,
     statusTts: ReadonlySet<string> | undefined,
     token: string,
+    as = "",
+    forDelivery = false,
   ): Promise<number> {
     const { delivery, problems: dlProblems } = await this.toDelivery(
       { type: "message", channel: slackChannel, user: m.user, username: m.user, ts: m.ts, thread_ts: m.thread_ts, text: m.text, bot_id: m.bot_id, files: m.files },
-      "",
+      as,
       token,
+      forDelivery,
     );
     problems.push(...dlProblems);
     if (delivery === undefined) return seq;
@@ -595,6 +653,12 @@ export class SlackBackend {
     // the Slack channel, the channel mapping is the caller's frame). Slack has no
     // global seq, so a synthetic per-history counter stands in where the
     // local line's `seq` lives; the message's ts is the real cursor.
+    // A DRAIN keeps `mentioned` and the sender's description; a transcript drops
+    // them, because per-recipient state has no meaning in a shared transcript.
+    if (forDelivery) {
+      messages.push({ ...delivery, channel, seq: seq + 1 } as Message);
+      return seq + 1;
+    }
     const { mentioned, ...rest } = delivery;
     void mentioned;
     messages.push({ ...rest, channel, seq: seq + 1 });
@@ -620,6 +684,11 @@ export class SlackBackend {
     since?: string,
     statusTts?: ReadonlySet<string>,
     as?: string,
+    // `message check` DRAINS through this method, so it is a delivery even
+    // though it reads history: it needs `mentioned` computed against thread
+    // participation and the sender's description resolved. `message read` is a
+    // transcript and needs neither, and paying for them per row there is waste.
+    forDelivery = false,
   ): Promise<{ code: 0 | 1; error?: string; messages: Message[]; problems: string[] }> {
     const slackChannel = this.channels[channel];
     if (!slackChannel) return { code: 1, error: `no Slack channel for channel ${channel}`, messages: [], problems: [] };
@@ -647,7 +716,7 @@ export class SlackBackend {
     let expandedRoots = 0;
     let droppedRoots = 0;
     for (const m of r.data.messages ?? []) {
-      seq = await this.appendLine(m, slackChannel, channel, messages, problems, seq, statusTts, token);
+      seq = await this.appendLine(m, slackChannel, channel, messages, problems, seq, statusTts, token, as ?? "", forDelivery);
       if (!isThreadRoot(m)) continue;
       // FAN-OUT IS BOUND: one extra conversations.replies request per threaded
       // root, capped at THREAD_EXPANSION_CAP on the NEWEST roots (history walks
@@ -673,7 +742,7 @@ export class SlackBackend {
         // conversations.replies returns the ROOT as its first entry; the root
         // already appeared exactly once above with no `thread`, so drop it.
         if (reply.ts !== undefined && reply.ts === m.ts) continue;
-        seq = await this.appendLine(reply, slackChannel, channel, messages, problems, seq, statusTts, token);
+        seq = await this.appendLine(reply, slackChannel, channel, messages, problems, seq, statusTts, token, as ?? "", forDelivery);
       }
     }
     if (droppedRoots > 0) {

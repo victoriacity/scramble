@@ -1557,3 +1557,83 @@ describe("a reply in your own thread wakes you without naming you", () => {
     expect(replies).toBe(0);
   });
 });
+
+describe("a delivered line carries the sender's remit", () => {
+  // A peer agent's description read from its first line tells you what its
+  // claims are ABOUT before it explains itself. Two hops, because Slack keeps a
+  // bot's description on the APP: users.info gives api_app_id, and only the CLI
+  // credential can export that app's manifest.
+  function withDescription(desc: string | undefined, cli = "xoxe-cli") {
+    return make({ roster: {}, cliToken: cli }, (url, init) => {
+      if (url.includes("users.info")) {
+        return new Response(JSON.stringify({ ok: true, user: { name: "peer", profile: { api_app_id: "A9" } } }), { status: 200 });
+      }
+      if (url.includes("apps.manifest.export")) {
+        // The CLI credential, never the agent's bot token: a bot token cannot
+        // read another app's manifest.
+        expect(String((init?.headers as Record<string, string>)["authorization"])).toBe("Bearer xoxe-cli");
+        return new Response(
+          JSON.stringify({ ok: true, manifest: { display_information: desc === undefined ? {} : { description: desc } } }),
+          { status: 200 },
+        );
+      }
+      return okRouter(url);
+    });
+  }
+
+  async function deliver(h: H) {
+    const lines: Delivery[] = [];
+    const p = h.backend.listen(["general"], "alice", (d) => lines.push(d), () => {});
+    await pump();
+    emit(h, msg({ user: "U777", bot_id: "B7", text: "a claim about geometry" }));
+    // A remit lookup is two round-trips (users.info, then the manifest export),
+    // so this delivery settles later than a plain one.
+    await pump(20);
+    void p;
+    return lines[0];
+  }
+
+  test("the peer's published description rides on the line", async () => {
+    const line = await deliver(withDescription("Scores geometry and texture against references"));
+    expect(line!.description).toBe("Scores geometry and texture against references");
+    expect(line!.sender).toBe("agent");
+  });
+
+  test("a peer with no published description gets no field, rather than an empty one", async () => {
+    expect((await deliver(withDescription(undefined)))!.description).toBeUndefined();
+  });
+
+  test("with no CLI credential on this host, no description is attempted", async () => {
+    let exports = 0;
+    const h = make({ roster: {}, cliToken: undefined }, (url) => {
+      if (url.includes("apps.manifest.export")) exports += 1;
+      return okRouter(url);
+    });
+    expect((await deliver(h))!.description).toBeUndefined();
+    expect(exports).toBe(0);
+  });
+
+  test("the lookup is cached, so a talkative peer is resolved once", async () => {
+    let exports = 0;
+    const h = make({ roster: {}, cliToken: "xoxe-cli" }, (url) => {
+      if (url.includes("users.info")) {
+        return new Response(JSON.stringify({ ok: true, user: { name: "peer", profile: { api_app_id: "A9" } } }), { status: 200 });
+      }
+      if (url.includes("apps.manifest.export")) {
+        exports += 1;
+        return new Response(JSON.stringify({ ok: true, manifest: { display_information: { description: "d" } } }), { status: 200 });
+      }
+      return okRouter(url);
+    });
+    const lines: Delivery[] = [];
+    const p = h.backend.listen(["general"], "alice", (d) => lines.push(d), () => {});
+    await pump();
+    emit(h, msg({ user: "U777", bot_id: "B7", text: "one", ts: "3.1" }));
+    await pump(20);
+    emit(h, msg({ user: "U777", bot_id: "B7", text: "two", ts: "3.2" }));
+    await pump(20);
+    void p;
+    expect(lines).toHaveLength(2);
+    expect(exports).toBe(1);
+  });
+});
