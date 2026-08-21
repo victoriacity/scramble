@@ -205,6 +205,11 @@ export async function uploadToSlack(
   path: string,
   slackChannelId: string,
   mimeOverride?: string,
+  // The message text rides WITH the file. Completing an upload posts its own
+  // message, so a separately posted line leaves the words and the file as two
+  // messages in the channel, which reads as two things happening.
+  initialComment?: string,
+  threadTs?: string,
 ): Promise<{ ok: true; out: SlackUploadResult } | { ok: false; error: string }> {
   const size = sizeOf(path);
   if (size > MAX_ATTACHMENT_BYTES) {
@@ -225,32 +230,36 @@ export async function uploadToSlack(
   if (!get.ok) return { ok: false, error: get.error };
   const uploadUrl = get.data.upload_url as string;
   const fileId = get.data.file_id as string;
+  // MULTIPART POST, never a raw PUT. Slack answers 200 to a PUT and stores a file
+  // that cannot be read: completeUploadExternal then shares it with nothing, the
+  // bytes come back as a 69KB sign-in page, and nothing anywhere fails. Measured
+  // side by side on 2026-08-22: the same bytes as a multipart POST share into the
+  // channel and download as themselves. That silent-200 is why this looked like
+  // an org-wide file block for an hour.
+  const form = new FormData();
+  form.set("file", new Blob([bytes], { type: mime }), name);
   let put: Response;
   try {
-    put = await fetch(uploadUrl, {
-      method: "PUT",
-      headers: { "content-type": mime },
-      body: bytes,
-    });
+    put = await fetch(uploadUrl, { method: "POST", body: form });
   } catch {
-    return { ok: false, error: `PUT to ${uploadUrl} failed` };
+    return { ok: false, error: `upload POST to ${uploadUrl} failed` };
   }
   if (put.status < 200 || put.status >= 300) {
     const text = await put.text().catch(() => "");
     return {
       ok: false,
-      error: `PUT to ${uploadUrl} answered ${put.status}${text ? `: ${text}` : ""}`,
+      error: `upload POST to ${uploadUrl} answered ${put.status}${text ? `: ${text}` : ""}`,
     };
   }
-  // NO channel_id here, deliberately. Asked to share, the endpoint answers
-  // ok:true and shares with nothing: probed with an exact byte count and a 200
-  // on the PUT, the reply carried "shares":{} and "channels":[], the file was
-  // stored at 11 bytes, and no message ever carried it. The mechanism that DOES
-  // attach a file is its permalink in the message text, which Slack unfurls into
-  // a real share, so this call stores the bytes and the send attaches them. One
-  // intent, one mechanism.
+  // channel_id IS sent: with the bytes uploaded correctly it produces a REAL
+  // share, which is what makes the file readable by the channel. It looked
+  // useless while the upload was a raw PUT, because a file Slack could not read
+  // was a file it would not share.
   const complete = await readSlack(fetch, COMPLETE_UPLOAD_URL, token, {
     files: [{ id: fileId, title: name }],
+    channel_id: slackChannelId,
+    ...(initialComment !== undefined && initialComment !== "" ? { initial_comment: initialComment } : {}),
+    ...(threadTs !== undefined && threadTs !== "" ? { thread_ts: threadTs } : {}),
   });
   if (!complete.ok) return { ok: false, error: complete.error };
   const permalink = filePermalink(complete.data);

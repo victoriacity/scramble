@@ -1117,6 +1117,8 @@ async function attachmentUpload(
   io: Io,
   backend: "local" | "slack",
   as?: string,
+  initialComment?: string,
+  threadTs?: string,
 ): Promise<AttachResult> {
   if (backend === "slack") {
     const cfg = loadSlackConfig(io);
@@ -1124,7 +1126,7 @@ async function attachmentUpload(
     const slackId = cfg.channels[targetChannel];
     if (!slackId) return { ok: false, error: `no Slack channel for channel ${targetChannel}` };
     const token = (as !== undefined ? cfg.agents[as]?.token : undefined) ?? cfg.token;
-    const r = await uploadToSlack(io.fetch, token, path, slackId, mimeOverride);
+    const r = await uploadToSlack(io.fetch, token, path, slackId, mimeOverride, initialComment, threadTs);
     return r.ok ? { ok: true, id: r.out.id, permalink: r.out.permalink } : { ok: false, error: r.error };
   }
   const r = recordLocalUpload(slackFilesDir(io), path, mimeOverride);
@@ -1212,7 +1214,18 @@ async function cmdMessage(args: string[], io: Io, backend: "local" | "slack"): P
       const links: string[] = [];
       if (attachPaths.length > 0) {
         for (const p of attachPaths) {
-          const up = await attachmentUpload(p, req.channel, flags.get("mime-type"), io, backend, nameFor(flags, io));
+          // The FIRST attachment carries the message text, so the words and the
+          // file are one message rather than two; the rest are bare uploads.
+          const up = await attachmentUpload(
+            p,
+            req.channel,
+            flags.get("mime-type"),
+            io,
+            backend,
+            nameFor(flags, io),
+            files === undefined ? text : undefined,
+            flags.get("thread"),
+          );
           if (!up.ok) {
             io.writeErr(up.error);
             return 1;
@@ -1222,13 +1235,17 @@ async function cmdMessage(args: string[], io: Io, backend: "local" | "slack"): P
           if (up.permalink !== undefined) links.push(up.permalink);
         }
       }
-      // THE LINK IS THE ATTACHMENT on Slack. Slack unfurls a file permalink in
-      // the message text into the file itself, and asking
-      // completeUploadExternal to share instead answers ok:true while sharing
-      // with nothing. So the link rides in the text, and the local backend,
-      // which carries `files` on the line, needs no link.
-      const body = links.length > 0 ? `${text.trimEnd()}\n${links.join("\n")}` : text;
-      return postText(req.channel, body, flags, io, backend, files);
+      // The upload SHARES the file into the channel (channel_id on
+      // completeUploadExternal), so the text carries the message and nothing
+      // else. The permalink used to be appended here because a broken upload
+      // shared nothing and the unfurl was the only thing that attached it; with
+      // the bytes posted correctly that workaround would just add a link nobody
+      // needs to read.
+      void links;
+      // With an attachment the upload already posted the message and its text,
+      // so posting again would repeat the words beside the file.
+      if (backend === "slack" && attachPaths.length > 0) return 0;
+      return postText(req.channel, text, flags, io, backend, files);
     }
     case "react": {
       // `message react --target <channel> --to <ts> --emoji <name>`: a reaction

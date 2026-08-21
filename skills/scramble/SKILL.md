@@ -210,12 +210,10 @@ the image a human dropped in. `path` is absent when the download failed, so a
 line can name a file that could not be fetched. Fetch the file, do not ask what
 it contains.
 
-**A file you SEND may open for nobody, even though a file you RECEIVE opens
-fine.** Measured on one Enterprise Grid org: a human's upload downloads and can be
-read, while a file an app uploads is refused to every identity including the
-operator's. Reading what people send you works; do not assume the reverse. Send
-CONTENT in the message when it fits, since a few thousand characters post in one
-message and need no download, and keep files for what cannot be text.
+Attachments carry both ways: a file you send shares into the channel and opens,
+and a file someone sends you lands on disk with its `path` on the line. Still send
+CONTENT in the message when it fits, since a few thousand characters read in place
+and need no download, and keep files for what cannot be text.
 
 Attach with `--attach` on `message send`, repeated for more than one file, so the
 message and its files arrive together. The upload refuses a file over 50MB with

@@ -295,31 +295,29 @@ one-call API that shared directly, now answers `method_deprecated`. So the
 permalink is the mechanism, and an upload that returns no permalink fails rather
 than leaving a file nothing can reach.
 
-**Reading a file back depends on who uploaded it.** A file a HUMAN uploads
-downloads cleanly: a 1864-byte webp posted by the operator arrived, was written to
-`filesDir`, and opened. A file an APP uploads is refused to every identity, this
-agent, a peer agent, the operator's own user token, and the operator's browser:
+**Attachments work in both directions.** A file sent by an agent shares into the
+channel and downloads as itself; a file a person sends downloads to `filesDir` and
+the line carries its local `path`.
+
+That took finding a defect in this repo rather than in Slack. The upload step sent
+the bytes as a raw `PUT`, and Slack answers **200** to that while storing a file it
+will not share and cannot serve: `completeUploadExternal` then reported ok with
+`shares: {}`, and fetching the bytes returned a 69KB sign-in page. Nothing failed
+anywhere along that path, which is why it read as an org-wide file block for an
+hour. Slack wants a **multipart POST**; the same bytes sent that way share and
+download correctly.
+
+Measured side by side, same file, same token, same channel:
 
 ```
-file download from https://files.slack.com/files-pri/T…-F…/readme.md
-  answered 200 text/html, 19 bytes, not the file: Error serving file.
+PUT raw body     shares=EMPTY  download=69153 bytes of sign-in HTML
+POST multipart   shares=REAL   download=2000 bytes of the file
 ```
 
-That split is the useful fact, and it took a human-uploaded file to see. What was
-measured on the app side, in the order that narrowed it:
+Two things follow. `completeUploadExternal` takes `channel_id`, which produces the
+real share, so no permalink needs to go in the message text. And it takes
+`initial_comment` and `thread_ts`, so the words and the file arrive as ONE message
+in the right thread rather than as two.
 
-- the file IS shared correctly: `groups` names the channel, `file_access` is
-  `visible`, and the share record carries the right conversation;
-- a file from an ORG-installed app fails, and so does one from a plain WORKSPACE
-  install, so the app's install shape is not the cause;
-- every file here reports `user_team` as the ENTERPRISE id, with its bytes on the
-  org's file host.
-
-So INBOUND works for what people send, which is the direction that matters for an
-agent reading a screenshot someone dropped in a channel. OUTBOUND is where the
-block sits: a file this agent uploads appears on the message and opens for nobody.
-Send content as TEXT when it fits, since a 6.7k-character README posts in one
-message and needs no download, and treat `--attach` as unproven here.
-
-`bun scripts/live-smoke.ts inbound` reports the refusal with the exact response
-rather than leaving an agent to infer it from an absent `path`.
+`bun scripts/live-smoke.ts inbound` checks the receiving direction against a real
+file and reports the exact response when it fails.

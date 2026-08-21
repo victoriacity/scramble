@@ -187,7 +187,7 @@ describe("the local attachment ledger", () => {
 // --- the slack three-step upload flow -------------------------------------
 
 describe("attachment upload through the slack backend", () => {
-  test("calls getUploadURLExternal, then PUTs the bytes, then completeUploadExternal with the right channel, in that order", async () => {
+  test("gets an upload url, POSTs the bytes as multipart, then completes WITH the channel, in that order", async () => {
     const cwd = scratchDir("up-slack");
     const filesDir = scratchDir("up-files");
     writeSlackCfg(cwd, filesDir);
@@ -201,8 +201,11 @@ describe("attachment upload through the slack backend", () => {
       }
       if (url === "https://upload.example/x") {
         order.push("put");
-        const body = init?.body as Uint8Array;
-        expect(new TextDecoder().decode(body)).toBe("hello upload bytes");
+        // MULTIPART POST, never a raw PUT: Slack answers 200 to a PUT and stores
+        // a file it will not share and cannot serve, with nothing failing.
+        expect(init?.method).toBe("POST");
+        expect(init?.body).toBeInstanceOf(FormData);
+        expect(String((init?.body as FormData).get("file"))).not.toBe("");
         return new Response("", { status: 200 });
       }
       if (url.includes("completeUploadExternal")) {
@@ -211,9 +214,9 @@ describe("attachment upload through the slack backend", () => {
         // The channel travels as a BARE id under `channel_id`. Slack answers
         // channel_not_found to `channels=["C1"]`, so a JSON-array channel value
         // is the defect this asserts against, not an accepted alternative.
-        // Neither channel field is sent: the endpoint shares nothing when
-        // asked, so the file is stored here and attached by its permalink.
-        expect(form.get("channel_id")).toBeNull();
+        // channel_id IS sent: with the bytes uploaded correctly it makes a REAL
+        // share, which is what lets the channel read the file.
+        expect(form.get("channel_id")).toBe("C1");
         expect(form.get("channels")).toBeNull();
         expect(JSON.parse(form.get("files")!)).toEqual([{ id: "UPLOAD1", title: "upload.txt" }]);
         return new Response(JSON.stringify({ ok: true, files: [{ id: "UPLOAD1", permalink: "https://x.slack.com/files/U1/UPLOAD1/f.txt" }] }), { status: 200 });
@@ -226,7 +229,7 @@ describe("attachment upload through the slack backend", () => {
     expect(writes).toContain(JSON.stringify({ id: "UPLOAD1" }));
   });
 
-  test("--mime-type overrides the guess on the PUT", async () => {
+  test("--mime-type overrides the guess on the uploaded blob", async () => {
     const cwd = scratchDir("up-mime");
     const filesDir = scratchDir("up-mime-files");
     writeSlackCfg(cwd, filesDir);
@@ -235,7 +238,7 @@ describe("attachment upload through the slack backend", () => {
     let putMime = "";
     const { io } = slackIo(cwd, async (url, init) => {
       if (url.includes("getUploadURLExternal")) return new Response(JSON.stringify({ ok: true, upload_url: "https://u/x", file_id: "F" }), { status: 200 });
-      if (url === "https://u/x") { putMime = (init?.headers as Record<string, string>)["content-type"] ?? ""; return new Response("", { status: 200 }); }
+      if (url === "https://u/x") { putMime = ((init?.body as FormData).get("file") as Blob).type; return new Response("", { status: 200 }); }
       if (url.includes("completeUploadExternal")) return new Response(JSON.stringify({ ok: true, files: [{ id: "F", permalink: "https://x.slack.com/files/U1/F/f.txt" }] }), { status: 200 });
       return new Response(JSON.stringify({ ok: true }), { status: 200 });
     });
@@ -437,7 +440,7 @@ describe("uploadToSlack failure branches", () => {
     if (!r.ok) expect(r.error).toContain("cannot read");
   });
 
-  test("a failed PUT is reported and completeUploadExternal is never called", async () => {
+  test("a failed upload POST is reported and completeUploadExternal is never called", async () => {
     const d = scratchDir("up-put");
     const f = join(d, "x.txt");
     writeFileSync(f, "hello");
@@ -449,7 +452,7 @@ describe("uploadToSlack failure branches", () => {
       return new Response(JSON.stringify({ ok: true, files: [{ id: "F1", permalink: "https://x.slack.com/files/U1/F1/f.txt" }] }), { status: 200 });
     }, "tok", f, "C1");
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.error).toContain("PUT");
+    if (!r.ok) expect(r.error).toContain("upload POST");
     expect(completes).toBe(0);
   });
 
@@ -530,7 +533,7 @@ describe("slack upload form encoding and detail", () => {
       return new Response(JSON.stringify({ ok: true, files: [{ id: "F1", permalink: "https://x.slack.com/files/U1/F1/f.txt" }] }), { status: 200 });
     }, "tok", f, "C1");
     const form = parseForm(body);
-    expect(Object.keys(form).sort()).toEqual(["files"]);
+    expect(Object.keys(form).sort()).toEqual(["channel_id", "files"]);
     const files = JSON.parse(form["files"]!) as Array<{ id: string; title: string }>;
     expect(files).toHaveLength(1);
     expect(files[0]!.id).toBe("F1");
@@ -825,27 +828,32 @@ describe("a file download re-sends the auth header across a redirect", () => {
 });
 
 describe("message send --attach on the slack backend", () => {
-  test("the file's permalink is appended to the message text, since that is what attaches it", async () => {
-    const cwd = scratchDir("attach-link");
-    const filesDir = scratchDir("attach-link-files");
+  test("the text rides ON the upload, so the words and the file are ONE message", async () => {
+    const cwd = scratchDir("attach-one");
+    const filesDir = scratchDir("attach-one-files");
     writeSlackCfg(cwd, filesDir);
     const src = join(cwd, "shot.png");
     writeFileSync(src, "PNGDATA");
-    let postedText = "";
+    let completeBody = "";
+    let posts = 0;
     const { io } = slackIo(cwd, async (url, init) => {
       if (url.includes("getUploadURLExternal")) return new Response(JSON.stringify({ ok: true, upload_url: "https://pt/", file_id: "F77" }), { status: 200 });
       if (url.startsWith("https://pt/")) return new Response("", { status: 200 });
-      if (url.includes("completeUploadExternal")) return new Response(JSON.stringify({ ok: true, files: [{ id: "F77", permalink: "https://x.slack.com/files/U1/F77/shot.png" }] }), { status: 200 });
-      if (url.includes("chat.postMessage")) {
-        postedText = JSON.parse(String(init?.body)).text as string;
-        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      if (url.includes("completeUploadExternal")) {
+        completeBody = String(init?.body);
+        return new Response(JSON.stringify({ ok: true, files: [{ id: "F77", permalink: "https://x/F77" }] }), { status: 200 });
       }
+      if (url.includes("chat.postMessage")) posts += 1;
       return new Response(JSON.stringify({ ok: true }), { status: 200 });
     });
     io.readStdin = async () => "here is the mockup";
-    const code = await main(["message", "send", "--target", "general", "--as", "alice", "--attach", src, "--backend", "slack"], io);
-    expect(code).toBe(0);
-    expect(postedText).toBe("here is the mockup\nhttps://x.slack.com/files/U1/F77/shot.png");
+    expect(await main(["message", "send", "--target", "general", "--as", "alice", "--attach", src, "--backend", "slack"], io)).toBe(0);
+    const form = new URLSearchParams(completeBody);
+    // The words travel WITH the file, and no separate message is posted, or the
+    // channel shows the sentence and the file as two separate things.
+    expect(form.get("initial_comment")).toBe("here is the mockup");
+    expect(form.get("channel_id")).toBe("C1");
+    expect(posts).toBe(0);
   });
 
   test("the upload uses the SENDING agent's own token, not the default app token", async () => {
