@@ -4,7 +4,15 @@
 // in-process handler from src/server.ts as fetch — no child process, no
 // socket, no real delay. Process argv and the real daemon bind live in
 // src/bin.ts, which no test imports.
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { basename, join } from "node:path";
 import { createStore, type ChannelStore } from "./store";
 import type { Message, PostResult } from "./types";
@@ -1382,6 +1390,11 @@ async function cmdDoctor(argv: string[], io: Io): Promise<number> {
     }
   }
 
+  // A LISTENER OLDER THAN THE CODE is running a build that no longer exists,
+  // which looks exactly like a defect that was already fixed.
+  const staleProblem = staleListenerProblem(staleListeners(io, name), name);
+  if (staleProblem !== undefined) problems.push(staleProblem);
+
   const missing = REQUIRED_SCOPES.filter((sc) => !granted.has(sc));
   if (missing.length > 0) {
     problems.push(
@@ -1485,6 +1498,89 @@ async function proveWake(
     };
   }
   return { ok: true, ts: posted };
+}
+
+/** A `listen` process for this agent that STARTED BEFORE the newest source file
+ *  is running code that no longer exists. Twice on 2026-08-21 that produced a
+ *  visible defect the code had already fixed: an agent delivered its own posts
+ *  for minutes after the self-filter landed, and kept posting `working` messages
+ *  after the living message was deleted. A landed fix does not reach a running
+ *  process, and nothing said so.
+ *
+ *  Reads /proc, so it answers undefined where that is absent rather than
+ *  guessing. */
+export function staleListeners(io: Io, agent: string): Array<{ pid: string; ageBehind: number }> | undefined {
+  const newest = newestSourceMs(io);
+  if (newest === undefined) return undefined;
+  return pickStale(readProcesses(), agent, newest);
+}
+
+/** The newest mtime among this workspace's sources, or undefined when there is
+ *  no `src` to compare against. */
+function newestSourceMs(io: Io): number | undefined {
+  let newest = 0;
+  try {
+    for (const f of readdirSync(join(io.cwd(), "src"))) {
+      if (f.endsWith(".ts")) newest = Math.max(newest, statSync(join(io.cwd(), "src", f)).mtimeMs);
+    }
+  } catch {
+    return undefined;
+  }
+  return newest === 0 ? undefined : newest;
+}
+
+/** Every process this host will admit to, as (pid, cmdline, startedMs). Reads
+ *  /proc and answers an empty list where that is absent, so the DECISION below
+ *  stays pure and testable while the reading stays thin. */
+export function readProcesses(root = "/proc"): Array<{ pid: string; cmd: string; startedMs: number }> {
+  const out: Array<{ pid: string; cmd: string; startedMs: number }> = [];
+  let pids: string[] = [];
+  try {
+    pids = readdirSync(root);
+  } catch {
+    return out;
+  }
+  for (const pid of pids) {
+    if (!/^\d+$/.test(pid)) continue;
+    try {
+      out.push({
+        pid,
+        cmd: readFileSync(`${root}/${pid}/cmdline`, "utf8").replace(/\0/g, " "),
+        startedMs: statSync(`${root}/${pid}`).mtimeMs,
+      });
+    } catch {
+      // A process that exited between the listing and the read is not stale, it
+      // is gone.
+    }
+  }
+  return out;
+}
+
+/** What doctor SAYS about stale listeners, or undefined when there is nothing to
+ *  say. Separated from the finding so the sentence an operator acts on is tested
+ *  rather than assumed. */
+export function staleListenerProblem(
+  stale: Array<{ pid: string; ageBehind: number }> | undefined,
+  agent: string,
+): string | undefined {
+  if (stale === undefined || stale.length === 0) return undefined;
+  return (
+    `${stale.length} listener(s) for ${agent} started BEFORE the newest source change ` +
+    `(pid ${stale.map((x) => `${x.pid}, ${x.ageBehind}s behind`).join("; ")}). They are running code ` +
+    `that no longer exists, so a landed fix has not reached them. Stop them and arm the inbox again.`
+  );
+}
+
+/** WHICH of those are listeners for this agent that predate the code. Pure, so
+ *  the rule is tested without spawning anything. */
+export function pickStale(
+  procs: Array<{ pid: string; cmd: string; startedMs: number }>,
+  agent: string,
+  newestSourceMs: number,
+): Array<{ pid: string; ageBehind: number }> {
+  return procs
+    .filter((p) => p.cmd.includes("bin.ts listen") && p.cmd.includes(agent) && p.startedMs < newestSourceMs)
+    .map((p) => ({ pid: p.pid, ageBehind: Math.round((newestSourceMs - p.startedMs) / 1000) }));
 }
 
 /** Does this agent's app declare org deployment? Read from the app's own

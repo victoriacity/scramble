@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import type { ChannelStore } from "../src/store";
 import { createStore } from "../src/store";
 import { createHandler } from "../src/server";
-import { main, parseBind, loadSlackConfig, slackConfigPath, slackCliToken, staleConfigWarning, type Io } from "../src/cli";
+import { main, parseBind, loadSlackConfig, slackConfigPath, slackCliToken, staleConfigWarning, staleListeners, pickStale, staleListenerProblem, readProcesses, type Io } from "../src/cli";
 
 function scratchDir(name: string): string {
   const d = join(tmpdir(), `zz-${name}-${process.pid}-${Math.random().toString(36).slice(2)}`);
@@ -1464,6 +1464,90 @@ describe("slackCliToken", () => {
     writeFileSync(join(empty, ".slack", "credentials.json"), JSON.stringify({ E1: {}, E2: { token: "" } }));
     expect(slackCliToken(ioWithHome(empty))).toBeUndefined();
   });
+});
+
+describe("staleListeners", () => {
+  // A landed fix does not reach a running process, and twice on 2026-08-21 that
+  // produced a visible defect the code had already fixed. Nothing said so, which
+  // is what this answers.
+  const proc = (pid: string, cmd: string, startedMs: number) => ({ pid, cmd, startedMs });
+
+  test("a listener for this agent that predates the code is stale", () => {
+    const procs = [proc("100", "bun src/bin.ts listen --as dev", 1_000)];
+    expect(pickStale(procs, "dev", 5_000)).toEqual([{ pid: "100", ageBehind: 4 }]);
+  });
+
+  test("a listener started AFTER the newest change is current", () => {
+    expect(pickStale([proc("101", "bun src/bin.ts listen --as dev", 9_000)], "dev", 5_000)).toEqual([]);
+  });
+
+  test("another agent's listener is not this agent's problem", () => {
+    expect(pickStale([proc("102", "bun src/bin.ts listen --as other", 1_000)], "dev", 5_000)).toEqual([]);
+  });
+
+  test("a process that is not a listener is ignored, however old", () => {
+    expect(pickStale([proc("103", "bun src/bin.ts serve --as dev", 1)], "dev", 5_000)).toEqual([]);
+  });
+
+  test("a pid whose cmdline cannot be read is skipped rather than crashing the scan", () => {
+    // A process can exit between the listing and the read; that one is gone,
+    // not stale. An unreadable /proc entirely answers an empty list.
+    const root = scratchDir("procfake");
+    mkdirSync(join(root, "42"), { recursive: true });
+    writeFileSync(join(root, "42", "cmdline"), "bun src/bin.ts listen --as dev\0");
+    mkdirSync(join(root, "43"), { recursive: true }); // no cmdline: vanished
+    writeFileSync(join(root, "notapid"), "ignored");
+    const got = readProcesses(root);
+    expect(got.map((p) => p.pid)).toEqual(["42"]);
+    expect(got[0]!.cmd).toContain("listen --as dev");
+    expect(readProcesses(join(root, "does-not-exist"))).toEqual([]);
+  });
+
+  test("the sentence doctor says names the pids and the repair", () => {
+    const msg = staleListenerProblem([{ pid: "100", ageBehind: 4 }, { pid: "101", ageBehind: 9 }], "dev");
+    expect(msg).toContain("2 listener(s) for dev");
+    expect(msg).toContain("100, 4s behind");
+    expect(msg).toContain("arm the inbox again");
+  });
+
+  test("nothing stale, and an unanswerable question, both say nothing", () => {
+    expect(staleListenerProblem([], "dev")).toBeUndefined();
+    expect(staleListenerProblem(undefined, "dev")).toBeUndefined();
+  });
+
+  test("a workspace with no src answers undefined rather than guessing", () => {
+    const cwd = scratchDir("stale-nosrc");
+    const io: Io = {
+      write: () => {}, writeErr: () => {},
+      fetch: async () => new Response("{}", { status: 200 }),
+      env: () => undefined, cwd: () => cwd, sleep: async () => {}, serve: async () => 0,
+    };
+    expect(staleListeners(io, "dev")).toBeUndefined();
+  });
+
+  test("an empty src answers undefined, since there is nothing to be behind", () => {
+    const cwd = scratchDir("stale-empty");
+    mkdirSync(join(cwd, "src"), { recursive: true });
+    const io: Io = {
+      write: () => {}, writeErr: () => {},
+      fetch: async () => new Response("{}", { status: 200 }),
+      env: () => undefined, cwd: () => cwd, sleep: async () => {}, serve: async () => 0,
+    };
+    expect(staleListeners(io, "dev")).toBeUndefined();
+  });
+
+  test("a real workspace answers a list, and no listener runs for an invented agent", () => {
+    const cwd = scratchDir("stale-real");
+    mkdirSync(join(cwd, "src"), { recursive: true });
+    writeFileSync(join(cwd, "src", "cli.ts"), "// newer than any running process");
+    const io: Io = {
+      write: () => {}, writeErr: () => {},
+      fetch: async () => new Response("{}", { status: 200 }),
+      env: () => undefined, cwd: () => cwd, sleep: async () => {}, serve: async () => 0,
+    };
+    expect(staleListeners(io, "no-such-agent-xyz")).toEqual([]);
+  });
+
 });
 
 describe("message react", () => {
