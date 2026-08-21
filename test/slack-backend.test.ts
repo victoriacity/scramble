@@ -6,6 +6,7 @@ import type { SlackSocket } from "../src/slack-transport";
 import {
   SlackBackend,
   computeMentions,
+  denormalize,
   THREAD_EXPANSION_CAP,
   type SlackBackendConfig,
   type SlackInboundEvent,
@@ -1635,5 +1636,53 @@ describe("a delivered line carries the sender's remit", () => {
     void p;
     expect(lines).toHaveLength(2);
     expect(exports).toBe(1);
+  });
+});
+
+describe("denormalize: an outgoing @name becomes a real Slack mention", () => {
+  // Without this a mention an agent writes is literal text: grey in Slack, no
+  // notification for a human, while agents still wake because the receive path
+  // parses @name itself, so the defect is invisible from an agent's side.
+  const roster = { U1: "andrew", U2: "scramble_dev" };
+
+  test("a known name becomes the entity", () => {
+    expect(denormalize("@andrew can you confirm", roster)).toBe("<@U1> can you confirm");
+  });
+
+  test("a name nobody answers to stays LITERAL rather than becoming a broken entity", () => {
+    expect(denormalize("@nobody hello", roster)).toBe("@nobody hello");
+  });
+
+  test("an @name inside a fenced block is left alone, because it is a code sample", () => {
+    const src = ["before @andrew", "```", "grep '@andrew' file", "```", "after @andrew"].join("\n");
+    const out = denormalize(src, roster);
+    expect(out).toContain("before <@U1>");
+    expect(out).toContain("grep '@andrew' file");
+    expect(out).toContain("after <@U1>");
+  });
+
+  test("an address inside a word is not a mention", () => {
+    expect(denormalize("mail me at me@andrew.com", roster)).toBe("mail me at me@andrew.com");
+  });
+
+  test("several mentions on one line all convert", () => {
+    expect(denormalize("@andrew and @scramble_dev", roster)).toBe("<@U1> and <@U2>");
+  });
+
+  test("an empty roster changes nothing", () => {
+    expect(denormalize("@andrew hi", {})).toBe("@andrew hi");
+  });
+
+  test("post sends the converted text to Slack", async () => {
+    let sent = "";
+    const h = make({ roster }, (url, init) => {
+      if (url.includes("chat.postMessage")) {
+        sent = (JSON.parse(String(init?.body)) as { text: string }).text;
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      }
+      return okRouter(url);
+    });
+    await h.backend.post("general", "@andrew look at this", "alice");
+    expect(sent).toBe("<@U1> look at this");
   });
 });

@@ -163,6 +163,36 @@ export interface SlackHistoryMessage {
   files?: SlackFileMeta[];
 }
 
+/** Turn `@name` into Slack's `<@U…>` entity on the way OUT, the mirror of what
+ *  `normalize` does on the way in. Without it a mention an agent writes is
+ *  literal text: Slack renders it grey and a HUMAN gets no notification, while
+ *  agents still wake because the receive path parses `@name` itself, so the
+ *  defect is invisible from an agent's side (peer agent, 2026-08-21, confirmed
+ *  in Slack's raw record).
+ *
+ *  `roster` is id -> name, so it is inverted here. A name nobody in the roster
+ *  answers to stays LITERAL, since a made-up entity renders worse than plain
+ *  text, and a fenced block is left alone, because an `@name` in a code sample is
+ *  a code sample. Pure, so the fence and unknown-name rules are unit-tested. */
+export function denormalize(text: string, roster: Record<string, string>): string {
+  const idOf = new Map<string, string>();
+  for (const [id, name] of Object.entries(roster)) idOf.set(name, id);
+  const out: string[] = [];
+  let fenced = false;
+  for (const line of text.split("\n")) {
+    if (line.trimStart().startsWith("```")) fenced = !fenced;
+    out.push(
+      fenced || line.trimStart().startsWith("```")
+        ? line
+        : line.replace(/(^|\s)@([A-Za-z0-9._-]+)/g, (whole, lead: string, name: string) => {
+            const id = idOf.get(name);
+            return id === undefined ? whole : `${lead}<@${id}>`;
+          }),
+    );
+  }
+  return out.join("\n");
+}
+
 /** The members a message addresses. A dm/ channel addresses its peers (everyone
  *  but the sender); a group channel addresses the @-tokens in the text. Pure so
  *  it is trivially unit-tested. */
@@ -396,7 +426,7 @@ export class SlackBackend {
       headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
       body: JSON.stringify({
         channel: slackChannel,
-        text,
+        text: denormalize(text, this.roster),
         ...(thread !== undefined ? { thread_ts: thread } : {}),
       }),
     });
