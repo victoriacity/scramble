@@ -84,7 +84,7 @@ export interface SlackBackendConfig {
   /** channel name -> Slack channel id. */
   channels: Record<string, string>;
   /** agent name -> { token?: per-agent bot token, appToken?: per-agent app-level token }. */
-  agents: Record<string, { token?: string; appToken?: string; handle?: string }>;
+  agents: Record<string, { token?: string; appToken?: string; handle?: string; appId?: string }>;
   /** slack user id -> name, for <@U…> -> @name normalization. */
   roster: Record<string, string>;
   /** DM channel id -> agent whose bot that DM belongs to. */
@@ -187,7 +187,7 @@ export class SlackBackend {
   private readonly dmChannels: Record<string, string>;
   private readonly channelById: Record<string, string>;
   private readonly channels: Record<string, string>;
-  private readonly agents: Record<string, { token?: string; appToken?: string; handle?: string }>;
+  private readonly agents: Record<string, { token?: string; appToken?: string; handle?: string; appId?: string }>;
   private readonly roster: Record<string, string>;
   private readonly filesDir: string;
   /** Cache of users.info answers so a repeat unknown id never re-queries. The

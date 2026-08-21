@@ -182,9 +182,14 @@ describe("the app manifest the onboarding script builds", () => {
     expect(onboard).toContain("message.im");
   });
 
-  test("enables socket mode and creates a WORKSPACE app", () => {
+  test("enables socket mode AND declares org deploy, or the inbox is silently dead", () => {
     expect(onboard).toContain("socket_mode_enabled: true");
-    expect(onboard).toContain("org_deploy_enabled: false");
+    // NOT false. apps.developerInstall with an org-level credential produces an
+    // enterprise install whatever team_id is passed, and an org install whose
+    // manifest says org_deploy_enabled:false receives NO events while every
+    // REST call keeps working. Measured live on 2026-08-21.
+    expect(onboard).toContain("org_deploy_enabled: true");
+    expect(onboard).not.toContain("org_deploy_enabled: false,");
   });
 
   test("refuses an enterprise id, which is what needs an administrator", () => {

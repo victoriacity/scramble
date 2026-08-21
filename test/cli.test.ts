@@ -1509,6 +1509,179 @@ describe("doctor, and the warning an agent gets without asking", () => {
     expect(a3.errs.join(" ")).toContain("no bot token");
   });
 
+  test("an org install whose manifest disables org deploy is named as a DEAD INBOX", async () => {
+    // The defect this check exists for, measured live: Slack accepts an
+    // enterprise install of an app declaring org_deploy_enabled:false, every
+    // REST call keeps working, the socket opens and says hello, and no event is
+    // ever delivered. A green-looking agent with a silent wake path.
+    const home = scratchDir("doc-orgdeploy");
+    mkdirSync(join(home, ".slack"), { recursive: true });
+    writeFileSync(join(home, ".slack", "credentials.json"), JSON.stringify({ E1: { token: "xoxe-cli" } }));
+    mkdirSync(join(home, ".scramble"), { recursive: true });
+    writeFileSync(
+      join(home, ".scramble", "slack.json"),
+      JSON.stringify({ token: "xoxb-d", channels: {}, agents: { dev: { token: "T", handle: "dev_bot", appId: "A1" } } }),
+    );
+    const errs: string[] = [];
+    const io: Io = {
+      write: () => {},
+      writeErr: (l) => errs.push(l),
+      fetch: async (input) => {
+        const u = String(input);
+        if (u.includes("auth.test")) {
+          return new Response(JSON.stringify({ ok: true, user: "dev_bot", is_enterprise_install: true }), {
+            status: 200,
+            headers: { "x-oauth-scopes": ALL },
+          });
+        }
+        // The app's own manifest, which is where the contradiction shows.
+        return new Response(
+          JSON.stringify({ ok: true, manifest: { settings: { org_deploy_enabled: false } } }),
+          { status: 200 },
+        );
+      },
+      env: (n) => (n === "HOME" ? home : n === "SCRAMBLE_SLACK_CONFIG" ? join(home, ".scramble", "slack.json") : undefined),
+      cwd: () => home,
+      sleep: async () => {},
+      serve: async () => 0,
+      createSocket: () => ({ send: () => {}, close: () => {}, onopen: null, onmessage: null, onclose: null, onerror: null }),
+    };
+    expect(await main(["doctor", "--as", "dev", "--backend", "slack"], io)).toBe(1);
+    const said = errs.join(" ");
+    expect(said).toContain("org_deploy_enabled:false");
+    expect(said).toContain("NO events");
+  });
+
+  test("an org install that DOES declare org deploy is clean", async () => {
+    const home = scratchDir("doc-orgok");
+    mkdirSync(join(home, ".slack"), { recursive: true });
+    writeFileSync(join(home, ".slack", "credentials.json"), JSON.stringify({ E1: { token: "xoxe-cli" } }));
+    mkdirSync(join(home, ".scramble"), { recursive: true });
+    writeFileSync(
+      join(home, ".scramble", "slack.json"),
+      JSON.stringify({ token: "xoxb-d", channels: {}, agents: { dev: { token: "T", handle: "dev_bot", appId: "A1" } } }),
+    );
+    const writes: string[] = [];
+    const io: Io = {
+      write: (l) => writes.push(l),
+      writeErr: () => {},
+      fetch: async (input) => {
+        const u = String(input);
+        if (u.includes("auth.test")) {
+          return new Response(JSON.stringify({ ok: true, user: "dev_bot", is_enterprise_install: true }), {
+            status: 200,
+            headers: { "x-oauth-scopes": ALL },
+          });
+        }
+        return new Response(JSON.stringify({ ok: true, manifest: { settings: { org_deploy_enabled: true } } }), { status: 200 });
+      },
+      env: (n) => (n === "HOME" ? home : n === "SCRAMBLE_SLACK_CONFIG" ? join(home, ".scramble", "slack.json") : undefined),
+      cwd: () => home,
+      sleep: async () => {},
+      serve: async () => 0,
+      createSocket: () => ({ send: () => {}, close: () => {}, onopen: null, onmessage: null, onclose: null, onerror: null }),
+    };
+    expect(await main(["doctor", "--as", "dev", "--backend", "slack"], io)).toBe(0);
+    expect(writes.join(" ")).toContain('"doctor":"ok"');
+  });
+
+  test("with no Slack CLI credential the org-deploy question is left unanswered rather than guessed", async () => {
+    const home = scratchDir("doc-nocli");
+    mkdirSync(join(home, ".scramble"), { recursive: true });
+    writeFileSync(
+      join(home, ".scramble", "slack.json"),
+      JSON.stringify({ token: "xoxb-d", channels: {}, agents: { dev: { token: "T", handle: "dev_bot", appId: "A1" } } }),
+    );
+    const io: Io = {
+      write: () => {},
+      writeErr: () => {},
+      fetch: async () =>
+        new Response(JSON.stringify({ ok: true, user: "dev_bot", is_enterprise_install: true }), {
+          status: 200,
+          headers: { "x-oauth-scopes": ALL },
+        }),
+      env: (n) => (n === "HOME" ? home : n === "SCRAMBLE_SLACK_CONFIG" ? join(home, ".scramble", "slack.json") : undefined),
+      cwd: () => home,
+      sleep: async () => {},
+      serve: async () => 0,
+      createSocket: () => ({ send: () => {}, close: () => {}, onopen: null, onmessage: null, onclose: null, onerror: null }),
+    };
+    expect(await main(["doctor", "--as", "dev", "--backend", "slack"], io)).toBe(0);
+  });
+
+  test("an unreadable CLI credential, an empty one, and a refused export all leave the question open", async () => {
+    // Each of these means "cannot tell", and a check that cannot tell must not
+    // report a defect: a false alarm on the wake path would send an agent to
+    // reinstall an app that is fine.
+    async function run(setup: (home: string) => void, exportOk: boolean): Promise<number> {
+      const home = scratchDir(`doc-open-${Math.random().toString(36).slice(2)}`);
+      mkdirSync(join(home, ".scramble"), { recursive: true });
+      writeFileSync(
+        join(home, ".scramble", "slack.json"),
+        JSON.stringify({ token: "xoxb-d", channels: {}, agents: { dev: { token: "T", handle: "dev_bot", appId: "A1" } } }),
+      );
+      setup(home);
+      const io: Io = {
+        write: () => {},
+        writeErr: () => {},
+        fetch: async (input) =>
+          String(input).includes("auth.test")
+            ? new Response(JSON.stringify({ ok: true, user: "dev_bot", is_enterprise_install: true }), {
+                status: 200,
+                headers: { "x-oauth-scopes": ALL },
+              })
+            : new Response(JSON.stringify(exportOk ? { ok: true, manifest: {} } : { ok: false, error: "no" }), { status: 200 }),
+        env: (n) => (n === "HOME" ? home : n === "SCRAMBLE_SLACK_CONFIG" ? join(home, ".scramble", "slack.json") : undefined),
+        cwd: () => home,
+        sleep: async () => {},
+        serve: async () => 0,
+        createSocket: () => ({ send: () => {}, close: () => {}, onopen: null, onmessage: null, onclose: null, onerror: null }),
+      };
+      return main(["doctor", "--as", "dev", "--backend", "slack"], io);
+    }
+    // credentials.json is not JSON
+    expect(await run((h) => {
+      mkdirSync(join(h, ".slack"), { recursive: true });
+      writeFileSync(join(h, ".slack", "credentials.json"), "not json");
+    }, true)).toBe(0);
+    // credentials.json holds no token
+    expect(await run((h) => {
+      mkdirSync(join(h, ".slack"), { recursive: true });
+      writeFileSync(join(h, ".slack", "credentials.json"), JSON.stringify({ E1: {} }));
+    }, true)).toBe(0);
+    // the export itself is refused
+    expect(await run((h) => {
+      mkdirSync(join(h, ".slack"), { recursive: true });
+      writeFileSync(join(h, ".slack", "credentials.json"), JSON.stringify({ E1: { token: "x" } }));
+    }, false)).toBe(0);
+  });
+
+  test("an agent with no recorded appId leaves the org-deploy question open", async () => {
+    const home = scratchDir("doc-noappid");
+    mkdirSync(join(home, ".slack"), { recursive: true });
+    writeFileSync(join(home, ".slack", "credentials.json"), JSON.stringify({ E1: { token: "x" } }));
+    mkdirSync(join(home, ".scramble"), { recursive: true });
+    writeFileSync(
+      join(home, ".scramble", "slack.json"),
+      JSON.stringify({ token: "xoxb-d", channels: {}, agents: { dev: { token: "T", handle: "dev_bot" } } }),
+    );
+    const io: Io = {
+      write: () => {},
+      writeErr: () => {},
+      fetch: async () =>
+        new Response(JSON.stringify({ ok: true, user: "dev_bot", is_enterprise_install: true }), {
+          status: 200,
+          headers: { "x-oauth-scopes": ALL },
+        }),
+      env: (n) => (n === "HOME" ? home : n === "SCRAMBLE_SLACK_CONFIG" ? join(home, ".scramble", "slack.json") : undefined),
+      cwd: () => home,
+      sleep: async () => {},
+      serve: async () => 0,
+      createSocket: () => ({ send: () => {}, close: () => {}, onopen: null, onmessage: null, onclose: null, onerror: null }),
+    };
+    expect(await main(["doctor", "--as", "dev", "--backend", "slack"], io)).toBe(0);
+  });
+
   test("staleConfigWarning names the repair when a handle is absent, and is silent when it is not", () => {
     const base = { token: "t", appToken: "a", channels: {}, agents: {}, roster: {}, dmChannels: {}, filesDir: "/tmp" };
     const missing = { ...base, agents: { dev: { token: "T" } } };

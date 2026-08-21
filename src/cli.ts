@@ -623,7 +623,7 @@ export function loadSlackConfig(io: Io): SlackBackendConfig | null {
     const j = JSON.parse(raw) as Record<string, unknown>;
     const channels = j.channels as Record<string, string> | undefined;
     const agents = j.agents as
-      | Record<string, { token?: string; icon?: string; appToken?: string; handle?: string }>
+      | Record<string, { token?: string; icon?: string; appToken?: string; handle?: string; appId?: string }>
       | undefined;
     if (!channels || typeof channels !== "object" || !agents || typeof agents !== "object") {
       return null;
@@ -1277,7 +1277,12 @@ async function cmdDoctor(argv: string[], io: Io): Promise<number> {
   const res = await io.fetch("https://slack.com/api/auth.test", {
     headers: { authorization: `Bearer ${token}` },
   });
-  const body = (await res.json()) as { ok?: boolean; user?: string; error?: string };
+  const body = (await res.json()) as {
+    ok?: boolean;
+    user?: string;
+    error?: string;
+    is_enterprise_install?: boolean;
+  };
   if (body.ok !== true) {
     io.writeErr(`doctor: auth.test answered ${String(body.error)}; this agent's token is not usable`);
     return 1;
@@ -1293,6 +1298,24 @@ async function cmdDoctor(argv: string[], io: Io): Promise<number> {
     raw.agents[name] = { ...(raw.agents[name] ?? {}), handle };
     writeFileSync(slackConfigPath(io), `${JSON.stringify(raw, null, 2)}\n`);
     fixed.push(`recorded the Slack handle @${handle}, so a mention of it now marks this agent`);
+  }
+
+  // THE SILENT INBOX. An org install of an app whose manifest says
+  // org_deploy_enabled:false is a contradiction Slack accepts without a word:
+  // every REST call works, the socket opens and says hello, and no event is ever
+  // delivered, so `listen` runs forever and the agent looks like it is in a quiet
+  // channel. Checked here because doctor is where an agent asks whether its own
+  // wake path is real, and because nothing else would ever say it.
+  if (body.is_enterprise_install === true) {
+    const deploy = await orgDeployDeclared(io, name);
+    if (deploy === false) {
+      problems.push(
+        `this app is installed ORG-WIDE (auth.test: is_enterprise_install true) while its ` +
+          `manifest declares org_deploy_enabled:false. Slack accepts that combination and ` +
+          `delivers NO events for it, so your inbox monitor will sit silent forever while ` +
+          `every read still works. Fix: bun scripts/onboard-agent.ts ${name}`,
+      );
+    }
   }
 
   const missing = REQUIRED_SCOPES.filter((sc) => !granted.has(sc));
@@ -1311,6 +1334,47 @@ async function cmdDoctor(argv: string[], io: Io): Promise<number> {
     return 0;
   }
   return 1;
+}
+
+/** Does this agent's app declare org deployment? Read from the app's own
+ *  manifest through the Slack CLI credential, which is the only token that can
+ *  export it. Returns undefined when that credential is absent, so a host
+ *  without it reports nothing rather than guessing. */
+async function orgDeployDeclared(io: Io, agent: string): Promise<boolean | undefined> {
+  const home = io.env("HOME");
+  if (home === undefined || home === "") return undefined;
+  let cliToken = "";
+  let appId = "";
+  try {
+    const creds = JSON.parse(readFileSync(join(home, ".slack", "credentials.json"), "utf8")) as Record<
+      string,
+      { token?: string }
+    >;
+    for (const v of Object.values(creds)) {
+      if (typeof v.token === "string" && v.token !== "") {
+        cliToken = v.token;
+        break;
+      }
+    }
+  } catch {
+    return undefined;
+  }
+  const cfg = loadSlackConfig(io);
+  if (cfg === null || cliToken === "") return undefined;
+  // THE AGENT BEING CHECKED, not whichever entry happens to be last. The first
+  // version of this took the last appId in the config, so a healthy agent's
+  // manifest answered for a broken one and doctor cleared an app whose inbox
+  // was dead. Its own control caught it.
+  appId = cfg.agents[agent]?.appId ?? "";
+  if (appId === "") return undefined;
+  const r = await io.fetch("https://slack.com/api/apps.manifest.export", {
+    method: "POST",
+    headers: { authorization: `Bearer ${cliToken}`, "content-type": "application/json; charset=utf-8" },
+    body: JSON.stringify({ app_id: appId }),
+  });
+  const j = (await r.json()) as { ok?: boolean; manifest?: { settings?: { org_deploy_enabled?: boolean } } };
+  if (j.ok !== true) return undefined;
+  return j.manifest?.settings?.org_deploy_enabled === true;
 }
 
 async function cmdChannel(argv: string[], io: Io): Promise<number> {

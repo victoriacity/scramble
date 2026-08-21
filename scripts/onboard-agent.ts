@@ -24,11 +24,20 @@
 //   apps.manifest.create  { manifest, team_id }          -> app_id
 //   apps.developerInstall { app_id, bot_scopes, team_id } -> bot + app-level tokens
 //
-// TEAM_ID IS THE WHOLE TRICK. Omit it and both calls run against the enterprise
-// (`is_enterprise_install: true` on the CLI's auth), where developerInstall
-// answers {"ok":false,"error":"app_approval_request_eligible"} and an admin has
-// to approve. Pass the WORKSPACE id and the same call answers ok:true and hands
-// back the tokens. This is a workspace app, not an org app.
+// TWO FIELDS DECIDE WHETHER THIS WORKS, and they are easy to get wrong.
+//
+// team_id: omit it and developerInstall answers
+// {"ok":false,"error":"app_approval_request_eligible"}, which reads like a
+// policy needing an administrator. Pass the WORKSPACE id and it answers ok:true.
+//
+// org_deploy_enabled: with an ORG-level CLI credential the resulting install is
+// an ENTERPRISE install anyway (auth.test reports is_enterprise_install true,
+// team_id = the E… org) no matter which team_id was passed. That is fine, since
+// on Enterprise Grid the workspace IS a team in the org and events carry
+// team_id = T…, but ONLY if the manifest declares org_deploy_enabled:true. With
+// false, Slack accepts the install, every REST call works, the socket opens and
+// says hello, and not one event is ever delivered. Do not read the two as
+// alternatives: the install is org-wide and the manifest must say so.
 //
 // What it does, in order: create the app, install it, join the channel when the
 // channel is public, write ~/.config/scramble/slack.json, and verify with a real
@@ -81,7 +90,16 @@ function manifestFor(
       event_subscriptions: { bot_events: BOT_EVENTS },
       socket_mode_enabled: true,
       token_rotation_enabled: false,
-      org_deploy_enabled: false,
+      // TRUE, and this field decides whether the agent's inbox works at all.
+      // `apps.developerInstall` with an org-level credential produces an
+      // ENTERPRISE install (auth.test: is_enterprise_install true) whatever
+      // team_id is passed. An app installed that way while declaring
+      // org_deploy_enabled:false is a contradiction Slack ACCEPTS in silence:
+      // the tokens work, every REST call works, the socket opens and says
+      // hello, and no event is ever delivered. Measured on 2026-08-21 by
+      // flipping this one field on a live app: messages began arriving on the
+      // socket seconds later, from a bot and from a human.
+      org_deploy_enabled: true,
     },
   };
 }
@@ -134,9 +152,7 @@ async function api(
     if (err === "app_approval_request_eligible") {
       die(
         `${method} answered app_approval_request_eligible for team ${String(j.team_id)}.\n` +
-          `That is the ENTERPRISE id, which means this call went to the org instead of a\n` +
-          `workspace. Pass --team <T…> with the workspace id. An org install needs an\n` +
-          `administrator; a workspace install does not.`,
+          `Pass --team <T…> with the WORKSPACE id rather than the enterprise id.`,
       );
     }
     die(`${method} failed: ${err} ${JSON.stringify(j).slice(0, 300)}`);
@@ -344,12 +360,31 @@ if (existingAppId !== undefined && existingAppId !== "") {
       ?.bot as string[] | undefined) ?? [],
   );
   const want = SCOPES.map(([sc]) => sc);
+  // ORG DEPLOY IS RECONCILED TOO. An app created before this was understood
+  // declares org_deploy_enabled:false while being installed org-wide, which
+  // Slack accepts while delivering no events at all, so the agent's inbox is
+  // dead and nothing says so. Repaired on the same run as the scopes.
+  const settingsNow = (cur.settings ?? {}) as Record<string, unknown>;
+  const orgDeployBroken = settingsNow.org_deploy_enabled !== true;
+  if (orgDeployBroken) {
+    console.log("onboard: this app declares org_deploy_enabled:false, which silently kills its event delivery");
+    await api(token, "apps.manifest.update", {
+      app_id: existingAppId,
+      manifest: { ...cur, settings: { ...settingsNow, org_deploy_enabled: true } },
+    });
+  }
+
   const missing = want.filter((sc) => !curScopes.has(sc));
-  if (missing.length > 0) {
-    console.log(`onboard: this app is missing ${missing.length} scope(s): ${missing.join(", ")}`);
-    const oauth = { ...((cur.oauth_config ?? {}) as Record<string, unknown>) };
-    oauth.scopes = { ...((oauth.scopes ?? {}) as Record<string, unknown>), bot: want };
-    await api(token, "apps.manifest.update", { app_id: existingAppId, manifest: { ...cur, oauth_config: oauth } });
+  if (missing.length > 0 || orgDeployBroken) {
+    if (missing.length > 0) console.log(`onboard: this app is missing ${missing.length} scope(s): ${missing.join(", ")}`);
+    if (missing.length > 0) {
+      const oauth = { ...((cur.oauth_config ?? {}) as Record<string, unknown>) };
+      oauth.scopes = { ...((oauth.scopes ?? {}) as Record<string, unknown>), bot: want };
+      await api(token, "apps.manifest.update", {
+        app_id: existingAppId,
+        manifest: { ...cur, oauth_config: oauth, settings: { ...settingsNow, org_deploy_enabled: true } },
+      });
+    }
     const re = await api(token, "apps.developerInstall", {
       app_id: existingAppId,
       bot_scopes: want,
@@ -380,7 +415,8 @@ if (existingAppId !== undefined && existingAppId !== "") {
     description === undefined &&
     longDescription === undefined &&
     iconPath === undefined &&
-    missing.length === 0
+    missing.length === 0 &&
+    !orgDeployBroken
   ) {
     console.log("onboard: nothing to change. Scopes already match, and no --description or --icon was passed.");
   }
