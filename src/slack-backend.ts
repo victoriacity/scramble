@@ -82,8 +82,8 @@ export interface SlackBackendConfig {
   appToken?: string;
   /** channel name -> Slack channel id. */
   channels: Record<string, string>;
-  /** agent name -> { token?: per-agent bot token }. */
-  agents: Record<string, { token?: string }>;
+  /** agent name -> { token?: per-agent bot token, appToken?: per-agent app-level token }. */
+  agents: Record<string, { token?: string; appToken?: string }>;
   /** slack user id -> name, for <@U…> -> @name normalization. */
   roster: Record<string, string>;
   /** DM channel id -> agent whose bot that DM belongs to. */
@@ -186,10 +186,13 @@ export class SlackBackend {
   private readonly dmChannels: Record<string, string>;
   private readonly channelById: Record<string, string>;
   private readonly channels: Record<string, string>;
-  private readonly agents: Record<string, { token?: string }>;
+  private readonly agents: Record<string, { token?: string; appToken?: string }>;
   private readonly roster: Record<string, string>;
   private readonly filesDir: string;
-  /** Cache of users.info answers so a repeat unknown id never re-queries. */
+  /** Cache of users.info answers so a repeat unknown id never re-queries. The
+   *  key is `<acting token>:<user id>` because each agent resolves names under
+   *  ITS OWN credential: the same Slack user id can answer differently under one
+   *  app than under another, so the two must never share a cache slot. */
   private readonly nameCache = new Map<string, string>();
 
   constructor(cfg: SlackBackendConfig, deps: SlackBackendDeps) {
@@ -207,6 +210,33 @@ export class SlackBackend {
     this.channels = cfg.channels;
   }
 
+  /** ONE helper that answers "which bot token does the acting agent use": the
+   *  agent's OWN token when it has one, else the config default — the way `post`
+   *  already resolves it. EVERY outbound Slack call site (the post, the history
+   *  read, the threaded-reply expansion, the users.info name lookup and the
+   *  inbound attachment download) resolves THROUGH this helper, so the acting
+   *  identity is never lost on a read that was sent with a different agent's
+   *  credential. When NEITHER the agent nor the default has a token the answer
+   *  is a FAILURE naming the agent and the config key it lacks, never a silent
+   *  empty token. */
+  private agentToken(agent: string): { ok: true; token: string } | { ok: false; error: string } {
+    const own = this.agents[agent]?.token;
+    if (own !== undefined && own !== "") return { ok: true, token: own };
+    const fallback = this.token;
+    if (fallback !== undefined && fallback !== "") return { ok: true, token: fallback };
+    return {
+      ok: false,
+      error: `agent "${agent}" has no per-agent token and the config has no default token (key "agents.${agent}.token" or "token" is required)`,
+    };
+  }
+
+  /** The app-level token (xapp-) the acting agent's SOCKET connect uses: the
+   *  agent's own per-agent appToken when present, otherwise the top-level
+   *  default, so a single-app config keeps working unchanged. */
+  private appTokenFor(agent: string): string {
+    return this.agents[agent]?.appToken ?? this.appToken ?? "";
+  }
+
   /** POST one post to the Slack channel a channel maps to, with the agent's own bot
    *  token when it has one, else the config token. A Slack failure (`ok:false`
    *  with error text) is surfaced as a FAILURE carrying that text, never read
@@ -219,7 +249,9 @@ export class SlackBackend {
   ): Promise<{ ok: true } | { ok: false; error: string }> {
     const slackChannel = this.channels[channel];
     if (!slackChannel) return { ok: false, error: `no Slack channel for channel ${channel}` };
-    const token = this.agents[as]?.token ?? this.token;
+    const t = this.agentToken(as);
+    if (!t.ok) return { ok: false, error: t.error };
+    const token = t.token;
     const r = await readOk<{ error?: string }>(this.fetch, POST_URL, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
@@ -236,44 +268,50 @@ export class SlackBackend {
   /** Resolve a Slack user id to a name: the roster wins, then users.info (the
    *  app holds users:read). An id ABSENT from the roster resolves through
    *  users.info rather than passing through raw — a raw id matches no agent
-   *  name, so a <@U…> mention would land silently unmentioned. Cached. */
-  private async resolveName(user: string): Promise<string> {
-    const cached = this.nameCache.get(user);
+   *  name, so a <@U…> mention would land silently unmentioned. Cached per
+   *  acting credential (the `token` argument), so one agent's lookup can never
+   *  reuse another agent's answer. */
+  private async resolveName(token: string, user: string): Promise<string> {
+    const cacheKey = `${token}:${user}`;
+    const cached = this.nameCache.get(cacheKey);
     if (cached !== undefined) return cached;
     const roster = this.roster[user];
     if (roster !== undefined) {
-      this.nameCache.set(user, roster);
+      this.nameCache.set(cacheKey, roster);
       return roster;
     }
     let name = user;
     const info = await readOk<{ user?: { name?: string } }>(
       this.fetch,
       `${USERS_INFO_URL}?user=${encodeURIComponent(user)}`,
-      { headers: { authorization: `Bearer ${this.token}` } },
+      { headers: { authorization: `Bearer ${token}` } },
     );
     if (info.ok && typeof info.data.user?.name === "string") name = info.data.user.name;
-    this.nameCache.set(user, name);
+    this.nameCache.set(cacheKey, name);
     return name;
   }
 
   /** Normalize `<@U…>` to `@name`: an id in the roster resolves immediately; an
    *  id ABSENT from the roster resolves through (cached) users.info instead of
-   *  passing through raw, so a mention never lands silently unmentioned. */
-  private async normalize(text: string): Promise<string> {
+   *  passing through raw, so a mention never lands silently unmentioned. Resolved
+   *  under the acting agent's own credential (`token`). */
+  private async normalize(token: string, text: string): Promise<string> {
     let out = text;
     for (const m of text.matchAll(/<@([A-Z0-9]+)>/g)) {
       const uid = m[1]!;
-      const name = await this.resolveName(uid);
+      const name = await this.resolveName(token, uid);
       out = out.replace(`<@${uid}>`, `@${name}`);
     }
     return out;
   }
 
   /** Download every file on an event into filesDir, mapping each to an
-   *  Attachment on the line. A download failure is REPORTED (pushed onto
-   *  `problems`) and the message still carries the file's metadata with no
-   *  `path`, so the agent learns a file exists and that fetching it failed. */
-  private async downloadFiles(files: SlackFileMeta[] | undefined): Promise<{ files: Attachment[]; problems: string[] }> {
+   *  Attachment on the line. All downloads ride the ACTING agent's bot token
+   *  (`token`), because Slack file access follows the app. A download failure
+   *  is REPORTED (pushed onto `problems`) and the message still carries the
+   *  file's metadata with no `path`, so the agent learns a file exists and that
+   *  fetching it failed. */
+  private async downloadFiles(token: string, files: SlackFileMeta[] | undefined): Promise<{ files: Attachment[]; problems: string[] }> {
     const problems: string[] = [];
     const output: Attachment[] = [];
     if (!files) return { files: output, problems };
@@ -288,7 +326,7 @@ export class SlackBackend {
         ...(f.size !== undefined ? { size: f.size } : {}),
       };
       if (f.url_private) {
-        const r = await downloadFile(this.fetch, f.url_private, this.token, this.filesDir, fileId, name);
+        const r = await downloadFile(this.fetch, f.url_private, token, this.filesDir, fileId, name);
         if (r.ok) entry.path = r.path;
         else problems.push(r.error);
       }
@@ -301,18 +339,20 @@ export class SlackBackend {
    *  should be dropped (no text, an uninteresting event, an unknown channel).
    *  PURE: no self-suppression here — every line is returned, and the DELIVERY
    *  path (next/listen) decides who to suppress by NAME. Also downloads any
-   *  `files` the event carries and reports a download failure that still leaves
-   *  the message deliverable. */
+   *  `files` the event carries (under the ACTING agent's `token`) and reports a
+   *  download failure that still leaves the message deliverable. */
   private async toDelivery(
     ev: SlackInboundEvent,
     as: string,
+    token: string,
   ): Promise<{ delivery: Delivery | undefined; problems: string[] }> {
     if (ev.type !== "message" || !ev.text || ev.text === "") return { delivery: undefined, problems: [] };
     const channel = ev.channel;
     if (channel === undefined) return { delivery: undefined, problems: [] };
-    // Normalize <@U…> mentions to @name, resolving unseen ids via users.info.
-    const text = await this.normalize(ev.text);
-    const from = await this.resolveSender(ev);
+    // Normalize <@U…> mentions to @name, resolving unseen ids via users.info
+    // under the acting agent's credential.
+    const text = await this.normalize(token, ev.text);
+    const from = await this.resolveSender(token, ev);
     const dmAgent = this.dmChannels[channel];
     const channelName = dmAgent === undefined ? this.channelById[channel] : `${DM_PREFIX}${dmAgent}/${from}`;
     if (channelName === undefined) return { delivery: undefined, problems: [] };
@@ -321,7 +361,7 @@ export class SlackBackend {
     const ts = ev.ts ?? new Date().toISOString();
     const mentions = computeMentions(channelName, text, from);
     const thread = ev.thread_ts !== undefined && ev.thread_ts !== ts ? ev.thread_ts : undefined;
-    const dl = await this.downloadFiles(ev.files);
+    const dl = await this.downloadFiles(token, ev.files);
     const delivery: Delivery = {
       seq: 0,
       ts,
@@ -338,14 +378,15 @@ export class SlackBackend {
   }
 
   /** Resolve the sender's name: a user token shaped like a Slack id is looked
-   *  up (roster then users.info); a plain username passes through. */
-  private resolveSender(ev: SlackInboundEvent): Promise<string> {
+   *  up (roster then users.info under the acting agent's `token`); a plain
+   *  username passes through. */
+  private resolveSender(token: string, ev: SlackInboundEvent): Promise<string> {
     const u = ev.user;
-    if (u !== undefined && u !== "" && /^[UW][A-Z0-9]+$/.test(u)) return this.resolveName(u);
+    if (u !== undefined && u !== "" && /^[UW][A-Z0-9]+$/.test(u)) return this.resolveName(token, u);
     return Promise.resolve(ev.username ?? "");
   }
 
-  /** The connect-refusal report: a refused Socket Mode connection (e.g.
+/** The connect-refusal report: a refused Socket Mode connection (e.g.
    *  invalid_auth answered by apps.connections.open) means scramble could NOT
    *  look, not that the channel was quiet. So the message names Slack's error
    *  AND the config key (`appToken`, the app-level xapp- token) that supplies
@@ -355,12 +396,13 @@ export class SlackBackend {
     return `apps.connections.open refused: ${detail} (config key: appToken)`;
   }
 
-  /** Open one Socket Mode connection: apps.connections.open with the app token,
-   *  then the injected socket factory. */
-  private async connectSocket(): Promise<{ socket: SlackSocket; close: () => void }> {
+  /** Open one Socket Mode connection: apps.connections.open with the ACTING
+   *  agent's app-level token (its own per-agent appToken when present, else the
+   *  top-level default), then the injected socket factory. */
+  private async connectSocket(agent: string): Promise<{ socket: SlackSocket; close: () => void }> {
     const r = await readOk<{ url?: string }>(this.fetch, SOCKET_OPEN_URL, {
       method: "POST",
-      headers: { authorization: `Bearer ${this.appToken}` },
+      headers: { authorization: `Bearer ${this.appTokenFor(agent)}` },
     });
     if (!r.ok) throw new Error(r.error ?? "slack socket open failed");
     if (typeof r.data.url !== "string") throw new Error("slack socket open returned no url");
@@ -399,12 +441,13 @@ export class SlackBackend {
     ev: SlackInboundEvent,
     channels: string[],
     as: string,
+    token: string,
     wantsAll: boolean,
     statusTts: ReadonlySet<string> | undefined,
     onLine: (d: Delivery) => void,
     onProblem: (p: string) => void,
   ): void {
-    void this.toDelivery(ev, as).then(({ delivery, problems }) => {
+    void this.toDelivery(ev, as, token).then(({ delivery, problems }) => {
       for (const p of problems) onProblem(p);
       if (delivery === undefined) return;
       // An agent never delivers its own posts (it would otherwise answer itself).
@@ -431,11 +474,13 @@ export class SlackBackend {
     messages: Message[],
     problems: string[],
     seq: number,
-    statusTts?: ReadonlySet<string>,
+    statusTts: ReadonlySet<string> | undefined,
+    token: string,
   ): Promise<number> {
     const { delivery, problems: dlProblems } = await this.toDelivery(
       { type: "message", channel: slackChannel, user: m.user, username: m.user, ts: m.ts, thread_ts: m.thread_ts, text: m.text, bot_id: m.bot_id, files: m.files },
       "",
+      token,
     );
     problems.push(...dlProblems);
     if (delivery === undefined) return seq;
@@ -472,14 +517,18 @@ export class SlackBackend {
     channel: string,
     since?: string,
     statusTts?: ReadonlySet<string>,
+    as?: string,
   ): Promise<{ code: 0 | 1; error?: string; messages: Message[]; problems: string[] }> {
     const slackChannel = this.channels[channel];
     if (!slackChannel) return { code: 1, error: `no Slack channel for channel ${channel}`, messages: [], problems: [] };
+    const t = this.agentToken(as ?? "");
+    if (!t.ok) return { code: 1, error: t.error, messages: [], problems: [] };
+    const token = t.token;
     const qs = since !== undefined ? `&oldest=${encodeURIComponent(since)}` : "";
     const r = await readOk<{ messages?: SlackHistoryMessage[] }>(
       this.fetch,
       `${HISTORY_URL}?channel=${encodeURIComponent(slackChannel)}${qs}`,
-      { headers: { authorization: `Bearer ${this.token}` } },
+      { headers: { authorization: `Bearer ${token}` } },
     );
     if (!r.ok) return { code: 1, error: r.error, messages: [], problems: [] };
     const messages: Message[] = [];
@@ -496,7 +545,7 @@ export class SlackBackend {
     let expandedRoots = 0;
     let droppedRoots = 0;
     for (const m of r.data.messages ?? []) {
-      seq = await this.appendLine(m, slackChannel, channel, messages, problems, seq, statusTts);
+      seq = await this.appendLine(m, slackChannel, channel, messages, problems, seq, statusTts, token);
       if (!isThreadRoot(m)) continue;
       // FAN-OUT IS BOUND: one extra conversations.replies request per threaded
       // root, capped at THREAD_EXPANSION_CAP on the NEWEST roots (history walks
@@ -510,7 +559,7 @@ export class SlackBackend {
       const rep = await readOk<{ messages?: SlackHistoryMessage[] }>(
         this.fetch,
         `${REPLIES_URL}?channel=${encodeURIComponent(slackChannel)}&ts=${encodeURIComponent(rootTs)}`,
-        { headers: { authorization: `Bearer ${this.token}` } },
+        { headers: { authorization: `Bearer ${token}` } },
       );
       // A replies request that fails must not fail the whole read: keep the
       // top-level messages, REPORT the problem, carry on.
@@ -522,7 +571,7 @@ export class SlackBackend {
         // conversations.replies returns the ROOT as its first entry; the root
         // already appeared exactly once above with no `thread`, so drop it.
         if (reply.ts !== undefined && reply.ts === m.ts) continue;
-        seq = await this.appendLine(reply, slackChannel, channel, messages, problems, seq, statusTts);
+        seq = await this.appendLine(reply, slackChannel, channel, messages, problems, seq, statusTts, token);
       }
     }
     if (droppedRoots > 0) {
@@ -548,6 +597,14 @@ export class SlackBackend {
   ): Promise<{ code: 0; line: Delivery } | { code: 64 } | { code: 1; error: string }> {
     const deadline = this.now() + timeoutSecs * 1000;
     const wantsAll = channels.length === 0;
+    const t = this.agentToken(as);
+    if (!t.ok) {
+      // An agent with no token and no default has nothing to act on: FAIL naming
+      // the agent and the key, never a silent nothing.
+      onProblem(t.error);
+      return { code: 1, error: t.error };
+    }
+    const token = t.token;
     // Connect asynchronously; the caller-facing promise settles on the first
     // matching delivery OR the deadline OR a refused connection, whichever
     // comes first.
@@ -560,13 +617,13 @@ export class SlackBackend {
         conn?.close();
         resolve(v);
       };
-      void this.connectSocket().then(
+      void this.connectSocket(as).then(
         (c) => {
           if (settled) return;
           conn = c;
           c.socket.onmessage = (raw) =>
             this.routeFrame(raw, c.socket, (ev) => {
-              this.deliver(ev, channels, as, wantsAll, statusTts, (d) => settle({ code: 0, line: d }), onProblem);
+              this.deliver(ev, channels, as, token, wantsAll, statusTts, (d) => settle({ code: 0, line: d }), onProblem);
             });
           if (this.now() >= deadline) settle({ code: 64 });
         },
@@ -601,10 +658,18 @@ export class SlackBackend {
     statusTts?: ReadonlySet<string>,
   ): Promise<number> {
     const wantsAll = channels.length === 0;
+    const t = this.agentToken(as);
+    if (!t.ok) {
+      // An agent with no token and no default has nothing to act on: FAIL naming
+      // the agent and the key, never a silent nothing.
+      onProblem(t.error);
+      return 1;
+    }
+    const token = t.token;
     let everConnected = false;
     let backoff = RECONNECT_BACKOFF;
     for (;;) {
-      const opened = await this.listenOnce(channels, wantsAll, as, onLine, onProblem, statusTts);
+      const opened = await this.listenOnce(channels, wantsAll, as, token, onLine, onProblem, statusTts);
       if (opened) everConnected = true;
       // The FIRST connection could not be established: scramble could not look,
       // so it fails rather than retrying the same refusal forever. 64 is the
@@ -624,17 +689,18 @@ export class SlackBackend {
     channels: string[],
     wantsAll: boolean,
     as: string,
+    token: string,
     onLine: (d: Delivery) => void,
     onProblem: (p: string) => void,
     statusTts?: ReadonlySet<string>,
   ): Promise<boolean> {
     return new Promise((resolve) => {
       let established = false;
-      void this.connectSocket().then(
+      void this.connectSocket(as).then(
         (c) => {
           established = true;
           c.socket.onmessage = (raw) =>
-            this.routeFrame(raw, c.socket, (ev) => this.deliver(ev, channels, as, wantsAll, statusTts, onLine, onProblem));
+            this.routeFrame(raw, c.socket, (ev) => this.deliver(ev, channels, as, token, wantsAll, statusTts, onLine, onProblem));
           c.socket.onclose = () => resolve(established);
         },
         (e) => {
