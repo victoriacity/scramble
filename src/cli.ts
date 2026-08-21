@@ -13,6 +13,7 @@ import { createBridge, type SlackConfig, type SlackTransport } from "./slack";
 import { RaftBackend, type RunFn } from "./raft";
 import { SlackBackend, type SlackBackendConfig } from "./slack-backend";
 import type { SlackSocket } from "./slack-transport";
+import { StatusManager } from "./status";
 
 const DEFAULT_URL = "http://127.0.0.1:7737";
 const MAX_BACKOFF = 2000; // ms cap on reconnect delay
@@ -291,6 +292,8 @@ async function postText(
   io: Io,
   backend: "local" | "raft" | "slack",
 ): Promise<number> {
+  const status = statusTracker(io, backend);
+  void status?.clearExpired();
   if (backend === "raft") {
     const from = nameFor(flags, io);
     const r = await raftBackend(flags, io).send(channel, text, from);
@@ -298,6 +301,7 @@ async function postText(
       io.writeErr(`post failed: ${r.error}`);
       return 1;
     }
+    if (status !== undefined) replyStatus(status, channel, from);
     return 0;
   }
   if (backend === "slack") {
@@ -312,9 +316,12 @@ async function postText(
       io.writeErr(`post failed: ${r.error}`);
       return 1;
     }
+    if (status !== undefined) replyStatus(status, channel, from);
     return 0;
   }
-  return postLocalCore(channel, text, flags, io);
+  const code = await postLocalCore(channel, text, flags, io);
+  if (code === 0 && status !== undefined) replyStatus(status, channel, nameFor(flags, io));
+  return code;
 }
 
 function streamUrls(base: string, name: string, channels: string[], since: number): string[] {
@@ -334,7 +341,7 @@ async function listenOnce(
   agentStream: boolean,
   name: string,
   token: string | undefined,
-  onLine: (msg: { seq: number }) => void,
+  onLine: (msg: { seq: number; channel?: string; mentioned?: unknown }) => void,
 ): Promise<boolean> {
   const stops = await Promise.all(
     urls.map(async (u) => {
@@ -347,7 +354,7 @@ async function listenOnce(
       if (res.status !== 200) return false;
       if (res.body === null) return true;
       try {
-        await drainStream(res, agentStream, name, (m) => onLine(m as unknown as { seq: number }));
+        await drainStream(res, agentStream, name, (m) => onLine(m as { seq: number; channel?: string; mentioned?: unknown }));
         return true; // the stream ended cleanly: a clean stop
       } catch {
         return false; // the connection dropped: retry with backoff
@@ -363,26 +370,33 @@ async function cmdListen(argv: string[], io: Io): Promise<number> {
   const { url, token } = resolveConfig(flags, io);
   const channels = positionals;
   const agentStream = channels.length === 0;
+  const status = statusTracker(io, "local");
+  const stopTicker = status ? status.startExpiryTicker(2000, io.sleep) : undefined;
   let lastSeq = 0;
   let backoff = 100;
   let staying = true;
-  while (staying) {
-    const stop = await listenOnce(
-      io,
-      streamUrls(url, name, channels, lastSeq),
-      agentStream,
-      name,
-      token,
-      (m) => {
-        if (m.seq > lastSeq) lastSeq = m.seq;
-        io.write(JSON.stringify(m));
-      },
-    );
-    staying = !stop;
-    if (staying) {
-      await io.sleep(backoff);
-      backoff = Math.min(backoff * 2, MAX_BACKOFF);
+  try {
+    while (staying) {
+      const stop = await listenOnce(
+        io,
+        streamUrls(url, name, channels, lastSeq),
+        agentStream,
+        name,
+        token,
+        (m) => {
+          if (status !== undefined) deliverStatus(status, m, name);
+          if (m.seq > lastSeq) lastSeq = m.seq;
+          io.write(JSON.stringify(m));
+        },
+      );
+      staying = !stop;
+      if (staying) {
+        await io.sleep(backoff);
+        backoff = Math.min(backoff * 2, MAX_BACKOFF);
+      }
     }
+  } finally {
+    stopTicker?.();
   }
   return 0;
 }
@@ -396,6 +410,8 @@ async function cmdNext(argv: string[], io: Io): Promise<number> {
   const timeoutSec = intFlag(flags, "timeout", 300);
   const deadline = Date.now() + timeoutSec * 1000;
   const urls = streamUrls(url, name, channels, 0);
+  const status = statusTracker(io, "local");
+  void status?.clearExpired();
   const responses: Response[] = [];
   const states = await Promise.all(
     urls.map(async (u) => {
@@ -438,7 +454,8 @@ async function cmdNext(argv: string[], io: Io): Promise<number> {
     } else {
       await io.sleep(Math.min(remain, 100));
       const found = states.find((s) => s?.done && s.line);
-      if (found) {
+      if (found?.line !== undefined) {
+        if (status !== undefined) deliverStatus(status, found.line, name);
         io.write(JSON.stringify(found.line));
         exitCode = 0;
         resolved = true;
@@ -867,10 +884,15 @@ async function raftCmdNext(argv: string[], io: Io): Promise<number> {
   const { flags } = parseArgs(argv);
   const name = nameFor(flags, io);
   const timeoutSec = intFlag(flags, "timeout", 300);
+  const status = statusTracker(io, "raft");
+  void status?.clearExpired();
   const r = await raftBackend(flags, io).next(name, timeoutSec);
   for (const p of r.problems) io.writeErr(`raft: ${p}`);
   if (r.code === 64) return 64;
-  if (r.line !== undefined) io.write(JSON.stringify(r.line));
+  if (r.line !== undefined) {
+    if (status !== undefined) deliverStatus(status, r.line, name);
+    io.write(JSON.stringify(r.line));
+  }
   return 0;
 }
 
@@ -878,11 +900,20 @@ async function raftCmdListen(argv: string[], io: Io): Promise<number> {
   const { flags } = parseArgs(argv);
   const name = nameFor(flags, io);
   const b = raftBackend(flags, io);
-  await b.listen(
-    name,
-    (d) => io.write(JSON.stringify(d)),
-    (p) => io.writeErr(`raft: ${p}`),
-  );
+  const status = statusTracker(io, "raft");
+  const stopTicker = status ? status.startExpiryTicker(2000, io.sleep) : undefined;
+  try {
+    await b.listen(
+      name,
+      (d) => {
+        if (status !== undefined) deliverStatus(status, d, name);
+        io.write(JSON.stringify(d));
+      },
+      (p) => io.writeErr(`raft: ${p}`),
+    );
+  } finally {
+    stopTicker?.();
+  }
   return 0;
 }
 
@@ -910,6 +941,62 @@ function slackBackend(io: Io): { backend?: SlackBackend; error?: string } {
   return { backend };
 }
 
+/** Supply a real clock for the status tracker (a named function so coverage
+ *  tracks it; the manager invokes it on every status lifecycle operation). */
+function statusNow(): number {
+  return Date.now();
+}
+
+/** Build the status tracker for a run, or undefined when the operator disabled
+ *  it (the one `SCRAMBLE_STATUS=off` switch). The Slack-mode tracker rides on
+ *  the slack config's token and channel mapping; any other backend records the
+ *  status locally so a reader (or a test) sees it. A missing or broken slack
+ *  config yields a local-style record, because a status can never fail the verb
+ *  it brackets. */
+function statusTracker(io: Io, backend: "local" | "raft" | "slack"): StatusManager | undefined {
+  if (io.env("SCRAMBLE_STATUS") === "off") return undefined;
+  const raw = Number(io.env("SCRAMBLE_STATUS_TTL"));
+  const ttlMs = Number.isFinite(raw) && raw > 0 ? raw * 1000 : 120_000;
+  const mode: "local" | "slack" = backend === "slack" ? "slack" : "local";
+  let channels: Record<string, string> | undefined;
+  let token: string | undefined;
+  if (mode === "slack") {
+    const cfg = loadSlackConfig(io);
+    if (cfg) {
+      channels = cfg.channels;
+      token = cfg.token;
+    }
+  }
+  return new StatusManager({
+    file: join(io.cwd(), ".scramble", "status.json"),
+    backend: mode,
+    now: statusNow,
+    ttlMs,
+    fetch: io.fetch,
+    writeErr: io.writeErr,
+    channels,
+    token,
+  });
+}
+
+/** A delivery turns status ON for its channel when (and only when) the message
+ *  is addressed to this agent. A message a channel that will stay silent must
+ *  not show the agent working, so an unaddressed line sets nothing. The status
+ *  fire-and-forgets ahead of the stdout write; a failure is reported by the
+ *  manager, never escalated. Callers guard with a non-null status. */
+function deliverStatus(status: StatusManager, m: { channel?: unknown; mentioned?: unknown }, agent: string): void {
+  if (m.mentioned !== true) return;
+  if (typeof m.channel !== "string") return;
+  void status.setOn(m.channel, agent);
+}
+
+/** A reply by the agent clears the channel's active status as part of the same
+ *  call. Fire-and-forget like the delivery hook: a failure never fails the post.
+ *  Callers guard with a non-null status. */
+function replyStatus(status: StatusManager, channel: string, agent: string): void {
+  void status.clearOn(channel, agent);
+}
+
 async function slackCmdNext(argv: string[], io: Io): Promise<number> {
   const { flags, positionals } = parseArgs(argv);
   const name = nameFor(flags, io);
@@ -921,7 +1008,12 @@ async function slackCmdNext(argv: string[], io: Io): Promise<number> {
   }
   const r = await s.backend.next(positionals, name, timeoutSec, (p) => io.writeErr(`slack: ${p}`));
   if (r.code === 64) return 64;
-  if (r.line !== undefined) io.write(JSON.stringify(r.line));
+  if (r.line !== undefined) {
+    const status = statusTracker(io, "slack");
+    void status?.clearExpired();
+    if (status !== undefined) deliverStatus(status, r.line, name);
+    io.write(JSON.stringify(r.line));
+  }
   return 0;
 }
 
@@ -933,12 +1025,21 @@ async function slackCmdListen(argv: string[], io: Io): Promise<number> {
     io.writeErr(s.error ?? "slack unavailable");
     return 1;
   }
-  await s.backend.listen(
-    positionals,
-    name,
-    (d) => io.write(JSON.stringify(d)),
-    (p) => io.writeErr(`slack: ${p}`),
-  );
+  const status = statusTracker(io, "slack");
+  const stopTicker = status ? status.startExpiryTicker(2000, io.sleep) : undefined;
+  try {
+    await s.backend.listen(
+      positionals,
+      name,
+      (d) => {
+        if (status !== undefined) deliverStatus(status, d, name);
+        io.write(JSON.stringify(d));
+      },
+      (p) => io.writeErr(`slack: ${p}`),
+    );
+  } finally {
+    stopTicker?.();
+  }
   return 0;
 }
 
@@ -948,6 +1049,8 @@ async function slackCmdListen(argv: string[], io: Io): Promise<number> {
  *  `.scramble/cursor.json`, exit 0. Nothing pending prints nothing and exits 0. */
 async function messageCheckLocal(flags: Map<string, string>, io: Io): Promise<number> {
   const name = nameFor(flags, io);
+  const status = statusTracker(io, "local");
+  void status?.clearExpired();
   const cursor = readCursor(io, name);
   const { url, token } = resolveConfig(flags, io);
   const res = await io.fetch(`${url}/agents/${encodeURIComponent(name)}/pending?since=${cursor}`, {
@@ -957,8 +1060,11 @@ async function messageCheckLocal(flags: Map<string, string>, io: Io): Promise<nu
     io.writeErr(`message check failed (${res.status})`);
     return 1;
   }
-  const deliveries = (await res.json()) as Array<{ seq: number }>;
-  for (const d of deliveries) io.write(JSON.stringify(d));
+  const deliveries = (await res.json()) as Array<{ seq: number; channel?: string; mentioned?: unknown }>;
+  for (const d of deliveries) {
+    if (status !== undefined) deliverStatus(status, d, name);
+    io.write(JSON.stringify(d));
+  }
   if (deliveries.length) {
     const highest = Math.max(...deliveries.map((d) => d.seq));
     writeCursor(io, name, highest);
@@ -970,10 +1076,15 @@ async function messageCheckLocal(flags: Map<string, string>, io: Io): Promise<nu
  *  so the drain is `raft message check` verbatim, one Delivery per line. */
 async function messageCheckRaft(flags: Map<string, string>, io: Io): Promise<number> {
   const name = nameFor(flags, io);
+  const status = statusTracker(io, "raft");
+  void status?.clearExpired();
   const b = raftBackend(flags, io);
   const d = await b.drain(name);
   for (const p of d.problems) io.writeErr(`raft: ${p}`);
-  for (const m of d.deliveries) io.write(JSON.stringify(m));
+  for (const m of d.deliveries) {
+    if (status !== undefined) deliverStatus(status, m, name);
+    io.write(JSON.stringify(m));
+  }
   return 0;
 }
 
@@ -1087,6 +1198,9 @@ async function cmdChannel(argv: string[], io: Io): Promise<number> {
 
 export async function main(argv: string[], io: Io): Promise<number> {
   const backend: "local" | "raft" | "slack" = selectBackend(argv, io);
+  // Every scramble invocation clears whatever has expired before its own work,
+  // whatever verb it is. SCRAMBLE_STATUS=off makes this a no-op.
+  void statusTracker(io, backend)?.clearExpired();
   switch (argv[0]) {
     case "post":
       return cmdPost(argv.slice(1), io);
