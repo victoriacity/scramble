@@ -36,10 +36,6 @@ export const STATUS_TEXT = "working";
  *  text, because a human, or an agent, is allowed to say "working". */
 export const STATUS_METADATA_TYPE = "scramble_status";
 
-const DELETE_URL = "https://slack.com/api/chat.delete";
-/** Used only to blank a living message left by a record written before
- *  statuses became Slack's own thread status, when the delete is refused. */
-const UPDATE_URL = "https://slack.com/api/chat.update";
 const THREAD_STATUS_URL = "https://slack.com/api/assistant.threads.setStatus";
 
 /** Backend-selection answers the CLI already knows: the local daemon records
@@ -52,10 +48,6 @@ export type StatusBackend = "local" | "slack";
 export interface StatusRecord {
   channel: string;
   agent: string;
-  /** Slack ts of the living message that backs the status. Kept for a record
-   *  written before statuses became Slack's own thread status, so an old living
-   *  message is still cleaned up rather than stranded in the channel. */
-  ts?: string;
   /** The thread whose Slack status this agent set, cleared by setting it back
    *  to empty. */
   thread?: string;
@@ -168,18 +160,11 @@ export class StatusManager {
   /** Post the living-message status into a channel. Captures the new ts so the
    *  update/delete/expire paths can address it. Returns the ts, or undefined on
    *  a failure (reported, never escalated). */
-  // postLiving and updateLiving are GONE. They posted and edited a `working`
-  // message to stand in for a status, which Slack's own status does properly on
-  // a thread, and keeping both would be two ways to say one thing. clearLiving
-  // stays: a record written before this change still names a message to remove.
+  // THERE IS NO LIVING MESSAGE. A status is Slack's own status on a thread and
+  // nothing else: no post, no edit, no delete, and no `ts` on the record
+  // (operator, 2026-08-21: "we don't need living messages, only assistant
+  // status"). Nothing here writes a message into a channel.
 
-  private async clearLiving(channelId: string, ts: string): Promise<void> {
-    const d = await this.call(DELETE_URL, { channel: channelId, ts });
-    if (d.ok) return;
-    this.report(`delete refused: ${d.error ?? "unknown"}`);
-    const u = await this.call(UPDATE_URL, { channel: channelId, ts, text: "" });
-    if (!u.ok) this.report(u.error ?? "replace failed");
-  }
 
   /** Set Slack's own status on a thread. Reports a failure and answers whether
    *  it took, so the caller records the thread only when Slack accepted it. */
@@ -248,34 +233,15 @@ export class StatusManager {
       const cid = this.channelId(channel);
       // An EMPTY status is how Slack is told the agent stopped working.
       if (cid !== undefined && rec.thread !== undefined) await this.setThreadStatus(cid, rec.thread, "");
-      // A living message from before this changed shape is still removed, so no
-      // old status is stranded in a channel.
-      if (cid !== undefined && rec.ts !== undefined) await this.clearLiving(cid, rec.ts);
     }
     records.splice(idx, 1);
     this.save(records);
   }
 
-  /** The last message-ts held for a channel (a source of truth for the living
-   *  message). */
-  livingTs(channel: string): string | undefined {
-    return this.load().find((r) => r.channel === channel)?.ts;
-  }
-
-  /** Every living-message ts the ledger currently records — the authority the
-   *  caller hands a read or a delivery so a status line is left out of history
-   *  and never delivered. The authority is the LEDGER (channel + agent + living
-   *  ts), never the "working" text, so a human saying the word is not hidden.
-   *  A cleared or expired status is already GONE from the ledger (clearOn /
-   *  clearExpired splice it out), so its old ts stops being hidden and a message
-   *  that outlives its record becomes visible again. That is the safe direction:
-   *  an undeletable status left in the channel MUST stay visible so somebody
-   *  removes it, while a hidden one would be a line nobody can account for. */
-  livingTts(): ReadonlySet<string> {
-    const out = new Set<string>();
-    for (const r of this.load()) if (r.ts !== undefined) out.add(r.ts);
-    return out;
-  }
+  // livingTs and livingTts are GONE with the living message. They existed so a
+  // read could hide a status LINE from history; a status is no longer a line, so
+  // there is nothing to hide and no ts to hide it by. A peer's status from an
+  // older build is recognised by its metadata marker instead (isStatusLine).
 
   /** True when a channel has an active, unexpired status. */
   isActive(channel: string): boolean {
@@ -296,11 +262,9 @@ export class StatusManager {
       if (rec.expiresAt > now) continue;
       if (this.cfg.backend === "slack") {
         const cid = this.channelId(rec.channel);
-        // Slack's own status is what an expiry has to take down; a `ts` only
-        // appears on a record written before this changed shape.
+        // Slack's own status is what an expiry takes down.
         if (cid !== undefined && rec.thread !== undefined) await this.setThreadStatus(cid, rec.thread, "");
-        if (cid !== undefined && rec.ts !== undefined) await this.clearLiving(cid, rec.ts);
-      }
+        }
     }
     this.save(kept);
     return records.length - kept.length;

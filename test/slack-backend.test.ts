@@ -380,27 +380,6 @@ describe("history", () => {
     expect(r.problems.some((p) => p.includes(`${roots.length - THREAD_EXPANSION_CAP} threaded root(s) left unexpanded`))).toBe(true);
   });
 
-  test("a history row that is a threaded root keeps out only the status-ts line among replies", async () => {
-    // Safety when a status ts lands in a threaded expansion layer: the row whose
-    // ts is in the status set is skipped, every other reply stays.
-    const h = make({}, async (url) => {
-      if (url.includes(REPLIES)) {
-        return new Response(JSON.stringify({ ok: true, messages: [
-          { ts: "5.0", thread_ts: "5.0", reply_count: 2, user: "U111", text: "root dup" },
-          { ts: "5.1", thread_ts: "5.0", user: "U111", text: "status reply" },
-          { ts: "5.2", thread_ts: "5.0", user: "U111", text: "normal reply" },
-        ] }), { status: 200 });
-      }
-      return new Response(JSON.stringify({ ok: true, messages: [
-        { ts: "5.0", thread_ts: "5.0", reply_count: 2, user: "U111", text: "root" },
-      ] }), { status: 200 });
-    });
-    const r = await h.backend.history("general", undefined, new Set(["5.1"]));
-    expect(r.code).toBe(0);
-    expect(r.messages.find((m) => m.ts === "5.1")).toBeUndefined();
-    expect(r.messages.find((m) => m.ts === "5.2")?.text).toBe("normal reply");
-    expect(r.messages.find((m) => m.ts === "5.0")?.text).toBe("root");
-  });
 
   // --- status filtering: the SEAM the defect is about --------------------
   // A living status is a MESSAGE drawn by chat.postMessage with the fixed text
@@ -410,47 +389,8 @@ describe("history", () => {
   // the caller (src/cli.ts), which reads the ledger; the backend itself holds no
   // notion of where the ledger lives.
 
-  test("a history read whose conversation holds a message at a recorded status ts omits that line and keeps every other", async () => {
-    const h = make({}, async () =>
-      new Response(JSON.stringify({ ok: true, messages: [
-        { ts: "1.1", user: "U111", text: "working" }, // the living status message
-        { ts: "1.2", user: "U111", text: "before" },
-        { ts: "1.3", user: "U111", text: "after" },
-      ] }), { status: 200 }),
-    );
-    // ts "1.1" is a recorded living status.
-    const r = await h.backend.history("general", undefined, new Set(["1.1"]));
-    expect(r.code).toBe(0);
-    expect(r.messages.map((m) => m.ts)).toEqual(["1.2", "1.3"]);
-    expect(r.messages.every((m) => m.ts !== "1.1")).toBe(true);
-  });
 
-  test("with no active status the same read returns every line, including one whose text is 'working'", async () => {
-    const h = make({}, async () =>
-      new Response(JSON.stringify({ ok: true, messages: [
-        { ts: "1.1", user: "U111", text: "working" },
-        { ts: "1.2", user: "U111", text: "hello" },
-      ] }), { status: 200 }),
-    );
-    // No status tts passed (undefined): nothing is hidden — even a text "working".
-    const r = await h.backend.history("general", undefined, new Set<string>());
-    expect(r.code).toBe(0);
-    expect(r.messages.map((m) => m.ts)).toEqual(["1.1", "1.2"]);
-    expect(r.messages.map((m) => m.text)).toEqual(["working", "hello"]);
-  });
 
-  test("a status ts ABSENT from the ledger is NOT hidden", async () => {
-    const h = make({}, async () =>
-      new Response(JSON.stringify({ ok: true, messages: [
-        { ts: "9.9", user: "U111", text: "working" }, // same text, ts NOT a status
-        { ts: "9.8", user: "U111", text: "real" },
-      ] }), { status: 200 }),
-    );
-    // The set carries a DIFFERENT ts than 9.9, so the "working" line stays.
-    const r = await h.backend.history("general", undefined, new Set(["7.7"]));
-    expect(r.code).toBe(0);
-    expect(r.messages.map((m) => m.ts)).toEqual(["9.9", "9.8"]);
-  });
 
   test("a conversations.replies ok:false keeps the top-level messages and reports the problem", async () => {
     const h = make({}, async (url) => {
@@ -549,29 +489,13 @@ describe("listen", () => {
     expect(lines).toHaveLength(0);
   });
 
-  test("a delivery of a message at a living-status ts reaches no listener", async () => {
-    // Status is never a message: a line whose ts is a recorded living status is
-    // not delivered, decided by ts (the caller-passed set), not by text.
-    const h = make();
-    const lines: Delivery[] = [];
-    const p = h.backend.listen(["general"], "alice", (d) => lines.push(d), () => {}, new Set(["1.1"]));
-    await pump();
-    emit(h, msg({ ts: "1.1", text: "working" })); // exactly the recorded status ts
-    emit(h, msg({ ts: "1.2", text: "@alice real line" }));
-    await pump(8);
-    // listen reconnects on a drop (it never resolves in the healthy
-    // path), so the assertions above already ran; do not await p.
-    void p;
-    expect(lines).toHaveLength(1);
-    expect(lines[0]!.ts).toBe("1.2");
-  });
 
   test("a status ts absent from the ledger is still delivered", async () => {
     // Only a ts the caller marks as a status is held back; a ts not in the
     // ledger delivers normally.
     const h = make();
     const lines: Delivery[] = [];
-    const p = h.backend.listen([], "alice", (d) => lines.push(d), () => {}, new Set(["9.9"]));
+    const p = h.backend.listen([], "alice", (d) => lines.push(d), () => {});
     await pump();
     emit(h, msg({ ts: "1.1", text: "@alice hi" })); // 1.1 not a status
     await pump(8);
@@ -1301,7 +1225,7 @@ describe("acting-agent credentials", () => {
       }
       return okRouter(String(url));
     });
-    const r = await h.backend.history("general", undefined, undefined, "alice");
+    const r = await h.backend.history("general", undefined, "alice");
     expect(r.code).toBe(0);
     const call = h.fetches.find((f) => f.url.includes(HISTORY))!;
     expect((call.init?.headers as Record<string, string>).authorization).toBe("Bearer T_ALICE");
@@ -1315,7 +1239,7 @@ describe("acting-agent credentials", () => {
       }
       return okRouter(String(url));
     });
-    const r = await h.backend.history("general", undefined, undefined, "bob");
+    const r = await h.backend.history("general", undefined, "bob");
     expect(r.code).toBe(0);
     const call = h.fetches.find((f) => f.url.includes(HISTORY))!;
     expect((call.init?.headers as Record<string, string>).authorization).toBe("Bearer xoxb-app");
@@ -1334,7 +1258,7 @@ describe("acting-agent credentials", () => {
         { ts: "5.0", thread_ts: "5.0", reply_count: 1, user: "U111", text: "root" },
       ] }), { status: 200 });
     });
-    const r = await h.backend.history("general", undefined, undefined, "alice");
+    const r = await h.backend.history("general", undefined, "alice");
     expect(r.code).toBe(0);
     // the root itself renders with T_ALICE on its history call
     expect(r.messages.find((m) => m.text === "root")).toBeTruthy();
@@ -1405,7 +1329,7 @@ describe("acting-agent credentials", () => {
   test("a read with no per-agent token and no default fails naming the agent and the key", async () => {
     // token:"" (no default) and dave has no token: the read must FAIL loud.
     const h = make({ token: "", agents: { dave: { appToken: "xapp-dave" } } });
-    const r = await h.backend.history("general", undefined, undefined, "dave");
+    const r = await h.backend.history("general", undefined, "dave");
     expect(r.code).toBe(1);
     expect(r.error).toContain("dave");
     expect(r.error).toContain("token");

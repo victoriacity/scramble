@@ -648,7 +648,6 @@ export class SlackBackend {
     as: string,
     token: string,
     wantsAll: boolean,
-    statusTts: ReadonlySet<string> | undefined,
     onLine: (d: Delivery) => void,
     onProblem: (p: string) => void,
   ): void {
@@ -662,11 +661,6 @@ export class SlackBackend {
       // (`scramble-dev`) never matches and the agent is delivered its own posts.
       // Caught by the loop itself: my own message came back to me as a wake.
       if (this.identities(as).includes(delivery.from)) return;
-      // A message that IS a living status must reach no listener — status is
-      // never a message. Decided by ts against the caller-passed set (the
-      // ledger's authority), never by matching "working", so a human saying the
-      // word is still delivered.
-      if (statusTts !== undefined && delivery.ts !== undefined && statusTts.has(delivery.ts)) return;
       if (wantsAll || channels.includes(delivery.channel)) {
         onLine(delivery);
       }
@@ -684,7 +678,6 @@ export class SlackBackend {
     messages: Message[],
     problems: string[],
     seq: number,
-    statusTts: ReadonlySet<string> | undefined,
     token: string,
     as = "",
     forDelivery = false,
@@ -698,11 +691,6 @@ export class SlackBackend {
     );
     problems.push(...dlProblems);
     if (delivery === undefined) return seq;
-    // A line that IS a living status is absent from history. The set of status
-    // ts is passed in by the caller (which reads the ledger), so the backend
-    // holds no notion of where the ledger lives, and the decision keys on the
-    // ts, never on text ("working"), so a human's own words stay readable.
-    if (statusTts !== undefined && delivery.ts !== undefined && statusTts.has(delivery.ts)) return seq;
     // history is channel-scoped: force the requested `channel` (a Slack id tells us
     // the Slack channel, the channel mapping is the caller's frame). Slack has no
     // global seq, so a synthetic per-history counter stands in where the
@@ -736,7 +724,6 @@ export class SlackBackend {
   async history(
     channel: string,
     since?: string,
-    statusTts?: ReadonlySet<string>,
     as?: string,
     // `message check` DRAINS through this method, so it is a delivery even
     // though it reads history: it needs `mentioned` computed against thread
@@ -770,7 +757,7 @@ export class SlackBackend {
     let expandedRoots = 0;
     let droppedRoots = 0;
     for (const m of r.data.messages ?? []) {
-      seq = await this.appendLine(m, slackChannel, channel, messages, problems, seq, statusTts, token, as ?? "", forDelivery);
+      seq = await this.appendLine(m, slackChannel, channel, messages, problems, seq, token, as ?? "", forDelivery);
       if (!isThreadRoot(m)) continue;
       // FAN-OUT IS BOUND: one extra conversations.replies request per threaded
       // root, capped at THREAD_EXPANSION_CAP on the NEWEST roots (history walks
@@ -796,7 +783,7 @@ export class SlackBackend {
         // conversations.replies returns the ROOT as its first entry; the root
         // already appeared exactly once above with no `thread`, so drop it.
         if (reply.ts !== undefined && reply.ts === m.ts) continue;
-        seq = await this.appendLine(reply, slackChannel, channel, messages, problems, seq, statusTts, token, as ?? "", forDelivery);
+        seq = await this.appendLine(reply, slackChannel, channel, messages, problems, seq, token, as ?? "", forDelivery);
       }
     }
     if (droppedRoots > 0) {
@@ -818,7 +805,6 @@ export class SlackBackend {
     as: string,
     timeoutSecs: number,
     onProblem: (p: string) => void,
-    statusTts?: ReadonlySet<string>,
   ): Promise<{ code: 0; line: Delivery } | { code: 64 } | { code: 1; error: string }> {
     const deadline = this.now() + timeoutSecs * 1000;
     const wantsAll = channels.length === 0;
@@ -848,7 +834,7 @@ export class SlackBackend {
           conn = c;
           c.socket.onmessage = (raw) =>
             this.routeFrame(raw, c.socket, (ev) => {
-              this.deliver(ev, channels, as, token, wantsAll, statusTts, (d) => settle({ code: 0, line: d }), onProblem);
+              this.deliver(ev, channels, as, token, wantsAll, (d) => settle({ code: 0, line: d }), onProblem);
             });
           if (this.now() >= deadline) settle({ code: 64 });
         },
@@ -880,7 +866,6 @@ export class SlackBackend {
     as: string,
     onLine: (d: Delivery) => void,
     onProblem: (p: string) => void,
-    statusTts?: ReadonlySet<string>,
   ): Promise<number> {
     const wantsAll = channels.length === 0;
     const t = this.agentToken(as);
@@ -894,7 +879,7 @@ export class SlackBackend {
     let everConnected = false;
     let backoff = RECONNECT_BACKOFF;
     for (;;) {
-      const opened = await this.listenOnce(channels, wantsAll, as, token, onLine, onProblem, statusTts);
+      const opened = await this.listenOnce(channels, wantsAll, as, token, onLine, onProblem);
       if (opened) everConnected = true;
       // The FIRST connection could not be established: scramble could not look,
       // so it fails rather than retrying the same refusal forever. 64 is the
@@ -917,7 +902,6 @@ export class SlackBackend {
     token: string,
     onLine: (d: Delivery) => void,
     onProblem: (p: string) => void,
-    statusTts?: ReadonlySet<string>,
   ): Promise<boolean> {
     return new Promise((resolve) => {
       let established = false;
@@ -925,7 +909,7 @@ export class SlackBackend {
         (c) => {
           established = true;
           c.socket.onmessage = (raw) =>
-            this.routeFrame(raw, c.socket, (ev) => this.deliver(ev, channels, as, token, wantsAll, statusTts, onLine, onProblem));
+            this.routeFrame(raw, c.socket, (ev) => this.deliver(ev, channels, as, token, wantsAll, onLine, onProblem));
           c.socket.onclose = () => resolve(established);
         },
         (e) => {

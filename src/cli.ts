@@ -516,7 +516,7 @@ async function historyRead(
     // This caller (src/cli.ts) builds BOTH the status manager (which reads the
     // ledger) and the slack backend, so the living-status ts is read here and
     // handed in, rather than letting the backend know where the ledger lives.
-    const r = await s.backend.history(channel, since > 0 ? String(since) : undefined, statusTts(statusTracker(io, "slack", nameFor(flags, io))), nameFor(flags, io));
+    const r = await s.backend.history(channel, since > 0 ? String(since) : undefined, nameFor(flags, io));
     for (const p of r.problems) io.writeErr(`slack: ${p}`);
     if (r.code !== 0) {
       // ONE channel was asked for by name here, so its refusal IS the answer.
@@ -827,9 +827,6 @@ async function settleStatus(p: Promise<unknown> | undefined, io: Io): Promise<vo
  *  caller (src/cli.ts) that builds BOTH the status manager and the slack
  *  backend — handed into a read or a delivery so the backend filters a status
  *  line without knowing where the ledger lives. No status means no line hidden. */
-function statusTts(status: StatusManager | undefined): ReadonlySet<string> {
-  return status === undefined ? new Set<string>() : status.livingTts();
-}
 
 /** A slack-backend `message check` cursor is a PER-CHANNEL map (channel name ->
  *  newest Slack ts), stored under a namespaced key in the same cursor.json so it
@@ -896,7 +893,7 @@ async function slackCmdNext(argv: string[], io: Io): Promise<number> {
     io.writeErr(s.error ?? "slack unavailable");
     return 1;
   }
-  const r = await s.backend.next(positionals, name, timeoutSec, (p) => io.writeErr(`slack: ${p}`), statusTts(status));
+  const r = await s.backend.next(positionals, name, timeoutSec, (p) => io.writeErr(`slack: ${p}`));
   if (r.code === 64) return 64;
   // code 1 means scramble could not look (the socket open was refused): the
   // refusal was already reported on stderr, so surface it as a nonzero exit
@@ -937,7 +934,6 @@ async function slackCmdListen(argv: string[], io: Io): Promise<number> {
         io.write(JSON.stringify(d));
       },
       (p) => io.writeErr(`slack: ${p}`),
-      statusTts(status),
     );
   } finally {
     stopTicker?.();
@@ -1008,7 +1004,6 @@ async function messageCheckSlack(flags: Map<string, string>, io: Io): Promise<nu
   }
   const started = readSlackCursor(io, name);
   const next = { ...started };
-  const tts = statusTts(status);
   const ids = s.backend.identities(name);
   let unreachable = 0;
   let drained = 0;
@@ -1016,7 +1011,7 @@ async function messageCheckSlack(flags: Map<string, string>, io: Io): Promise<nu
     const cursor = started[channel];
     // `oldest` is inclusive in Slack, so re-filter to strictly-newer lines: the
     // cursor line itself must not re-drain on a repeat `message check`.
-    const r = await s.backend.history(channel, cursor === undefined ? undefined : cursor, tts, name, true);
+    const r = await s.backend.history(channel, cursor === undefined ? undefined : cursor, name, true);
     for (const p of r.problems) io.writeErr(`slack: ${p}`);
     if (r.code !== 0) {
       // ONE UNREACHABLE CHANNEL MUST NOT SILENCE THE REST. This loop walks EVERY

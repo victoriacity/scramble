@@ -158,7 +158,6 @@ describe("status local backend", () => {
     expect(recorded(dir)).toHaveLength(1);
     expect(recorded(dir)[0]).toMatchObject({ channel: "general", agent: "ana", expiresAt: 1000 + 10_000 });
     expect(mgr.isActive("general")).toBe(true);
-    expect(mgr.livingTs("general")).toBeUndefined();
     expect(STATUS_TEXT).toBe("working");
     advance(10_001);
     expect(mgr.isActive("general")).toBe(false);
@@ -268,30 +267,7 @@ describe("status slack backend", () => {
     expect(calls.filter((c) => c.url.includes("assistant.threads.setStatus"))).toHaveLength(1);
   });
 
-  test("a living message from an OLD record is still cleaned up", async () => {
-    // A record written before this change names a message; leaving it would
-    // strand a `working` line in the channel forever.
-    const { mgr, calls, dir } = makeSlack();
-    writeStatus(statusPath(dir), [{ channel: "general", agent: "ana", ts: "old.1", expiresAt: 9_999_999_999_999 }]);
-    await mgr.clearOn("general", "ana");
-    const del = calls.filter((c) => c.url.includes("chat.delete"));
-    expect(del).toHaveLength(1);
-    expect(del[0]?.body).toMatchObject({ channel: "C1", ts: "old.1" });
-  });
 
-  test("a refused delete of an old living message replaces its text instead", async () => {
-    const refusing = (url: string): Response =>
-      url.includes("chat.delete")
-        ? new Response(JSON.stringify({ ok: false, error: "cannot_delete" }), { status: 200 })
-        : new Response(JSON.stringify({ ok: true }), { status: 200 });
-    const { mgr, calls, errs, dir } = makeSlack({ router: refusing });
-    writeStatus(statusPath(dir), [{ channel: "general", agent: "ana", ts: "old.1", expiresAt: 9_999_999_999_999 }]);
-    await mgr.clearOn("general", "ana");
-    const updates = calls.filter((c) => c.url.includes("chat.update"));
-    expect(updates).toHaveLength(1);
-    expect(updates[0]?.body).toMatchObject({ channel: "C1", ts: "old.1", text: "" });
-    expect(errs.join(" ")).toContain("cannot_delete");
-  });
 
   test("a Slack ok:false on the status call is reported and the work carries on", async () => {
     const failing = (url: string): Response =>
@@ -302,7 +278,6 @@ describe("status slack backend", () => {
     await mgr.setOn("general", "ana", "thread.9");
     expect(errs.join(" ")).toContain("invalid_auth");
     // the status is recorded despite the failed Slack call, so the lifecycle stays.
-    expect(mgr.livingTs("general")).toBeUndefined();
   });
 
   test("a network failure and a non-JSON answer are surfaced as failures", async () => {
@@ -396,24 +371,27 @@ describe("status through the CLI", () => {
         dmChannels: {},
       }),
     );
-    // an active status with a living message: the reply must clear it.
-    writeStatus(statusPath(dir), [{ channel: "general", agent: "bob", ts: "1.9", expiresAt: Date.now() + 60_000 }]);
+    // an active status on a thread: the reply must clear it.
+    writeStatus(statusPath(dir), [{ channel: "general", agent: "bob", thread: "1.9", expiresAt: Date.now() + 60_000 }]);
     let messagePosts = 0;
-    const { io, errs } = await mainIo(dir, async (url, init) => {
+    const { io, errs } = await mainIo(dir, async (url) => {
       const u = String(url);
+      // Slack refuses the CLEAR, which must not take the post down with it.
+      if (u.includes("assistant.threads.setStatus")) {
+        return new Response(JSON.stringify({ ok: false, error: "invalid_thread_ts" }), { status: 200 });
+      }
       if (u.includes("chat.postMessage")) {
         messagePosts++;
         return new Response(JSON.stringify({ ok: true, ts: "5.5" }), { status: 200 });
       }
-      if (u.includes("chat.delete")) return new Response(JSON.stringify({ ok: false, error: "cannot_delete" }), { status: 200 });
       return new Response(JSON.stringify({ ok: true }), { status: 200 });
     }, {});
     const code = await main(["post", "general", "hi", "--as", "bob", "--backend", "slack"], io);
     expect(code).toBe(0); // the status failure never fails the post
     // NO settle timer: the short-lived verb AWAITs the status clear, so the
     // ledger is already written (the cleared reply) when main() returns.
-    expect(errs.some((e) => e.includes("cannot_delete"))).toBe(true);
-    expect(messagePosts).toBe(1); // the actual postMessage carried the message
+    expect(errs.some((e) => e.includes("invalid_thread_ts"))).toBe(true);
+    expect(messagePosts).toBe(1); // the message itself went out
     expect(recorded(dir)).toEqual([]); // the status was still dropped locally
   });
 
@@ -432,7 +410,7 @@ describe("status through the CLI", () => {
       }),
     );
     // an active status backs the reply: the reply must write the CLEARED ledger.
-    writeStatus(statusPath(dir), [{ channel: "general", agent: "bob", ts: "ts.9", expiresAt: Date.now() + 60_000 }]);
+    writeStatus(statusPath(dir), [{ channel: "general", agent: "bob", thread: "ts.9", expiresAt: Date.now() + 60_000 }]);
     const { io } = await mainIo(dir, async (url, init) => {
       const u = String(url);
       if (u.includes("chat.delete")) return new Response(JSON.stringify({ ok: true }), { status: 200 });
@@ -460,7 +438,7 @@ describe("status through the CLI", () => {
       }),
     );
     // an active status the failed reply must still attempt to clear (and report).
-    writeStatus(statusPath(dir), [{ channel: "general", agent: "bob", ts: "ts.7", expiresAt: Date.now() + 60_000 }]);
+    writeStatus(statusPath(dir), [{ channel: "general", agent: "bob", thread: "ts.7", expiresAt: Date.now() + 60_000 }]);
     const { io, errs } = await mainIo(dir, async (url, init) => {
       const u = String(url);
       // the POST to general fails: the underlying post earns exit 1.
