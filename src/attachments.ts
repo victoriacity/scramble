@@ -202,10 +202,55 @@ export async function uploadToSlack(
   }
   const complete = await readSlack(fetch, COMPLETE_UPLOAD_URL, token, {
     files: [{ id: fileId, title: name }],
-    channels: [slackChannelId],
+    // `channel_id`, a BARE id, never `channels: [id]`. The array rule in
+    // urlForm is right for `files` and wrong here: probed against the real
+    // endpoint, `channels=["C0EXAMPLE006"]` answers
+    // {"ok":false,"error":"channel_not_found"} while the bare id answers
+    // ok:true, because Slack reads this field as an id rather than as JSON.
+    channel_id: slackChannelId,
   });
   if (!complete.ok) return { ok: false, error: complete.error };
+  const shared = shareEvidence(complete.data, slackChannelId);
+  if (shared !== undefined) return { ok: false, error: shared };
   return { ok: true, out: { id: fileId, name, mime, size } };
+}
+
+/** Did the file actually reach the conversation? `ok:true` from
+ *  completeUploadExternal does NOT mean it did: probed against the real
+ *  endpoint with an exact byte count and a 200 on the PUT, the reply carried
+ *  `"shares":{}` and `"channels":[]`, the file existed at 11 bytes in
+ *  `files.info`, and no message ever appeared in the conversation. Taking that
+ *  reply as success is acceptance-as-success, so the share is READ from the
+ *  same reply, which already carries it. Returns an error string when the reply
+ *  shows no share, and undefined when it shows one. */
+function shareEvidence(data: Record<string, unknown>, target: string): string | undefined {
+  const files = data.files;
+  if (!Array.isArray(files) || files.length === 0) {
+    return `slack accepted the upload and returned no file: ${JSON.stringify(data).slice(0, 400)}`;
+  }
+  const f = files[0] as Record<string, unknown>;
+  const lists = (["channels", "groups", "ims"] as const).flatMap((k) => {
+    const v = f[k];
+    return Array.isArray(v) ? (v as unknown[]).map(String) : [];
+  });
+  if (lists.includes(target)) return undefined;
+  const shares = f.shares;
+  const shareCount =
+    shares !== null && typeof shares === "object"
+      ? Object.values(shares as Record<string, unknown>).reduce<number>(
+          (n, v) => n + (v !== null && typeof v === "object" ? Object.keys(v as object).length : 0),
+          0,
+        )
+      : 0;
+  if (shareCount > 0) return undefined;
+  return (
+    `slack stored the file but shared it with nothing: channel_id=${target} ` +
+    `shares=${JSON.stringify(shares ?? null)} channels=${JSON.stringify(f.channels ?? [])} ` +
+    `groups=${JSON.stringify(f.groups ?? [])} ims=${JSON.stringify(f.ims ?? [])}. ` +
+    `The file exists (id ${String(f.id)}) and no message carries it. An app can hit this ` +
+    `when it cannot resolve the target conversation: a private channel needs groups:read, ` +
+    `and the app must be a member of the conversation it shares into.`
+  );
 }
 
 /** Encode an object as an `application/x-www-form-urlencoded` body. Arrays and

@@ -13,3 +13,5 @@ coverage/
 slack-app-credentials.json
 slack-auth-ticket.txt
 .config/
+.scramble/cursor.json
+.scramble/status.json
