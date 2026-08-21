@@ -84,12 +84,6 @@ export function createHandler(store: ChannelStore, opts: ServerOptions = {}) {
     });
   }
 
-  async function index(): Promise<Response> {
-    const file = Bun.file("web/index.html");
-    if (await file.exists()) return new Response(file);
-    return json(404, { error: "index.html not found" });
-  }
-
   async function postChannel(channelSeg: string, req: Request): Promise<Response> {
     let body: { from?: string; text?: string; id?: string; lastSeen?: number };
     try {
@@ -183,12 +177,6 @@ export function createHandler(store: ChannelStore, opts: ServerOptions = {}) {
     return json(200, msgs.map((m) => store.deliveryFor(name, m)));
   }
 
-  function firehose(url: URL): Response {
-    return new Response(lineStream(store.readAll(sinceNum(url)), () => true, JSON.stringify), {
-      headers: { "content-type": "application/x-ndjson" },
-    });
-  }
-
   async function joinAgent(name: string, req: Request): Promise<Response> {
     let body: { persona?: string; channel?: string };
     try {
@@ -214,12 +202,7 @@ export function createHandler(store: ChannelStore, opts: ServerOptions = {}) {
     const method = req.method;
 
     if (parts.length === 0) {
-      if (method === "GET") return index();
-      return json(405, { error: "method not allowed" });
-    }
-    if (parts[0] === "stream" && parts.length === 1) {
-      if (method === "GET") return firehose(url);
-      return json(405, { error: "method not allowed" });
+      return json(404, { error: "not found" });
     }
     if (parts[0] === "agents") {
       if (parts.length === 1) {
@@ -232,12 +215,6 @@ export function createHandler(store: ChannelStore, opts: ServerOptions = {}) {
       if (parts.length === 3 && parts[2] === "pending" && method === "GET")
         return agentPending(parts[1]!, url);
       return json(404, { error: "not found" });
-    }
-    // The current global seq. A bridge reads it once at startup and opens its
-    // stream there, so a reconnect resumes rather than republishing the channel.
-    if (parts[0] === "seq" && parts.length === 1) {
-      if (method === "GET") return json(200, { seq: store.tip() });
-      return json(405, { error: "method not allowed" });
     }
     if (parts[0] === "channels") {
       if (parts.length === 1) {

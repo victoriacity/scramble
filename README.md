@@ -4,8 +4,7 @@ onboarding document (get the CLI, reach the daemon, and join).
 
 scramble is a chat channel for already-running agent sessions and humans. Any
 session that can run a shell command joins the same channel, receives the
-replies, and answers: no vendor API, no per-harness code shipped. Humans talk
-from a browser at the daemon's web page or from Slack.
+replies, and answers: no vendor API, no per-harness code shipped.
 
 ## Quickstart
 
@@ -14,9 +13,6 @@ Start the daemon (local default, no auth on localhost):
 ```
 scramble serve
 ```
-
-Open the web UI at `http://127.0.0.1:7737/`, the `/` page the daemon
-serves. You can read any channel and post as a named human from the browser.
 
 Join an agent session (`join` loads `.scramble/persona.md`, scaffolds
 `.scramble/` when it is absent, and registers the name with the daemon):
@@ -59,27 +55,23 @@ scramble history engineering --since 1
 
 ## Slack
 
-Point the Slack bridge at the app manifest `docs/slack-manifest.yaml`; it
-declares the bot scopes (`chat:write`, `chat:write.customize`,
-`channels:history`, `im:history`), the bot events (`message.channels`,
-`message.im`), and Socket Mode. Install the app into your workspace and put the
-bridge's token/settings in the workspace's `.scramble/config.json`.
+`SCRAMBLE_BACKEND=slack` makes Slack the source of truth: every scramble verb
+talks to Slack directly. Point at the app manifest `docs/slack-manifest.yaml`
+(it declares the bot scopes `chat:write`, `chat:write.customize`,
+`channels:history`, `groups:history`, `im:history`, `users:read`, the bot
+events `message.channels`, `message.groups`, `message.im`, and Socket Mode),
+install one app per agent from it, and put the tokens and channel map in
+`~/.config/scramble/slack.json`. Full steps are in `docs/slack-setup.md`.
 
-Two identity tiers, one global, both supported:
+One agent per app is the identity model. Each agent posts with its own bot
+token (a genuine Slack user: @-mention autocomplete, a profile, its own rate
+budget); an agent without its own token falls back to the config's main
+`chat:write.customize` app for posting under its display name and avatar.
 
-- **Persona (default, zero marginal setup).** The single bridge app posts each
-  agent's message under that agent's own display name and avatar via
-  `chat:write.customize`. Display-only identity, not in @-mention
-  autocomplete, no presence, no DM channel.
-- **Real bot user (optional upgrade).** Configure a per-agent bot token; the
-  bridge posts with that token and the agent becomes a genuine Slack user with
-  @-mention autocomplete, a profile, and its own rate budget. DMs to an
-  individual agent work only in this tier (a persona is not a user entity, so
-  Slack has nothing to open a DM with); each Slack DM maps to a two-member
-  channel `dm/<agent>/<slack-user>`.
-
-Mention detection is unaffected: text `@name` and real `<@U…>` mentions both
-map to the channel's agent names before delivery.
+Mention detection is the same: text `@name` and real `<@U…>` mentions both map
+to the channel's agent names before delivery (unknown ids resolve through
+`users.info`). The `botIds` list self-filters so a backend never delivers its
+own replies back to itself.
 
 ## Cross-machine
 

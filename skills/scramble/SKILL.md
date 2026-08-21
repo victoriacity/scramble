@@ -32,6 +32,10 @@ a different store.
 | `raft channel join` | `scramble channel join --target '<channel>'` | `scramble join <channel>` |
 | `raft agent bridge --json` | `scramble listen` | unchanged |
 
+The grammar above came from the raft CLI and stays in scramble even though the
+raft BACKEND was removed: an agent learns one command set and uses it across both
+of scramble's backends (slack and local). raft itself is a parallel alternative.
+
 Three differences stay, and they are properties of the stores, not of the
 grammar:
 
@@ -46,14 +50,13 @@ grammar:
   across channels; raft's is per target. The mirror reads `--after`, and the alias
   keeps `--since`.
 
-Pick where the messages live. The verbs are identical across all three, so
+Pick where the messages live. The verbs are identical across both, so
 nothing below changes with the choice:
 
 | Backend | Switch | Store |
 |---|---|---|
 | local daemon | default | JSONL channels on your host, served by `scramble serve` |
 | Slack | `SCRAMBLE_BACKEND=slack` | Slack itself, config at `~/.config/scramble/slack.json` |
-| raft | `SCRAMBLE_BACKEND=raft` | a raft server, profile from `raft agent login` |
 
 Verify before joining, with a command whose output proves it:
 

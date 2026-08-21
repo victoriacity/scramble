@@ -16,18 +16,28 @@ backend the environment names:
 | Backend | Switch | Where the conversation lives |
 |---|---|---|
 | Slack | `SCRAMBLE_BACKEND=slack` | Slack, which is the source of truth |
-| raft | `SCRAMBLE_BACKEND=raft` | a raft server |
 | local | default | JSONL files on the host, for offline work and the tests |
+
+Two backends, slack and local. The raft BACKEND was removed on 2026-08-21: raft
+and scramble are PARALLEL ALTERNATIVES, so a raft backend inside scramble was one
+product wrapping its competitor for no gain. The raft-mirrored GRAMMAR (`message
+send`, `message check`, `message read`, `profile show/update`, `channel join`,
+`--target`) is kept so an agent learns one command set across both tools, which
+survives the backend going. An unknown backend name is rejected, naming the two
+that exist.
 
 What scramble owns is the part no messaging app provides: a wake path that turns
 an arriving message into a turn, a conversational contract that decides when an
 agent speaks, and a linter that gates what it sends.
 
-One consequence is pending. The Slack BRIDGE below predates the Slack backend and
-mirrors a local store into Slack, which is the two-store shape that produced both
-of the defects found on 2026-08-21, an echo loop and a reconnect replay. The
-backend supersedes it, so the bridge, the daemon, the HTTP server and the web page
-are a test fixture and an offline mode rather than the product.
+The Slack BRIDGE below predated the Slack backend and mirrored a local store into
+Slack, which is the two-store shape that produced both of the defects found on
+2026-08-21, an echo loop and a reconnect replay. The backend superseded it, so
+the bridge (`src/slack.ts`), its built-in web page (`web/index.html`), the
+daemon's page route and the raft BACKEND (`src/raft.ts`) were DELETED on
+2026-08-21. The local store, the daemon, the HTTP server and `src/server.ts`
+remain as the offline backend and the test fixture. This record of WHY is kept;
+nothing below instructs a reader to run the bridge.
 
 ## Problem
 
@@ -135,7 +145,6 @@ hosts), no new protocol (newline-delimited JSON over HTTP).
     is a member of, own messages excluded, each line carrying its channel. `seq` is
     global (one counter across channels) so a single `since` cursor makes
     multi-channel catch-up exact.
-  - `GET /` → the built-in human UI: one static page over the same stream (SSE).
 - Loop guards, in the daemon so no agent must be trusted to behave: per-sender rate
   limit, identical-repeat drop within a window, and a channel-level max messages/minute
   that pauses agent senders (never humans) when tripped.
@@ -156,7 +165,7 @@ hosts), no new protocol (newline-delimited JSON over HTTP).
   wait for it can join, even with no wake-on-output facility at all. A codex
   agent chats by parking a turn on `scramble next` and answering with
   `scramble post`.
-- `scramble serve [--slack]`
+- `scramble serve`
 
 ### Join recipe: existing Claude Code session (one command)
 
@@ -186,39 +195,30 @@ every message and all replying is the failure mode every multi-bot channel hits
 
 ### Humans
 
-Two frontends on the same channel, both optional, either sufficient:
+The only human surface that ships is Slack via the slack BACKEND. `SCRAMBLE_BACKEND=slack`
+makes Slack the source of truth: the backend posts and reads Slack directly over
+REST + Socket Mode, one app per agent (`docs/slack-manifest.yaml`,
+`docs/slack-setup.md`), with the config at `~/.config/scramble/slack.json`. Each
+agent appears as a distinct Slack user:
 
-- **Built-in web page** (v0 default): served by the daemon, zero setup.
-- **Slack bridge** (`scramble serve --slack`): ONE internal Slack app.
-  Socket Mode, so no public URL. Requirement: each agent appears as a distinct
-  "user" in the channel. Two tiers, both supported, per agent:
-  - **Persona (default, zero marginal setup)**: `chat:write.customize` lets the
-    single app post each agent's messages under that agent's own display name and
-    avatar. Display-only identity: not in @-mention autocomplete, no presence, no
-    DM channel; all personas share the app's 1 msg/sec/channel budget (ample).
-  - **Real bot user (optional upgrade)**: configure a per-agent bot token
-    (one tiny app per agent, ~5 min each from a reusable manifest). The bridge
-    posts with that token; the agent becomes a genuine Slack user: @-mention
-    autocomplete, profile, DMs, own rate budget.
-  The bridge picks per agent: token configured → real user; else persona.
-  Mention-detection is unaffected: text `@name` and real `<@U…>` mentions both
-  map to the channel's agent names before delivery.
-  - **DMs to an individual agent**: real-bot-user tier only (a persona is not a
-    user entity, so Slack has nothing to open a DM with). The per-agent app adds
-    scope `im:history` + event `message.im`; the bridge maps each Slack DM
-    conversation to a dedicated two-member channel `dm/<agent>/<slack-user>`,
-    created on first message, and the agent's replies post back through its own
-    bot token so the thread reads as a normal 1:1. The same `dm/*` channels are
-    reachable from the CLI and web UI without Slack.
-  Base setup is one 10-15 minute app install (scopes: `chat:write`,
-  `chat:write.customize`, `channels:history`; events: `message.channels`; two
-  tokens). Bots receive each other's messages; self-filter on own `bot_id`s;
-  internal single-workspace apps are exempt from the 2025 non-Marketplace
-  rate-limit cuts.
+- **Real bot user (the identity model)**: one app per agent, each with its own
+  bot token. The agent is a genuine Slack user: @-mention autocomplete, profile,
+  DMs, own rate budget.
+- **Persona fallback**: an agent with no per-agent token falls back to the
+  config's main bot token, posting under that agent's display name and avatar via
+  `chat:write.customize` (display-only identity).
+- **DMs to an individual agent**: the per-agent bot adds scope `im:history` +
+  event `message.im`; a Slack DM maps to a two-member channel
+  `dm/<agent>/<slack-user>`, and the agent's replies post back through its own bot
+  token so the thread reads as a normal 1:1.
+- Mention detection: text `@name` and real `<@U…>` mentions both map to the
+  channel's agent names before delivery (unknown ids resolve through
+  `users.info`). The backend self-filters on its own `bot_id`s so it never
+  delivers its own replies back to itself.
 
-Slack answers the stated ideal ("create a slack channel and let a few claude sessions
-talk with each other, and to me"). The web page is the no-Slack fallback and the
-faster path to first demo.
+The web page and the two-frontends bridge that this section used to describe
+were DELETED with the bridge; the local daemon ships as an offline backend and
+the test fixture.
 
 ### Conversational contract
 
@@ -275,7 +275,7 @@ does not guarantee it; the structural backstops are named alongside.
    it is committed to the repo and evolves with the project. `--as <name>`
    overrides the name (default: derived from the workspace directory);
    `--persona "<text>"` overrides the text. Registered with the daemon at
-   join; the roster (`GET /agents`) shows every agent's persona in the web UI
+   join; the roster (`GET /agents`) shows every agent's persona to the CLI
    and Slack profiles. The skill folds the persona into the etiquette: rule 4's
    "your lens disagrees → speak" is what makes a product agent and a
    development agent debate instead of agree.
@@ -283,9 +283,9 @@ does not guarantee it; the structural backstops are named alongside.
    symmetric: an agent posting `@dev can you confirm?` wakes and addresses that
    agent exactly as a human mention does. Agent↔agent DMs are ordinary
    `dm/<a>/<b>` channels and the observability rule is: DM = addressing scope,
-   never secrecy — every channel including DMs is listed and readable in the web
-   UI, and the Slack bridge mirrors agent↔agent DM traffic read-only into a
-   designated channel (default `#scramble-dms`, prefixed `[ana↔dev]`).
+   never secrecy — every channel including DMs is listed and readable through
+   the CLI (and Slack, in the backend). No mirror channel exists any longer; the
+   bridge that mirrored agent↔agent traffic was deleted.
 
 ### Hooks (Claude Code sessions)
 
@@ -399,9 +399,10 @@ A session on another machine joins the same channels; only the transport hop cha
 
 ## Size estimate
 
-Daemon + CLI: ~400-600 lines (bun or python, single file each). Slack bridge: ~150
-lines. Claude join skill: one SKILL.md. Codex driver: ~100 lines. First demo (two
-Claude sessions + web page): daemon + CLI + skill only.
+Daemon + CLI: ~400-600 lines (bun or python, single file each). Slack backend:
+~400 lines over the shared wire types. Claude join skill: one SKILL.md. The Slack
+bridge and web page were deleted (net negative); the drivable surface is the daemon
++ CLI + skill + the slack backend.
 
 ## Sources
 
