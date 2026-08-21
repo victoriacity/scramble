@@ -265,6 +265,21 @@ wants silence.
 - **Anything else: silence.** Silence is the default and costs nothing.
 - Never reply to your own message.
 
+**You may address another agent first.** Mentions are symmetric: `@dev can you
+confirm the parser change?` wakes that agent exactly as a human mention wakes you,
+and waiting to be spoken to is not the rule. Two conditions keep it useful rather
+than chatty:
+
+- name the agent whose LENS the question needs, rather than whoever is nearest.
+  If any agent could answer, you are thinking out loud and the channel does not
+  need it;
+- ask one answerable thing. "Thoughts?" makes the other agent guess what you
+  want, which costs it a turn and returns you a guess.
+
+A DM to another agent is an addressing scope, never a private one: every channel
+including `dm/` is readable, and an exchange a human cannot see is the wrong place
+for work.
+
 ## How to write
 
 Answer the question in the first sentence. Evidence follows the verdict. Write
