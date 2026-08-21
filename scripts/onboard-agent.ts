@@ -1,0 +1,277 @@
+#!/usr/bin/env bun
+// Onboard THIS agent to Slack with no human in the loop.
+//
+//   bun scripts/onboard-agent.ts <agent-name> [--channel <name|id>] [--print-manifest]
+//
+// The only human operation is one-time and machine-wide: install the Slack CLI
+// and run `slack login`. After that an agent creates and installs its OWN Slack
+// app from the CLI's stored credential, so nothing about adding the tenth agent
+// involves a person.
+//
+// The two API calls that matter, measured against a real Enterprise Grid org:
+//
+//   apps.manifest.create  { manifest, team_id }          -> app_id
+//   apps.developerInstall { app_id, bot_scopes, team_id } -> bot + app-level tokens
+//
+// TEAM_ID IS THE WHOLE TRICK. Omit it and both calls run against the enterprise
+// (`is_enterprise_install: true` on the CLI's auth), where developerInstall
+// answers {"ok":false,"error":"app_approval_request_eligible"} and an admin has
+// to approve. Pass the WORKSPACE id and the same call answers ok:true and hands
+// back the tokens. This is a workspace app, not an org app.
+//
+// What it does, in order: create the app, install it, join the channel when the
+// channel is public, write ~/.config/scramble/slack.json, and verify with a real
+// read. It never prints a token.
+
+import { existsSync, readFileSync, mkdirSync, writeFileSync, chmodSync } from "node:fs";
+import { join, dirname } from "node:path";
+
+// The scopes, and why each one is here. THIS LIST IS THE SOURCE: the app is
+// created from it, and `--print-manifest` prints the manifest for anyone pasting
+// it into the browser by hand, so there is no second copy to drift.
+const SCOPES: Array<[string, string]> = [
+  ["chat:write", "post a message, a threaded reply, and the living status message"],
+  ["channels:history", "read a public channel"],
+  ["groups:history", "read a private channel"],
+  ["im:history", "read a DM"],
+  ["im:write", "open and write a DM, so a human can talk to this agent alone"],
+  ["users:read", "resolve <@U…> to a name; without it a mention matches no agent"],
+  ["channels:read", "name a channel by its id, and find a public channel by name"],
+  ["channels:join", "join a public channel unaided, which removes the last human step"],
+  ["files:write", "upload an attachment"],
+  ["files:read", "download an inbound attachment"],
+  ["assistant:write", "the automatic working status on an assistant thread"],
+];
+const BOT_EVENTS = ["message.channels", "message.groups", "message.im"];
+
+function manifestFor(name: string): Record<string, unknown> {
+  return {
+    display_information: { name },
+    features: { bot_user: { display_name: name, always_online: false } },
+    oauth_config: { scopes: { bot: SCOPES.map(([s]) => s) } },
+    settings: {
+      event_subscriptions: { bot_events: BOT_EVENTS },
+      socket_mode_enabled: true,
+      token_rotation_enabled: false,
+      org_deploy_enabled: false,
+    },
+  };
+}
+
+function die(msg: string): never {
+  console.error(`onboard: ${msg}`);
+  process.exit(1);
+}
+
+/** The Slack CLI's stored credential. `slack login` writes it, and any `slack`
+ *  command refreshes it, which is why an expired one is reported with that fix
+ *  rather than worked around here. */
+function configToken(): { token: string; enterpriseId: string } {
+  const fromEnv = process.env.SLACK_CONFIG_TOKEN;
+  if (fromEnv !== undefined && fromEnv !== "") return { token: fromEnv, enterpriseId: "" };
+  const path = join(process.env.HOME ?? "", ".slack", "credentials.json");
+  if (!existsSync(path)) {
+    die(
+      `no Slack CLI credential at ${path}. The one human step for this machine:\n` +
+        `  1. install the Slack CLI (https://docs.slack.dev/tools/slack-cli)\n` +
+        `  2. run \`slack login\` and paste the /slackauthticket command it prints into Slack`,
+    );
+  }
+  const all = JSON.parse(readFileSync(path, "utf8")) as Record<string, { token?: string }>;
+  for (const [id, v] of Object.entries(all)) {
+    if (typeof v.token === "string" && v.token !== "") return { token: v.token, enterpriseId: id };
+  }
+  return die(`${path} holds no token. Run \`slack login\`.`);
+}
+
+async function api(
+  token: string,
+  method: string,
+  body: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const res = await fetch(`https://slack.com/api/${method}`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json; charset=utf-8" },
+    body: JSON.stringify(body),
+  });
+  const j = (await res.json()) as Record<string, unknown>;
+  if (j.ok !== true) {
+    const err = String(j.error ?? "unknown");
+    if (err === "invalid_auth" || err === "token_expired" || err === "token_revoked") {
+      die(
+        `${method} answered ${err}. The CLI's credential is short-lived and any \`slack\`\n` +
+          `command refreshes it: run \`slack auth list\`, then this script again.`,
+      );
+    }
+    if (err === "app_approval_request_eligible") {
+      die(
+        `${method} answered app_approval_request_eligible for team ${String(j.team_id)}.\n` +
+          `That is the ENTERPRISE id, which means this call went to the org instead of a\n` +
+          `workspace. Pass --team <T…> with the workspace id. An org install needs an\n` +
+          `administrator; a workspace install does not.`,
+      );
+    }
+    die(`${method} failed: ${err} ${JSON.stringify(j).slice(0, 300)}`);
+  }
+  return j;
+}
+
+async function get(token: string, path: string): Promise<Record<string, unknown>> {
+  const res = await fetch(`https://slack.com/api/${path}`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  return (await res.json()) as Record<string, unknown>;
+}
+
+/** The WORKSPACE this app belongs to. On Enterprise Grid the CLI's auth is the
+ *  ORG, so the workspace has to be named explicitly somewhere; auth.teams.list
+ *  answers it, and a single workspace needs no flag at all. */
+async function resolveTeam(token: string, flag?: string): Promise<string> {
+  if (flag !== undefined && flag !== "") return flag;
+  const r = await get(token, "auth.teams.list");
+  const teams = (r.teams as Array<{ id: string; name: string }> | undefined) ?? [];
+  if (teams.length === 1) {
+    console.log(`onboard: workspace ${teams[0]!.id} (${teams[0]!.name})`);
+    return teams[0]!.id;
+  }
+  if (teams.length === 0) die("auth.teams.list returned no workspace; pass --team <T…>");
+  die(
+    `this login covers ${teams.length} workspaces, so name one with --team:\n` +
+      teams.map((t) => `  ${t.id}  ${t.name}`).join("\n"),
+  );
+}
+
+/** Find a conversation by name or accept an id as given. The CLI's credential
+ *  holds `groups:read`, which no bot token here does, so a PRIVATE channel is
+ *  discoverable through it: the agent never has to be handed an id. */
+async function resolveChannel(
+  token: string,
+  team: string,
+  nameOrId: string,
+): Promise<{ id: string; name: string; private: boolean }> {
+  if (/^[CDG][A-Z0-9]{6,}$/.test(nameOrId)) {
+    const info = await get(token, `conversations.info?channel=${encodeURIComponent(nameOrId)}`);
+    const c = info.channel as { name?: string; is_private?: boolean } | undefined;
+    return { id: nameOrId, name: c?.name ?? nameOrId, private: c?.is_private === true };
+  }
+  const want = nameOrId.replace(/^#/, "");
+  for (const types of ["public_channel", "private_channel"]) {
+    let cursor = "";
+    for (let page = 0; page < 10; page++) {
+      const q = `conversations.list?types=${types}&limit=200&team_id=${team}${cursor ? `&cursor=${cursor}` : ""}`;
+      const r = await get(token, q);
+      const list = (r.channels as Array<{ id: string; name: string; is_private?: boolean }>) ?? [];
+      const hit = list.find((c) => c.name === want);
+      if (hit) return { id: hit.id, name: hit.name, private: types === "private_channel" };
+      cursor = String((r.response_metadata as { next_cursor?: string } | undefined)?.next_cursor ?? "");
+      if (cursor === "") break;
+    }
+  }
+  return die(`no channel named "${want}" is visible to this login`);
+}
+
+// --- the run ---------------------------------------------------------------
+
+const argv = process.argv.slice(2);
+const flag = (n: string): string | undefined => {
+  const i = argv.indexOf(`--${n}`);
+  return i >= 0 ? argv[i + 1] : undefined;
+};
+const agent = argv.find((a) => !a.startsWith("--") && argv[argv.indexOf(a) - 1] !== "--channel" && argv[argv.indexOf(a) - 1] !== "--team");
+
+if (argv.includes("--print-manifest")) {
+  console.log(JSON.stringify(manifestFor(agent ?? "scramble-agent"), null, 2));
+  process.exit(0);
+}
+if (agent === undefined) {
+  die("usage: bun scripts/onboard-agent.ts <agent-name> [--channel <name|id>] [--team <T…>]");
+}
+
+const { token } = configToken();
+const team = await resolveTeam(token, flag("team"));
+
+console.log(`onboard: creating the app "${agent}" as a WORKSPACE app`);
+const created = await api(token, "apps.manifest.create", {
+  manifest: manifestFor(agent),
+  team_id: team,
+});
+const appId = String(created.app_id);
+console.log(`onboard: app ${appId} created`);
+
+const installed = await api(token, "apps.developerInstall", {
+  app_id: appId,
+  bot_scopes: SCOPES.map(([s]) => s),
+  team_id: team,
+});
+const tokens = installed.api_access_tokens as { bot?: string; app_level?: string } | undefined;
+const botToken = tokens?.bot;
+const appToken = tokens?.app_level;
+if (botToken === undefined || botToken === "") die("developerInstall returned no bot token");
+console.log(`onboard: installed to ${team}, bot token and app-level token received`);
+
+const who = await get(botToken, "auth.test");
+console.log(`onboard: the bot is @${String(who.user)} (${String(who.bot_id)})`);
+
+// The channel. A public one the agent joins itself; a private one needs the one
+// human operation that has no API: a member inviting it from inside.
+let channelName: string | undefined;
+let channelId: string | undefined;
+const wanted = flag("channel");
+if (wanted !== undefined && wanted !== "") {
+  const ch = await resolveChannel(token, team, wanted);
+  channelId = ch.id;
+  channelName = ch.name;
+  if (ch.private) {
+    console.log(
+      `onboard: ${ch.name} is PRIVATE. Slack has no API for an app to add itself to a\n` +
+        `         private conversation, so one human operation remains: in #${ch.name}, run\n` +
+        `           /invite @${String(who.user)}`,
+    );
+  } else {
+    const j = await api(botToken, "conversations.join", { channel: ch.id });
+    void j;
+    console.log(`onboard: joined #${ch.name} unaided`);
+  }
+}
+
+// The config, merged so a machine can hold several agents, and never printed.
+const cfgPath =
+  process.env.SCRAMBLE_SLACK_CONFIG ?? join(process.env.HOME ?? ".", ".config", "scramble", "slack.json");
+type Cfg = {
+  token?: string;
+  appToken?: string;
+  channels?: Record<string, string>;
+  agents?: Record<string, { token?: string }>;
+  roster?: Record<string, string>;
+  dmChannels?: Record<string, string>;
+};
+const cfg: Cfg = existsSync(cfgPath) ? (JSON.parse(readFileSync(cfgPath, "utf8")) as Cfg) : {};
+cfg.agents = { ...(cfg.agents ?? {}), [agent]: { token: botToken } };
+cfg.token = cfg.token ?? botToken;
+if (appToken !== undefined && appToken !== "") cfg.appToken = cfg.appToken ?? appToken;
+if (channelId !== undefined && channelName !== undefined) {
+  cfg.channels = { ...(cfg.channels ?? {}), [channelName]: channelId };
+}
+cfg.roster = { ...(cfg.roster ?? {}), [String(who.user_id)]: String(who.user) };
+mkdirSync(dirname(cfgPath), { recursive: true });
+writeFileSync(cfgPath, `${JSON.stringify(cfg, null, 2)}\n`);
+chmodSync(cfgPath, 0o600);
+console.log(`onboard: wrote ${cfgPath} (mode 600, outside the repo)`);
+
+// Verify with the product, not with the API: a read is what the agent will run.
+if (channelName !== undefined) {
+  const p = Bun.spawn(["bun", "src/bin.ts", "message", "read", "--target", channelName, "--as", agent], {
+    env: { ...process.env, SCRAMBLE_BACKEND: "slack" },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [out, err] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text()]);
+  const code = await p.exited;
+  const lines = out.split("\n").filter((l) => l.startsWith("{")).length;
+  console.log(`onboard: verify read exit ${code}, ${lines} line(s)${err.trim() ? `, stderr: ${err.trim().split("\n")[0]}` : ""}`);
+  if (code !== 0) die("the verify read failed; the config above is written but not proven");
+}
+console.log(
+  `onboard: done. ${agent} can now run:\n` +
+    `  SCRAMBLE_BACKEND=slack scramble message send --target ${channelName ?? "<channel>"} --as ${agent}`,
+);

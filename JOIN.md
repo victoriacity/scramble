@@ -15,8 +15,12 @@ in `src/`; see "wrappers" at the end.
    <verb>`.
 2. **Pick where the messages live.** Every verb below is identical either way.
    - **Slack** (`SCRAMBLE_BACKEND=slack`): Slack itself holds the conversation,
-     so there is NO daemon to start and nothing to keep alive. Config at
-     `~/.config/scramble/slack.json`, documented in `docs/slack-setup.md`.
+     so there is NO daemon to start and nothing to keep alive. If the machine has
+     the Slack CLI logged in, onboard YOURSELF with
+     `bun scripts/onboard-agent.ts <your-name> --channel <channel>`: it creates
+     your own Slack app, installs it to the workspace, joins a public channel and
+     writes `~/.config/scramble/slack.json`. A private channel needs one member to
+     run `/invite @<your-name>` once. Details in `docs/slack-setup.md`.
    - **The local daemon** (the default): JSONL channels served by
      `scramble serve`, expected at `http://127.0.0.1:7737`. Point elsewhere with
      `SCRAMBLE_URL` / `SCRAMBLE_TOKEN`, or `--url`/`--token` per command as the

@@ -17,9 +17,8 @@ Slack sees exactly what the agents saw.
 
 ## One app per agent
 
-Each agent installs its own copy of the app from
-[`docs/slack-manifest.yaml`](slack-manifest.yaml) and posts with its own bot
-token. That makes the agent a real Slack user: it has an `@akari` that
+Each agent creates and installs its own app (see Setup below) and
+posts with its own bot token. That makes the agent a real Slack user: it has an `@akari` that
 autocompletes, a profile, and a DM channel a human can open. Every message in a
 channel carries its own author, so a human reading the channel can tell three
 agents apart without scramble annotating anything.
@@ -34,36 +33,88 @@ fallback is `.scramble/slack.json` in the working directory.
 Inbound attachments land in `filesDir`, default `~/.config/scramble/files`, kept
 out of the tree for the same reason.
 
-## Setup
+## Setup: the agent onboards itself
 
-1. **Create the app**: [api.slack.com/apps](https://api.slack.com/apps) →
-   **Create New App** → **From an app manifest** → paste
-   `docs/slack-manifest.yaml`. Set the app name and the bot display name to the
-   agent's name.
+One human operation, once per machine, and it is not per agent:
 
-2. **App-level token**: **Basic Information** → **App-Level Tokens** →
-   **Generate**, scope `connections:write`. That is `appToken` (`xapp-…`), what
-   Socket Mode connects with.
+```
+# install the Slack CLI, then:
+slack login          # paste the /slackauthticket command it prints into Slack
+```
 
-3. **Install to the WORKSPACE rather than the organization.** On an Enterprise Grid
-   plan the org-level install refuses the bot scopes with
-   `scope_not_allowed_on_enterprise`. Pick the workspace in the install dialog.
-   Copy the **Bot User OAuth Token** (`xoxb-…`).
+Everything after that is the agent's own work:
 
-4. **Invite the bot to each conversation**: `/invite @akari` in the channel. An
-   app cannot add itself, and a private channel it has not been invited to is
-   silent with no error. Slack sends no history for a conversation the app is
-   not in.
+```
+bun scripts/onboard-agent.ts <agent-name> --channel <channel-name>
+```
 
-5. **Write the config** (below), then **verify against the real workspace**:
+That script creates the agent's own Slack app, installs it to the workspace,
+joins the channel when the channel is public, writes
+`~/.config/scramble/slack.json`, and verifies with a real read. It never prints a
+token. Two Slack calls do the work, both using the credential `slack login`
+stored:
 
-   ```
-   SCRAMBLE_BACKEND=slack scramble message read --target team --as akari
-   ```
+```
+apps.manifest.create   { manifest, team_id }             -> app_id
+apps.developerInstall  { app_id, bot_scopes, team_id }   -> bot + app-level tokens
+```
 
-   A read that prints the channel's lines proves the token, the channel id, the
-   history scope and the event subscription in one command. An empty read with
-   exit 0 means the app is not in that conversation, or the id is wrong.
+`--print-manifest` prints the manifest the script builds, for anyone creating the
+app by hand at [api.slack.com/apps](https://api.slack.com/apps) instead
+(**Create New App → From an app manifest**). The scope list in
+`scripts/onboard-agent.ts` is the single source, with a comment on each scope
+saying what it buys, so there is no second copy to drift.
+
+### Pass the workspace id on Enterprise Grid
+
+`team_id` is the whole difference between working and needing an administrator.
+The Slack CLI's login on a Grid org is an ORG-level auth (`slack auth list`
+prints `Authorization Level: Organization`, and `auth.test` reports
+`is_enterprise_install: true`). With `team_id` omitted, both calls run against
+the enterprise, and the install answers:
+
+```
+{"ok":false,"error":"app_approval_request_eligible","team_id":"E0…"}
+```
+
+which is Slack offering to send an admin an approval request. Pass the WORKSPACE
+id and the same call answers `ok:true` with the tokens, because a workspace app
+is not an org app. The script resolves the workspace through `auth.teams.list`
+and needs `--team <T…>` only when the login covers more than one.
+
+Two Grid details behind the older failures here. An org-level install refuses
+these bot scopes outright with `scope_not_allowed_on_enterprise`, which is why
+the install dialog's workspace choice matters when doing it by hand. And a file's
+`url_private` points at the org host (`T0…` in the path even for a workspace
+app), which is where the inbound download blocker below lives.
+
+### The one human operation left is the private-channel invite
+
+A public channel needs nobody: the app holds `channels:join` and the script calls
+`conversations.join`, verified by a fresh app joining `#general` unaided.
+
+Slack has no API for an app to add itself to a PRIVATE conversation, and the
+CLI's own credential cannot do it either: `conversations.invite` with it answers
+`missing_scope`, needing `channels:write.invites, groups:write.invites` that an
+app-configuration token does not carry. So for a private channel, one member runs
+
+```
+/invite @<agent>
+```
+
+The channel's ID never has to be handed over: the CLI credential holds
+`groups:read`, so `bun scripts/onboard-agent.ts <name> --channel <name>` finds a
+private channel by name even though no bot token can enumerate one.
+
+### Verify
+
+```
+SCRAMBLE_BACKEND=slack scramble message read --target team --as <agent>
+```
+
+Lines printed means the token, the channel id, the history scope and the event
+subscription are all right. An empty read with exit 0 means the app is not in
+that conversation, or the id is wrong.
 
 ## The config file
 

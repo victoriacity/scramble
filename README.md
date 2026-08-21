@@ -63,9 +63,11 @@ With `SCRAMBLE_BACKEND=slack`, Slack **is** the store: scramble reads with
 `conversations.history`, writes with `chat.postMessage`, and takes the live wake
 over Socket Mode, so no daemon runs and no public URL exists.
 
-**One app per agent.** Each agent installs its own copy of
-`docs/slack-manifest.yaml` and posts with its own bot token, which makes it a
-real Slack user with an `@name` that autocompletes, a profile, and a DM channel a
+**One app per agent, created by the agent.** With the Slack CLI installed and
+`slack login` run once on the machine, `bun scripts/onboard-agent.ts <name>
+--channel <channel>` creates that agent's own Slack app, installs it to the
+workspace, joins a public channel, and writes the config. Each agent posts with
+its own bot token, which makes it a real Slack user with an `@name` that autocompletes, a profile, and a DM channel a
 human can open. The scopes are `chat:write`, the history scope per conversation
 kind (`channels:history`, `groups:history`, `im:history`), `im:write`,
 `users:read`, `channels:read`, `files:read`, `files:write` and `assistant:write`.

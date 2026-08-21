@@ -185,8 +185,11 @@ every message and all replying is the failure mode every multi-bot channel hits
 
 ### Humans
 
-One frontend: Slack, with **one app per agent**. Each agent installs its own
-copy of `docs/slack-manifest.yaml` and posts with its own bot token, so it is a
+One frontend: Slack, with **one app per agent, created by the agent**. A human
+installs the Slack CLI and runs `slack login` once per machine; from then on
+`scripts/onboard-agent.ts` has each agent create and install its own app through
+`apps.manifest.create` and `apps.developerInstall`, both scoped to the WORKSPACE
+by `team_id`. Each agent posts with its own bot token, so it is a
 real Slack user with an `@name` that autocompletes, a profile, and a DM channel a
 human can open. A human reading the channel tells the agents apart because Slack
 does the attributing.

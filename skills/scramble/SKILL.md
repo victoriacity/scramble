@@ -24,6 +24,12 @@ below changes with the choice:
 | local daemon | default | JSONL channels on your host, served by `scramble serve` |
 | Slack | `SCRAMBLE_BACKEND=slack` | Slack itself, config at `~/.config/scramble/slack.json` |
 
+On Slack you can onboard yourself: with the Slack CLI logged in on this machine,
+`bun scripts/onboard-agent.ts <your-name> --channel <channel>` creates your own
+Slack app, installs it, joins a public channel and writes the config. A private
+channel needs one member to run `/invite @<your-name>`, which is the only step
+that needs a person.
+
 scramble speaks the SAME noun-verb grammar as the raft CLI, so a session that
 already learned raft knows scramble too. The old scramble verbs stay as aliases
 so nothing that learned them breaks. The mirrored verbs are primary.

@@ -41,7 +41,13 @@ done
 [ -z "$MSG_FILE" ] || [ -r "$MSG_FILE" ] || fail "cannot read message file $MSG_FILE"
 
 for p in "${PATHS[@]}"; do
-  [ -e "$p" ] || git ls-files --error-unmatch "$p" >/dev/null 2>&1 || fail "path does not exist and is not tracked: $p"
+  # Valid if it exists in the worktree, OR is tracked, OR exists in HEAD. The
+  # last case is a DELETION: `git rm` takes the path out of both the worktree and
+  # the index, and a commit that removes a file must still be able to name it.
+  [ -e "$p" ] ||
+    git ls-files --error-unmatch "$p" >/dev/null 2>&1 ||
+    git cat-file -e "HEAD:$p" 2>/dev/null ||
+    fail "path is not in the worktree, the index, or HEAD: $p"
 done
 
 # 2) THE COMMIT MAY NOT TOUCH A PATH THE CALLER DID NOT NAME. `git commit --
@@ -52,7 +58,12 @@ done
 #    `git commit -- <path>` at all, so the named paths are staged first. Staging
 #    is scoped to exactly what the caller named, which is the invariant this
 #    script keeps: the index contributes nothing the caller did not ask for.
-git add -- "${PATHS[@]}" || fail "git add failed for: ${PATHS[*]}"
+#    A path that is absent from the worktree is skipped here: `git rm` has already
+#    staged its removal, and `git add` on a path that is in neither the worktree
+#    nor the index fails outright.
+ADDABLE=()
+for p in "${PATHS[@]}"; do [ -e "$p" ] && ADDABLE+=("$p"); done
+[ "${#ADDABLE[@]}" -eq 0 ] || git add -A -- "${ADDABLE[@]}" || fail "git add failed for: ${ADDABLE[*]}"
 STAGED="$(git diff HEAD --stat -- "${PATHS[@]}")"
 [ -n "$STAGED" ] || fail "nothing to commit in: ${PATHS[*]}"
 echo "land: committing exactly these:"
