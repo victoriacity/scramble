@@ -937,7 +937,7 @@ describe("inbound file downloads", () => {
     expect(lines).toHaveLength(1);
     expect(lines[0]!.files![0]!.id).toBe("F2");
     expect(lines[0]!.files![0]!.path).toBeUndefined();
-    expect(problems.some((pr) => pr.includes("HTML"))).toBe(true);
+    expect(problems.some((pr) => pr.includes("not the file"))).toBe(true);
   });
 
   test("a message with no files carries no files field at all", async () => {

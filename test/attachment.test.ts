@@ -211,10 +211,12 @@ describe("attachment upload through the slack backend", () => {
         // The channel travels as a BARE id under `channel_id`. Slack answers
         // channel_not_found to `channels=["C1"]`, so a JSON-array channel value
         // is the defect this asserts against, not an accepted alternative.
-        expect(form.get("channel_id")).toBe("C1");
+        // Neither channel field is sent: the endpoint shares nothing when
+        // asked, so the file is stored here and attached by its permalink.
+        expect(form.get("channel_id")).toBeNull();
         expect(form.get("channels")).toBeNull();
         expect(JSON.parse(form.get("files")!)).toEqual([{ id: "UPLOAD1", title: "upload.txt" }]);
-        return new Response(JSON.stringify({ ok: true, files: [{ id: "UPLOAD1", channels: ["C1"] }] }), { status: 200 });
+        return new Response(JSON.stringify({ ok: true, files: [{ id: "UPLOAD1", permalink: "https://x.slack.com/files/U1/UPLOAD1/f.txt" }] }), { status: 200 });
       }
       return new Response(JSON.stringify({ ok: true }), { status: 200 });
     });
@@ -234,7 +236,7 @@ describe("attachment upload through the slack backend", () => {
     const { io } = slackIo(cwd, async (url, init) => {
       if (url.includes("getUploadURLExternal")) return new Response(JSON.stringify({ ok: true, upload_url: "https://u/x", file_id: "F" }), { status: 200 });
       if (url === "https://u/x") { putMime = (init?.headers as Record<string, string>)["content-type"] ?? ""; return new Response("", { status: 200 }); }
-      if (url.includes("completeUploadExternal")) return new Response(JSON.stringify({ ok: true, files: [{ id: "F", channels: ["C1"] }] }), { status: 200 });
+      if (url.includes("completeUploadExternal")) return new Response(JSON.stringify({ ok: true, files: [{ id: "F", permalink: "https://x.slack.com/files/U1/F/f.txt" }] }), { status: 200 });
       return new Response(JSON.stringify({ ok: true }), { status: 200 });
     });
     const code = await main(["attachment", "upload", "--path", src, "--target", "general", "--backend", "slack", "--mime-type", "text/custom"], io);
@@ -397,7 +399,13 @@ describe("downloadFile (shared)", () => {
     const d = scratchDir("dl-html");
     const r = await downloadFile(async () => new Response("<html>no auth</html>", { headers: { "content-type": "text/html" } }), "https://files/x", "tok", d, "F5", "x.html");
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.error).toContain("HTML");
+    // The error names WHAT ARRIVED: the status, the content type, the byte
+    // count and the body's head, because "returned HTML" hid a 19-byte
+    // `Error serving file.` from the origin and cost a wrong diagnosis.
+    if (!r.ok) {
+      expect(r.error).toContain("not the file");
+      expect(r.error).toContain("text/html");
+    }
   });
 });
 
@@ -438,7 +446,7 @@ describe("uploadToSlack failure branches", () => {
       if (url.includes("getUploadURLExternal")) return new Response(JSON.stringify({ ok: true, upload_url: "https://pt/", file_id: "F" }), { status: 200 });
       if (url.startsWith("https://pt/")) throw new Error("put down");
       if (url.includes("completeUploadExternal")) { completes++; }
-      return new Response(JSON.stringify({ ok: true, files: [{ id: "F1", channels: ["C1"] }] }), { status: 200 });
+      return new Response(JSON.stringify({ ok: true, files: [{ id: "F1", permalink: "https://x.slack.com/files/U1/F1/f.txt" }] }), { status: 200 });
     }, "tok", f, "C1");
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toContain("PUT");
@@ -517,14 +525,12 @@ describe("slack upload form encoding and detail", () => {
       if (url.startsWith("https://pt/")) return new Response("", { status: 200 });
       if (url.includes("completeUploadExternal")) {
         body = String(init?.body);
-        return new Response(JSON.stringify({ ok: true, files: [{ id: "F1", channels: ["C1"] }] }), { status: 200 });
+        return new Response(JSON.stringify({ ok: true, files: [{ id: "F1", permalink: "https://x.slack.com/files/U1/F1/f.txt" }] }), { status: 200 });
       }
-      return new Response(JSON.stringify({ ok: true, files: [{ id: "F1", channels: ["C1"] }] }), { status: 200 });
+      return new Response(JSON.stringify({ ok: true, files: [{ id: "F1", permalink: "https://x.slack.com/files/U1/F1/f.txt" }] }), { status: 200 });
     }, "tok", f, "C1");
     const form = parseForm(body);
-    expect(Object.keys(form).sort()).toEqual(["channel_id", "files"]);
-    // The bare id, because Slack answers channel_not_found to a JSON array here.
-    expect(form["channel_id"]).toBe("C1");
+    expect(Object.keys(form).sort()).toEqual(["files"]);
     const files = JSON.parse(form["files"]!) as Array<{ id: string; title: string }>;
     expect(files).toHaveLength(1);
     expect(files[0]!.id).toBe("F1");
@@ -537,7 +543,7 @@ describe("slack upload form encoding and detail", () => {
     writeFileSync(f, "hello");
     const r = await uploadToSlack(async (url) => {
       if (url.includes("getUploadURLExternal")) return new Response(JSON.stringify({ ok: false, error: "invalid_arguments", response_metadata: { messages: ["[ERROR] missing required field: length", "[ERROR] missing required field: filename"] } }), { status: 200 });
-      return new Response(JSON.stringify({ ok: true, files: [{ id: "F1", channels: ["C1"] }] }), { status: 200 });
+      return new Response(JSON.stringify({ ok: true, files: [{ id: "F1", permalink: "https://x.slack.com/files/U1/F1/f.txt" }] }), { status: 200 });
     }, "tok", f, "C1");
     expect(r.ok).toBe(false);
     if (!r.ok) {
@@ -553,7 +559,7 @@ describe("slack upload form encoding and detail", () => {
     writeFileSync(f, "hello");
     const r = await uploadToSlack(async (url) => {
       if (url.includes("getUploadURLExternal")) return new Response(JSON.stringify({ ok: false }), { status: 200 });
-      return new Response(JSON.stringify({ ok: true, files: [{ id: "F1", channels: ["C1"] }] }), { status: 200 });
+      return new Response(JSON.stringify({ ok: true, files: [{ id: "F1", permalink: "https://x.slack.com/files/U1/F1/f.txt" }] }), { status: 200 });
     }, "tok", f, "C1");
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toContain("slack request failed");
@@ -565,7 +571,7 @@ describe("slack upload form encoding and detail", () => {
     writeFileSync(f, "hello");
     const r = await uploadToSlack(async (url) => {
       if (url.includes("getUploadURLExternal")) return new Response(JSON.stringify({ ok: false, error: "bad", response_metadata: { messages: [] } }), { status: 200 });
-      return new Response(JSON.stringify({ ok: true, files: [{ id: "F1", channels: ["C1"] }] }), { status: 200 });
+      return new Response(JSON.stringify({ ok: true, files: [{ id: "F1", permalink: "https://x.slack.com/files/U1/F1/f.txt" }] }), { status: 200 });
     }, "tok", f, "C1");
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toBe("bad");
@@ -580,7 +586,7 @@ describe("slack upload form encoding and detail", () => {
       if (url.includes("getUploadURLExternal")) return new Response(JSON.stringify({ ok: true, upload_url: "https://pt/", file_id: "F" }), { status: 200 });
       if (url.startsWith("https://pt/")) return new Response("gone", { status: 400 });
       if (url.includes("completeUploadExternal")) completes++;
-      return new Response(JSON.stringify({ ok: true, files: [{ id: "F1", channels: ["C1"] }] }), { status: 200 });
+      return new Response(JSON.stringify({ ok: true, files: [{ id: "F1", permalink: "https://x.slack.com/files/U1/F1/f.txt" }] }), { status: 200 });
     }, "tok", f, "C1");
     expect(r.ok).toBe(false);
     if (!r.ok) {
@@ -603,7 +609,7 @@ describe("slack upload form encoding and detail", () => {
       if (url.includes("getUploadURLExternal")) return new Response(JSON.stringify({ ok: true, upload_url: "https://pt/", file_id: "F" }), { status: 200 });
       if (url.startsWith("https://pt/")) return unreadable;
       if (url.includes("completeUploadExternal")) completes++;
-      return new Response(JSON.stringify({ ok: true, files: [{ id: "F1", channels: ["C1"] }] }), { status: 200 });
+      return new Response(JSON.stringify({ ok: true, files: [{ id: "F1", permalink: "https://x.slack.com/files/U1/F1/f.txt" }] }), { status: 200 });
     }, "tok", f, "C1");
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toContain("answered 400");
@@ -618,7 +624,7 @@ describe("slack upload form encoding and detail", () => {
     const r = await uploadToSlack(async (url) => {
       if (url.includes("getUploadURLExternal")) return new Response(JSON.stringify({ ok: true, upload_url: "https://pt/", file_id: "F456" }), { status: 200 });
       if (url.startsWith("https://pt/")) return new Response(bytes, { status: 200 });
-      return new Response(JSON.stringify({ ok: true, files: [{ id: "F456", channels: ["C1"] }] }), { status: 200 });
+      return new Response(JSON.stringify({ ok: true, files: [{ id: "F456", permalink: "https://x.slack.com/files/U1/F456/f.txt" }] }), { status: 200 });
     }, "tok", f, "C1");
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.out.id).toBe("F456");
@@ -737,35 +743,31 @@ describe("uploadToSlack network failure", () => {
   });
 });
 
-describe("a stored-but-unshared upload is a failure", () => {
-  test("ok:true with shares:{} and empty channels is reported, not returned as success", async () => {
-    const d = scratchDir("no-share");
+describe("an upload is attachable or it is a failure", () => {
+  test("the permalink comes back on the result, since it is what attaches the file", async () => {
+    const d = scratchDir("perma-ok");
     const f = join(d, "x.txt");
     writeFileSync(f, "hello");
     const r = await uploadToSlack(async (url) => {
       if (url.includes("getUploadURLExternal")) return new Response(JSON.stringify({ ok: true, upload_url: "https://pt/", file_id: "F9" }), { status: 200 });
       if (url.startsWith("https://pt/")) return new Response("", { status: 200 });
-      // Exactly what the real endpoint answered: stored, shared with nothing.
-      return new Response(JSON.stringify({ ok: true, files: [{ id: "F9", shares: {}, channels: [], groups: [], ims: [] }] }), { status: 200 });
+      return new Response(JSON.stringify({ ok: true, files: [{ id: "F9", permalink: "https://x.slack.com/files/U1/F9/x.txt" }] }), { status: 200 });
     }, "tok", f, "C1");
-    expect(r.ok).toBe(false);
-    if (!r.ok) {
-      expect(r.error).toContain("shared it with nothing");
-      expect(r.error).toContain("C1");
-      expect(r.error).toContain("groups:read");
-    }
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.out.permalink).toBe("https://x.slack.com/files/U1/F9/x.txt");
   });
 
-  test("a share recorded under `shares` counts as shared", async () => {
-    const d = scratchDir("share-shares");
+  test("ok:true with no permalink is reported, not returned as success", async () => {
+    const d = scratchDir("perma-none");
     const f = join(d, "x.txt");
     writeFileSync(f, "hello");
     const r = await uploadToSlack(async (url) => {
-      if (url.includes("getUploadURLExternal")) return new Response(JSON.stringify({ ok: true, upload_url: "https://pt/", file_id: "F10" }), { status: 200 });
+      if (url.includes("getUploadURLExternal")) return new Response(JSON.stringify({ ok: true, upload_url: "https://pt/", file_id: "F9" }), { status: 200 });
       if (url.startsWith("https://pt/")) return new Response("", { status: 200 });
-      return new Response(JSON.stringify({ ok: true, files: [{ id: "F10", shares: { private: { C1: [{ ts: "1.1" }] } } }] }), { status: 200 });
+      return new Response(JSON.stringify({ ok: true, files: [{ id: "F9" }] }), { status: 200 });
     }, "tok", f, "C1");
-    expect(r.ok).toBe(true);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toContain("no permalink");
   });
 
   test("an accepted upload that returns no file at all is reported", async () => {
@@ -778,6 +780,46 @@ describe("a stored-but-unshared upload is a failure", () => {
       return new Response(JSON.stringify({ ok: true }), { status: 200 });
     }, "tok", f, "C1");
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.error).toContain("returned no file");
+    if (!r.ok) expect(r.error).toContain("no permalink");
+  });
+});
+
+describe("a file download re-sends the auth header across a redirect", () => {
+  test("a 302 is followed by hand WITH the token, so the bytes arrive", async () => {
+    const d = scratchDir("dl-redirect");
+    const seen: Array<{ url: string; auth: string }> = [];
+    const r = await downloadFile(async (url, init) => {
+      seen.push({ url: String(url), auth: String((init?.headers as Record<string, string>)?.["authorization"] ?? "") });
+      if (String(url).includes("files-pri")) {
+        return new Response("", { status: 302, headers: { location: "https://files-origin.slack.com/x/f.txt" } });
+      }
+      return new Response("REAL-BYTES", { status: 200, headers: { "content-type": "text/plain" } });
+    }, "https://files.slack.com/files-pri/T1-F1/f.txt", "tok", d, "F1", "f.txt");
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(readFileSync(r.path, "utf8")).toBe("REAL-BYTES");
+    // BOTH requests carry the token: dropping it on the second is the defect,
+    // because Slack then serves its sign-in page as a 200 text/html body.
+    expect(seen).toHaveLength(2);
+    expect(seen[0]!.auth).toBe("Bearer tok");
+    expect(seen[1]!.auth).toBe("Bearer tok");
+    expect(seen[1]!.url).toBe("https://files-origin.slack.com/x/f.txt");
+  });
+
+  test("a redirect with no location stops rather than looping", async () => {
+    const d = scratchDir("dl-noloc");
+    const r = await downloadFile(async () => new Response("", { status: 302 }), "https://files.slack.com/a", "tok", d, "F1", "f.txt");
+    expect(r.ok).toBe(false);
+  });
+
+  test("an endless redirect chain is bounded and reported", async () => {
+    const d = scratchDir("dl-loop");
+    let n = 0;
+    const r = await downloadFile(async () => {
+      n += 1;
+      return new Response("", { status: 302, headers: { location: `https://files-origin.slack.com/${n}` } });
+    }, "https://files.slack.com/a", "tok", d, "F1", "f.txt");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toContain("still redirecting");
+    expect(n).toBe(4);
   });
 });

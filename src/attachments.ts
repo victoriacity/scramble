@@ -17,6 +17,9 @@ import { basename, join } from "node:path";
 /** raft's attachment size cap, mirrored so the two tools refuse the same file. */
 export const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024;
 
+/** How many redirect hops a file download re-issues WITH the auth header. */
+const MAX_DOWNLOAD_HOPS = 3;
+
 /** One file carried on a message line (the shape Message.files is built from). */
 export interface Attachment {
   id: string;
@@ -114,9 +117,34 @@ export async function downloadFile(
   fileId: string,
   name: string,
 ): Promise<DownloadResult> {
+  // FOLLOW THE REDIRECT BY HAND. Slack answers a file url_private with a 302 to
+  // files-origin.slack.com, and both fetch and curl -L DROP the Authorization
+  // header on a cross-host redirect, so the followed request arrives
+  // unauthenticated and Slack serves its sign-in page: 200, text/html, 69KB.
+  // That is what the HTML guard below was catching. Re-issuing the request to
+  // the Location WITH the header is the only way the bytes can arrive.
   let res: Response;
   try {
-    res = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
+    res = await fetch(url, {
+      headers: { authorization: `Bearer ${token}` },
+      redirect: "manual",
+    });
+    let hops = 0;
+    while (res.status >= 300 && res.status < 400 && hops < MAX_DOWNLOAD_HOPS) {
+      const next = res.headers.get("location");
+      if (next === null || next === "") break;
+      res = await fetch(new URL(next, url).toString(), {
+        headers: { authorization: `Bearer ${token}` },
+        redirect: "manual",
+      });
+      hops += 1;
+    }
+    if (res.status >= 300 && res.status < 400) {
+      return {
+        ok: false,
+        error: `file download from ${url} still redirecting after ${MAX_DOWNLOAD_HOPS} hops`,
+      };
+    }
   } catch {
     return { ok: false, error: `file download failed for ${url}` };
   }
@@ -127,9 +155,17 @@ export async function downloadFile(
     return { ok: false, error: `file download returned no bytes for ${url}` };
   }
   if (isHtmlResponse(res, bytes)) {
+    // PRINT WHAT ARRIVED, not the classification. "returned HTML" sent me
+    // hunting for an auth problem while the body said `Error serving file.` in
+    // 19 bytes, which is a different failure entirely: the token was accepted
+    // and the origin would not serve the bytes.
+    const head = new TextDecoder().decode(bytes.slice(0, 200)).replace(/\s+/g, " ").trim();
     return {
       ok: false,
-      error: `file download returned HTML (text/html) from ${url}`,
+      error:
+        `file download from ${url} answered ${res.status} ` +
+        `${res.headers.get("content-type") ?? "(no content-type)"}, ${bytes.length} bytes, ` +
+        `not the file: ${head}`,
     };
   }
   if (bytes.length > MAX_ATTACHMENT_BYTES) {
@@ -149,6 +185,12 @@ export interface SlackUploadResult {
   name: string;
   mime: string;
   size: number;
+  /** Slack's own link to the file. Putting this in a message's TEXT is what
+   *  attaches the file to that message: Slack unfurls it, the message then
+   *  carries the file, and `files.info` records the share. Verified live, and it
+   *  is the ONE mechanism that attaches, which is why the upload no longer asks
+   *  completeUploadExternal to share (see uploadToSlack). */
+  permalink: string;
 }
 
 const GET_UPLOAD_URL = "https://slack.com/api/files.getUploadURLExternal";
@@ -200,58 +242,40 @@ export async function uploadToSlack(
       error: `PUT to ${uploadUrl} answered ${put.status}${text ? `: ${text}` : ""}`,
     };
   }
+  // NO channel_id here, deliberately. Asked to share, the endpoint answers
+  // ok:true and shares with nothing: probed with an exact byte count and a 200
+  // on the PUT, the reply carried "shares":{} and "channels":[], the file was
+  // stored at 11 bytes, and no message ever carried it. The mechanism that DOES
+  // attach a file is its permalink in the message text, which Slack unfurls into
+  // a real share, so this call stores the bytes and the send attaches them. One
+  // intent, one mechanism.
   const complete = await readSlack(fetch, COMPLETE_UPLOAD_URL, token, {
     files: [{ id: fileId, title: name }],
-    // `channel_id`, a BARE id, never `channels: [id]`. The array rule in
-    // urlForm is right for `files` and wrong here: probed against the real
-    // endpoint, `channels=["C0EXAMPLE006"]` answers
-    // {"ok":false,"error":"channel_not_found"} while the bare id answers
-    // ok:true, because Slack reads this field as an id rather than as JSON.
-    channel_id: slackChannelId,
   });
   if (!complete.ok) return { ok: false, error: complete.error };
-  const shared = shareEvidence(complete.data, slackChannelId);
-  if (shared !== undefined) return { ok: false, error: shared };
-  return { ok: true, out: { id: fileId, name, mime, size } };
+  const permalink = filePermalink(complete.data);
+  if (permalink === undefined) {
+    return {
+      ok: false,
+      error:
+        `slack accepted the upload of ${name} and returned no permalink, so nothing can ` +
+        `attach it to a message: ${JSON.stringify(complete.data).slice(0, 400)}`,
+    };
+  }
+  return { ok: true, out: { id: fileId, name, mime, size, permalink } };
 }
 
-/** Did the file actually reach the conversation? `ok:true` from
- *  completeUploadExternal does NOT mean it did: probed against the real
- *  endpoint with an exact byte count and a 200 on the PUT, the reply carried
- *  `"shares":{}` and `"channels":[]`, the file existed at 11 bytes in
- *  `files.info`, and no message ever appeared in the conversation. Taking that
- *  reply as success is acceptance-as-success, so the share is READ from the
- *  same reply, which already carries it. Returns an error string when the reply
- *  shows no share, and undefined when it shows one. */
-function shareEvidence(data: Record<string, unknown>, target: string): string | undefined {
+/** The permalink of the first file in a completeUploadExternal reply, or
+ *  undefined when the reply carries no file or no link. Undefined is a FAILURE
+ *  for the caller: without the link there is no way to attach the stored file to
+ *  a message, so an upload that returns one is an orphan in Slack's storage. */
+function filePermalink(data: Record<string, unknown>): string | undefined {
   const files = data.files;
-  if (!Array.isArray(files) || files.length === 0) {
-    return `slack accepted the upload and returned no file: ${JSON.stringify(data).slice(0, 400)}`;
-  }
-  const f = files[0] as Record<string, unknown>;
-  const lists = (["channels", "groups", "ims"] as const).flatMap((k) => {
-    const v = f[k];
-    return Array.isArray(v) ? (v as unknown[]).map(String) : [];
-  });
-  if (lists.includes(target)) return undefined;
-  const shares = f.shares;
-  const shareCount =
-    shares !== null && typeof shares === "object"
-      ? Object.values(shares as Record<string, unknown>).reduce<number>(
-          (n, v) => n + (v !== null && typeof v === "object" ? Object.keys(v as object).length : 0),
-          0,
-        )
-      : 0;
-  if (shareCount > 0) return undefined;
-  return (
-    `slack stored the file but shared it with nothing: channel_id=${target} ` +
-    `shares=${JSON.stringify(shares ?? null)} channels=${JSON.stringify(f.channels ?? [])} ` +
-    `groups=${JSON.stringify(f.groups ?? [])} ims=${JSON.stringify(f.ims ?? [])}. ` +
-    `The file exists (id ${String(f.id)}) and no message carries it. An app can hit this ` +
-    `when it cannot resolve the target conversation: a private channel needs groups:read, ` +
-    `and the app must be a member of the conversation it shares into.`
-  );
+  if (!Array.isArray(files) || files.length === 0) return undefined;
+  const link = (files[0] as Record<string, unknown>).permalink;
+  return typeof link === "string" && link.length > 0 ? link : undefined;
 }
+
 
 /** Encode an object as an `application/x-www-form-urlencoded` body. Arrays and
  *  objects become ONE JSON-encoded field value (a form field cannot hold an
