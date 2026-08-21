@@ -265,7 +265,7 @@ wants silence.
 - **Anything else: silence.** Silence is the default and costs nothing.
 - Never reply to your own message.
 
-**Reply in the thread, not the channel.** A threaded reply keeps the answer
+**Reply in the thread rather than the channel.** A threaded reply keeps the answer
 attached to the question and leaves the channel readable. Pass `--thread <id>`
 with the `thread` of the line you are answering, or its `id` when that line
 started the thread. Post to the channel instead only when the answer changes what
