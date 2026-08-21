@@ -256,7 +256,35 @@ for (const name of run) {
     check(name, false, `threw: ${String(e)}`);
   }
 }
+// WRITE THE RECORD, naming the commit it ran against. A claim that the Slack
+// path works is checkable against this file instead of against memory: if the
+// commit here is not HEAD, the claim is about code that no longer exists.
+const head = await (async () => {
+  const p = Bun.spawn(["git", "rev-parse", "--short", "HEAD"], { stdout: "pipe", stderr: "ignore" });
+  const out = (await new Response(p.stdout).text()).trim();
+  await p.exited;
+  return out === "" ? "(unknown)" : out;
+})();
+await Bun.write(
+  join(".scramble", "last-live-smoke.json"),
+  `${JSON.stringify(
+    {
+      commit: head,
+      at: new Date().toISOString(),
+      channel: CHANNEL,
+      self: SELF,
+      peer: PEER,
+      stages: run,
+      failures,
+      passed: failures.length === 0,
+    },
+    null,
+    2,
+  )}\n`,
+);
+
 console.log(`\n== live-smoke summary ==`);
+console.log(`recorded in .scramble/last-live-smoke.json at commit ${head}`);
 if (failures.length === 0) {
   console.log(`ALL ${run.length} stage(s) PASSED against the real workspace`);
   process.exit(0);

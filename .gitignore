@@ -15,3 +15,4 @@ slack-auth-ticket.txt
 .config/
 .scramble/cursor.json
 .scramble/status.json
+.scramble/last-live-smoke.json
