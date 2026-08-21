@@ -172,6 +172,17 @@ export function createHandler(store: RoomStore, opts: ServerOptions = {}) {
     );
   }
 
+  /** A FINITE snapshot of what is pending for an agent at a cursor: the same
+   *  set the agent stream would have delivered first, as an array. `message
+   *  check` needs a bounded non-blocking read, so the store's client holds the
+   *  per-agent cursor and asks for everything after it. */
+  function agentPending(name: string, url: URL): Response {
+    const msgs = store.readAll(sinceNum(url)).filter(
+      (m) => m.from !== name && store.roomsFor(name).includes(m.room),
+    );
+    return json(200, msgs.map((m) => store.deliveryFor(name, m)));
+  }
+
   function firehose(url: URL): Response {
     return new Response(lineStream(store.readAll(sinceNum(url)), () => true, JSON.stringify), {
       headers: { "content-type": "application/x-ndjson" },
@@ -218,6 +229,8 @@ export function createHandler(store: RoomStore, opts: ServerOptions = {}) {
       if (parts.length === 2 && method === "POST") return joinAgent(parts[1]!, req);
       if (parts.length === 3 && parts[2] === "stream" && method === "GET")
         return agentStream(parts[1]!, url);
+      if (parts.length === 3 && parts[2] === "pending" && method === "GET")
+        return agentPending(parts[1]!, url);
       return json(404, { error: "not found" });
     }
     // The current global seq. A bridge reads it once at startup and opens its

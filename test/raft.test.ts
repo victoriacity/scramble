@@ -389,6 +389,56 @@ describe("raft through main()", () => {
   });
 });
 
+// --- the mirrored raft grammar through main() ---------------------------
+describe("mirrored raft grammar", () => {
+  test("message send --target pipes stdin to raft and exits 0", async () => {
+    const cwd = scratchDir("mirror-send");
+    const { run, calls } = fakeRaft({ exit: 0, stdout: "ok", stderr: "" });
+    const { io } = raftIo(cwd, run);
+    io.readStdin = async () => "hello from stdin";
+    const code = await main(["message", "send", "--target", "general", "--as", "ana", "--backend", "raft"], io);
+    expect(code).toBe(0);
+    expect(calls[0]!.args).toEqual(["message", "send", "--target", "#general"]);
+    expect(calls[0]!.stdin).toBe("hello from stdin");
+  });
+
+  test("message check drains raft deliveries", async () => {
+    const cwd = scratchDir("mirror-check");
+    const { run } = fakeRaft({
+      exit: 0,
+      stdout: JSON.stringify({ channel: "#room", text: "@ana ping", from: "bob" }),
+      stderr: "",
+    });
+    const { io, writes } = raftIo(cwd, run);
+    const code = await main(["message", "check", "--as", "ana", "--backend", "raft"], io);
+    expect(code).toBe(0);
+    expect(JSON.parse(writes[0]!)).toMatchObject({ from: "bob", text: "@ana ping", mentioned: true });
+  });
+
+  test("message read --after passes the cursor to raft and prints deliveries", async () => {
+    const cwd = scratchDir("mirror-read");
+    const { run, calls } = fakeRaft({
+      exit: 0,
+      stdout: JSON.stringify({ channel: "#general", text: "one", from: "bob" }),
+      stderr: "",
+    });
+    const { io, writes } = raftIo(cwd, run);
+    const code = await main(["message", "read", "--target", "general", "--after", "3", "--as", "ana", "--backend", "raft"], io);
+    expect(code).toBe(0);
+    expect(calls[0]!.args).toEqual(["message", "read", "--target", "#general", "--after", "3"]);
+    expect(JSON.parse(writes[0]!)).toMatchObject({ from: "bob", text: "one", room: "general" });
+  });
+
+  test("message read surfaces a raft failure", async () => {
+    const cwd = scratchDir("mirror-read-fail");
+    const { run } = fakeRaft({ exit: 1, stdout: "", stderr: "gone" });
+    const { io, errs } = raftIo(cwd, run);
+    const code = await main(["message", "read", "--target", "general", "--backend", "raft"], io);
+    expect(code).toBe(1);
+    expect(errs.some((l) => l.includes("gone"))).toBe(true);
+  });
+});
+
 describe("selectBackend", () => {
   function ioWithEnv(env: string | undefined): Io {
     return {

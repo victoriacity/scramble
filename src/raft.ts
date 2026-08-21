@@ -220,10 +220,13 @@ export class RaftBackend {
     }
   }
 
-  /** Read room history from raft. Unparseable lines are REPORTED, not dropped. */
-  async history(room: string, from: string): Promise<{ code: 0 | 1; error?: string; messages: Message[]; problems: string[] }> {
+  /** Read room history from raft. `--after N` mirrors the read cursor; raft's
+   *  seq is per target, so after is passed through verbatim. Unparseable lines
+   *  are REPORTED, not dropped. */
+  async history(room: string, from: string, after?: number): Promise<{ code: 0 | 1; error?: string; messages: Message[]; problems: string[] }> {
     const target = toTarget(room, from);
-    const res = await this.run("raft", raftArgs(this.profile, ["message", "read", "--target", target]), "");
+    const args = ["message", "read", "--target", target, ...(after !== undefined ? ["--after", String(after)] : [])];
+    const res = await this.run("raft", raftArgs(this.profile, args), "");
     if (isErrorRun(res)) return { code: 1, error: this.errorText(res), messages: [], problems: [] };
     const messages: Message[] = [];
     const problems: string[] = [];
