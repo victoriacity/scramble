@@ -6,6 +6,7 @@ import type { SlackSocket } from "../src/slack-transport";
 import {
   SlackBackend,
   computeMentions,
+  THREAD_EXPANSION_CAP,
   type SlackBackendConfig,
   type SlackInboundEvent,
 } from "../src/slack-backend";
@@ -32,6 +33,7 @@ class FakeSocket implements SlackSocket {
 
 const SOCKET_OPEN = "slack.com/api/apps.connections.open";
 const HISTORY = "slack.com/api/conversations.history";
+const REPLIES = "slack.com/api/conversations.replies";
 const POST = "slack.com/api/chat.postMessage";
 const USERS = "slack.com/api/users.info";
 
@@ -299,6 +301,124 @@ describe("history", () => {
     expect(r.messages[0]!.thread).toBe("5.0");
     expect("thread" in r.messages[1]!).toBe(false);
     expect("thread" in r.messages[2]!).toBe(false);
+  });
+
+  test("a threaded root expands: each reply carries thread==root ts, the root appears once with no thread", async () => {
+    const h = make({}, async (url) => {
+      if (url.includes(REPLIES)) {
+        return new Response(JSON.stringify({ ok: true, messages: [
+          { ts: "5.0", thread_ts: "5.0", reply_count: 2, user: "U111", text: "root dup" },
+          { ts: "5.3", thread_ts: "5.0", user: "U111", text: "second" },
+          { ts: "5.1", thread_ts: "5.0", user: "U111", text: "first" },
+        ] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ ok: true, messages: [
+        { ts: "5.0", thread_ts: "5.0", reply_count: 2, user: "U111", text: "root" },
+        { ts: "4.0", user: "U111", text: "other" },
+      ] }), { status: 200 });
+    });
+    const r = await h.backend.history("general");
+    expect(r.code).toBe(0);
+    // the root appears exactly once, carrying no thread
+    const root = r.messages.filter((m) => m.ts === "5.0");
+    expect(root).toHaveLength(1);
+    expect(root[0]!.text).toBe("root"); // the root's own text, not the replies' first-entry dup
+    expect("thread" in root[0]!).toBe(false);
+    // each reply carries thread equal to the root ts
+    const replies = r.messages.filter((m) => m.text === "first" || m.text === "second");
+    expect(replies.map((m) => m.thread)).toEqual(["5.0", "5.0"]);
+  });
+
+  test("a history row with no replies triggers no conversations.replies request (proven by counting)", async () => {
+    const h = make({}, async (url) => {
+      if (url.includes(REPLIES)) throw new Error("no replies request expected for a reply-less row");
+      return new Response(JSON.stringify({ ok: true, messages: [
+        { ts: "2.0", thread_ts: "2.0", reply_count: 0, user: "U111", text: "root, no replies" },
+        { ts: "1.0", user: "U111", text: "plain" },
+      ] }), { status: 200 });
+    });
+    const r = await h.backend.history("general");
+    expect(r.code).toBe(0);
+    expect(h.fetches.filter((f) => f.url.includes(REPLIES))).toHaveLength(0);
+    expect(r.messages.length).toBe(2);
+  });
+
+  test("more threaded roots than the cap: the newest are expanded and the dropped count is named", async () => {
+    // conversations.history returns NEWEST-FIRST: index 0 is the newest root.
+    const roots = [...Array(THREAD_EXPANSION_CAP + 2)].map((_, i) => `root${i}.0`);
+    const h = make({}, async (url) => {
+      if (url.includes(REPLIES)) {
+        // echo back the root + one reply so expansions are observable
+        const rootTs = decodeURIComponent(url.split("ts=")[1]!.split("&")[0]!);
+        return new Response(JSON.stringify({ ok: true, messages: [
+          { ts: rootTs, thread_ts: rootTs, reply_count: 1, user: "U111", text: `root-dup ${rootTs}` },
+          { ts: `${rootTs}.r`, thread_ts: rootTs, user: "U111", text: `reply to ${rootTs}` },
+        ] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ ok: true, messages: roots.map((ts, i) => ({ ts, thread_ts: ts, reply_count: 1, user: "U111", text: `root ${ts} (idx ${i})` })) }), { status: 200 });
+    });
+    const r = await h.backend.history("general");
+    expect(r.code).toBe(0);
+    // only the cap is satisfied: exactly CAP conversations.replies requests
+    const reqs = h.fetches.filter((f) => f.url.includes(REPLIES));
+    expect(reqs.length).toBe(THREAD_EXPANSION_CAP);
+    // newest roots (idx 0..CAP-1) were expanded, the OLDEST (idx CAP..end) dropped
+    const expanded = reqs.map((f) => f.url.split("ts=")[1]!.split("&")[0]!);
+    for (let i = 0; i < THREAD_EXPANSION_CAP; i++) expect(expanded).toContain(roots[i]!);
+    for (let i = THREAD_EXPANSION_CAP; i < roots.length; i++) expect(expanded).not.toContain(roots[i]!);
+    // the reply to each expanded root is present, carrying thread == root
+    for (let i = 0; i < THREAD_EXPANSION_CAP; i++) {
+      const reply = r.messages.find((m) => m.text === `reply to ${roots[i]!}`);
+      expect(reply?.thread).toBe(roots[i]!);
+    }
+    // no reply for the dropped roots, and the drop is named in problems
+    for (let i = THREAD_EXPANSION_CAP; i < roots.length; i++) {
+      expect(r.messages.find((m) => m.text === `reply to ${roots[i]!}`)).toBeUndefined();
+    }
+    expect(r.problems.some((p) => p.includes(`${roots.length - THREAD_EXPANSION_CAP} threaded root(s) left unexpanded`))).toBe(true);
+  });
+
+  test("a conversations.replies ok:false keeps the top-level messages and reports the problem", async () => {
+    const h = make({}, async (url) => {
+      if (url.includes(REPLIES)) return new Response(JSON.stringify({ ok: false, error: "not_in_channel" }), { status: 200 });
+      return new Response(JSON.stringify({ ok: true, messages: [
+        { ts: "9.0", thread_ts: "9.0", reply_count: 3, user: "U111", text: "a root" },
+        { ts: "1.0", user: "U111", text: "top-level" },
+      ] }), { status: 200 });
+    });
+    const r = await h.backend.history("general");
+    expect(r.code).toBe(0);
+    // top-level messages stay intact
+    expect(r.messages.map((m) => m.text)).toEqual(["a root", "top-level"]);
+    expect(r.problems.some((p) => p.includes("thread replies failed for root 9.0"))).toBe(true);
+    expect(r.problems.some((p) => p.includes("not_in_channel"))).toBe(true);
+  });
+
+  test("a threaded-root expansion preserves attachment and mention behavior unchanged", async () => {
+    const h = make(
+      { filesDir: join(tmpdir(), `scrb-file-${process.pid}-${Math.random().toString(36).slice(2)}`) },
+      async (url) => {
+        if (url.includes(REPLIES)) {
+          return new Response(JSON.stringify({ ok: true, messages: [
+            { ts: "5.0", thread_ts: "5.0", reply_count: 1, user: "U111", text: "root dup" },
+            { ts: "5.1", thread_ts: "5.0", user: "U111", text: "@alice replied with a file", files: [{ id: "F5", name: "a.txt", url_private: "https://files.slack.com/r1", mimetype: "text/plain", size: 2 }] },
+          ] }), { status: 200 });
+        }
+        if (url.includes("files.slack.com")) {
+          return new Response(new TextEncoder().encode("ab"), { status: 200, headers: { "content-type": "text/plain" } });
+        }
+        return new Response(JSON.stringify({ ok: true, messages: [
+          { ts: "5.0", thread_ts: "5.0", reply_count: 1, user: "U111", text: "root" },
+        ] }), { status: 200 });
+      },
+    );
+    const r = await h.backend.history("general");
+    // mention + file behavior on a threaded reply: the reply's text names alice
+    // and its file is downloaded onto the line, exactly as a live thread reply.
+    const reply = r.messages.find((m) => m.text.startsWith("@alice"))!;
+    expect(reply.mentions).toContain("alice");
+    expect(reply.files![0]!.id).toBe("F5");
+    expect(Buffer.from(readFileSync(reply.files![0]!.path!)).equals(Buffer.from("ab"))).toBe(true);
   });
 });
 
