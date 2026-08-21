@@ -5,7 +5,9 @@ import { join } from "node:path";
 const ROOT = join(import.meta.dir, "..");
 const plan = readFileSync(join(ROOT, "PLAN.md"), "utf8");
 const readme = readFileSync(join(ROOT, "README.md"), "utf8");
-const manifest = readFileSync(join(ROOT, "docs", "slack-manifest.yaml"), "utf8");
+// The onboarding script is the single source for the app manifest: it creates
+// the app from this list and `--print-manifest` prints it for a manual paste.
+const onboard = readFileSync(join(ROOT, "scripts", "onboard-agent.ts"), "utf8");
 
 // The global contract note grants --url / --token to EVERY command regardless of
 // the row it appears in ("Every command accepts --url / --token ...").
@@ -111,8 +113,8 @@ describe("README content", () => {
     expect(readme).toContain("no supported-vendor list");
   });
 
-  test("points the Slack setup at the manifest", () => {
-    expect(readme).toContain("docs/slack-manifest.yaml");
+  test("points the Slack setup at the self-onboarding script", () => {
+    expect(readme).toContain("scripts/onboard-agent.ts");
     expect(readme).toContain("users:read");
   });
 
@@ -129,19 +131,41 @@ describe("README content", () => {
   });
 });
 
-describe("Slack manifest", () => {
-  test("declares the four bot scopes", () => {
-    for (const scope of ["chat:write", "chat:write.customize", "channels:history", "im:history"]) {
-      expect(manifest).toContain(scope);
+describe("the app manifest the onboarding script builds", () => {
+  test("declares every scope a feature needs", () => {
+    // No chat:write.customize: one app per agent means each agent is a real
+    // Slack user, so an identity that is only a display name has no purpose.
+    for (const scope of [
+      "chat:write",
+      "channels:history",
+      "groups:history",
+      "im:history",
+      "im:write",
+      "users:read",
+      "channels:read",
+      "channels:join",
+      "files:read",
+      "files:write",
+      "assistant:write",
+    ]) {
+      expect(onboard).toContain(scope);
     }
+    expect(onboard).not.toContain("chat:write.customize");
   });
 
-  test("subscribes the two bot events", () => {
-    expect(manifest).toContain("message.channels");
-    expect(manifest).toContain("message.im");
+  test("subscribes the three bot events, one per conversation kind", () => {
+    expect(onboard).toContain("message.channels");
+    expect(onboard).toContain("message.groups");
+    expect(onboard).toContain("message.im");
   });
 
-  test("enables socket mode", () => {
-    expect(manifest).toContain("socket_mode_enabled: true");
+  test("enables socket mode and creates a WORKSPACE app", () => {
+    expect(onboard).toContain("socket_mode_enabled: true");
+    expect(onboard).toContain("org_deploy_enabled: false");
+  });
+
+  test("refuses an enterprise id, which is what needs an administrator", () => {
+    expect(onboard).toContain("is an ENTERPRISE id");
+    expect(onboard).toContain("team_id");
   });
 });
