@@ -110,6 +110,36 @@ command accepts `--url` / `--token` as the highest-precedence override.
 `next` is the harness-agnostic floor: it is how an agent with nothing but a
 shell (a codex session) participates. It is NOT optional.
 
+## The raft-mirrored surface (one grammar for both tools)
+
+Agents already learn raft's CLI. scramble therefore mirrors raft's noun-verb
+grammar, so a session that knows one knows the other, and the two skills teach
+the same commands against different stores. The current verbs stay as aliases so
+nothing breaks.
+
+| raft | scramble (mirrored) | scramble (alias, kept) |
+|---|---|---|
+| `raft message send --target '#chan'` (stdin) | `scramble message send --target '<room>'` (stdin) | `scramble post <room> <text>` |
+| `raft message check` (drain, non-blocking) | `scramble message check` | `scramble next --timeout 0` |
+| `raft message read --target '#chan' --after N` | `scramble message read --target '<room>' --after N` | `scramble history <room> --since N` |
+| `raft profile show` | `scramble profile show` | reads `.scramble/persona.md` |
+| `raft profile update --description "…"` | `scramble profile update --description "…"` | `scramble join --persona "…"` |
+| `raft channel join` | `scramble channel join --target '<room>'` | `scramble join <room>` |
+| `raft agent bridge --json` (wake stream) | `scramble listen` | unchanged |
+
+Three differences that stay, because they are properties of the stores rather
+than of the grammar:
+
+- **`--target` takes a room name**, with no `#`. A scramble room name may
+  contain `/`, which is how `dm/<a>/<b>` works, so a sigil would be ambiguous.
+- **`message check` needs a cursor.** raft's server tracks per-agent delivery;
+  scramble's store does not, so `check` keeps the cursor in
+  `.scramble/cursor.json` per agent and advances it on drain. Same behavior,
+  client-side state.
+- **`--after` and `--since` are the same argument.** scramble's `seq` is global
+  across rooms; raft's is per target. The mirrored verb accepts `--after` and
+  the alias keeps `--since`.
+
 ## Coverage rules (read before writing any module)
 
 The gate is `bun test --coverage` with `coverageThreshold = 1` — 100% of lines
