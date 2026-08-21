@@ -474,6 +474,11 @@ function slackTokenError(cfg: Pick<SlackConfig, "appToken" | "token">): string |
 /** Fire an inbound Slack message into a room through the daemon's POST seam.
  *  postToRoom is a sync void seam (the bridge's contract), so the async POST
  *  fires and forgets; a failure surfaces only in the daemon log. */
+/** Insert Slack-origin text into a room. Returns the message id it used, so the
+ *  bridge can recognise its OWN insert on the firehose and NOT publish it back
+ *  to Slack. Without that, a human's Slack message enters the room, streams out
+ *  on the firehose, and the bridge posts it to Slack again: an echo loop,
+ *  observed live on 2026-08-21 ("hi" came back as the bot three times). */
 function postToRoom(
   io: Io,
   url: string,
@@ -481,14 +486,29 @@ function postToRoom(
   room: string,
   from: string,
   text: string,
+  id: string,
 ): void {
   void io
     .fetch(`${url}/rooms/${encodeURIComponent(room)}`, {
       method: "POST",
       headers: { "content-type": "application/json", ...authHeader(token) },
-      body: JSON.stringify({ from, text, id: newMessageId() }),
+      body: JSON.stringify({ from, text, id }),
     })
     .catch(() => {});
+}
+
+/** The daemon's current global seq, so a fresh bridge publishes only what
+ *  arrives AFTER it starts. An unreachable daemon yields 0, and the reconnect
+ *  loop reports the failure by its own path. */
+export async function firehoseTip(io: Io, url: string, token: string | undefined): Promise<number> {
+  try {
+    const res = await io.fetch(`${url}/seq`, { headers: authHeader(token) });
+    if (!res.ok) return 0;
+    const j = (await res.json()) as { seq?: number };
+    return typeof j.seq === "number" ? j.seq : 0;
+  } catch {
+    return 0;
+  }
 }
 
 /** Feed one firehose response's messages into the bridge's publish path,
@@ -560,7 +580,17 @@ async function cmdSlack(argv: string[], io: Io): Promise<number> {
   }
   const { url, token } = resolveConfig(flags, io);
   // Inbound Slack text lands in the room through the daemon's POST path.
-  const slack: SlackConfig = { ...cfg, postToRoom: (room, from, text) => postToRoom(io, url, token, room, from, text) };
+  // Ids this bridge inserted from Slack. The firehose replays them like any
+  // other room message, and publishing one back to Slack is an echo loop.
+  const fromSlack = new Set<string>();
+  const slack: SlackConfig = {
+    ...cfg,
+    postToRoom: (room, from, text) => {
+      const id = newMessageId();
+      fromSlack.add(id);
+      postToRoom(io, url, token, room, from, text, id);
+    },
+  };
   slack.dryRun = dryRun;
   try {
     const transport = io.createTransport(slack);
@@ -571,13 +601,17 @@ async function cmdSlack(argv: string[], io: Io): Promise<number> {
       return 0;
     }
     bridge.connect();
-    // Every room message streams on the firehose; publish each into Slack.
+    // Open the firehose at the CURRENT tip, never at 0: a reconnect that starts
+    // from 0 republishes the whole room to Slack (observed live 2026-08-21,
+    // older lines re-posted at ts ...305 and ...325). `since` advances past
+    // every message seen, so a reconnect resumes instead of replaying.
+    let since = await firehoseTip(io, url, token);
     let backoff = 100;
     let staying = true;
     while (staying) {
       let res: Response;
       try {
-        res = await io.fetch(`${url}/stream`, { headers: authHeader(token) });
+        res = await io.fetch(`${url}/stream?since=${since}`, { headers: authHeader(token) });
       } catch {
         await io.sleep(backoff);
         backoff = Math.min(backoff * 2, MAX_BACKOFF);
@@ -589,7 +623,11 @@ async function cmdSlack(argv: string[], io: Io): Promise<number> {
         continue;
       }
       try {
-        await feedFirehose(io, res, (m) => bridge.publish(m));
+        await feedFirehose(io, res, (m) => {
+          since = Math.max(since, m.seq);
+          if (fromSlack.has(m.id)) return; // our own Slack-origin insert
+          bridge.publish(m);
+        });
         staying = false; // the daemon closed the stream: a clean stop
       } catch {
         await io.sleep(backoff);

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import type { RoomStore } from "../src/store";
 import { createStore } from "../src/store";
 import { createHandler } from "../src/server";
-import { main, parseBind, loadSlackConfig, slackConfigPath, acquireBridgeLock, bridgeLockPath, type Io } from "../src/cli";
+import { main, parseBind, loadSlackConfig, slackConfigPath, acquireBridgeLock, bridgeLockPath, firehoseTip, type Io } from "../src/cli";
 
 function scratchDir(name: string): string {
   const d = join(tmpdir(), `zz-${name}-${process.pid}-${Math.random().toString(36).slice(2)}`);
@@ -785,7 +785,8 @@ describe("scramble slack", () => {
     const transport = fakeTransport(posts, captured);
     const { io } = slackIo(cwd, transport);
     let call = 0;
-    io.fetch = async () => {
+    io.fetch = async (input: string) => {
+      if (input.endsWith("/seq")) return new Response(JSON.stringify({ seq: 0 }), { status: 200 });
       call++;
       if (call === 1) return new Response("nope", { status: 503 });
       return firehose([
@@ -806,7 +807,8 @@ describe("scramble slack", () => {
     const transport = fakeTransport(posts, captured);
     const { io } = slackIo(cwd, transport);
     let call = 0;
-    io.fetch = async () => {
+    io.fetch = async (input: string) => {
+      if (input.endsWith("/seq")) return new Response(JSON.stringify({ seq: 0 }), { status: 200 });
       call++;
       if (call === 1) return ndjs([msg(4, "bob", "dropped")], "error");
       return firehose([
@@ -840,6 +842,101 @@ describe("scramble slack", () => {
     const code = await main(["slack"], io);
     expect(code).toBe(1);
     expect(errs[0]).toContain("failed");
+  });
+});
+
+describe("bridge echo loop and replay", () => {
+  // Both observed live on 2026-08-21 against a real Slack DM.
+  function bridgeIo(over: Partial<Io>): Io {
+    return {
+      write: () => {},
+      writeErr: () => {},
+      fetch: async () => new Response("[]", { status: 200 }),
+      env: () => undefined,
+      cwd: () => "/tmp",
+      sleep: async () => {},
+      serve: async () => 0,
+      createTransport: () => ({ connect: () => {}, postMessage: async () => {} }),
+      pid: () => 1,
+      alive: () => false,
+      ...over,
+    };
+  }
+
+  test("firehoseTip reports the highest seq across rooms, so a fresh bridge skips history", async () => {
+    const io = bridgeIo({
+      fetch: async () => new Response(JSON.stringify({ seq: 7 }), { status: 200 }),
+    });
+    expect(await firehoseTip(io, "http://d", undefined)).toBe(7);
+  });
+
+  test("firehoseTip yields 0 when the daemon refuses the seq read", async () => {
+    const io = bridgeIo({ fetch: async () => new Response("nope", { status: 500 }) });
+    expect(await firehoseTip(io, "http://d", undefined)).toBe(0);
+  });
+
+  test("firehoseTip yields 0 when the payload has no seq", async () => {
+    const io = bridgeIo({ fetch: async () => new Response(JSON.stringify({}), { status: 200 }) });
+    expect(await firehoseTip(io, "http://d", undefined)).toBe(0);
+  });
+
+  test("firehoseTip yields 0 when the daemon is unreachable", async () => {
+    const io = bridgeIo({ fetch: async () => { throw new Error("down"); } });
+    expect(await firehoseTip(io, "http://d", undefined)).toBe(0);
+  });
+});
+
+describe("bridge echo guard", () => {
+  test("a thrown stream fetch backs off and retries", async () => {
+    const cwd = scratchDir("slack-throw");
+    writeSlackConfig(cwd, validSlackCfg());
+    const posts: SlackPostOptions[] = [];
+    const captured: Captured = {};
+    const { io } = slackIo(cwd, fakeTransport(posts, captured));
+    let streamCalls = 0;
+    const slept: number[] = [];
+    io.sleep = async (ms: number) => { slept.push(ms); };
+    io.fetch = async (input: string) => {
+      if (input.endsWith("/seq")) return new Response(JSON.stringify({ seq: 4 }), { status: 200 });
+      streamCalls++;
+      if (streamCalls === 1) throw new Error("connection reset");
+      return firehose([
+        { seq: 5, ts: "t", room: "general", from: "alice", text: "after the reset", id: "i5", mentions: [] },
+      ]);
+    };
+    expect(await main(["slack"], io)).toBe(0);
+    expect(slept.length).toBeGreaterThan(0);
+    expect(posts.some((p) => p.text === "after the reset")).toBe(true);
+  });
+
+  test("a Slack-origin message is NOT published back to Slack", async () => {
+    // The echo loop, observed live 2026-08-21: a human's Slack message enters
+    // the room, streams out on the firehose, and the bridge posts it to Slack
+    // again. The bridge must recognise its OWN insert by id and skip it.
+    const cwd = scratchDir("slack-echo");
+    writeSlackConfig(cwd, validSlackCfg());
+    const posts: SlackPostOptions[] = [];
+    const captured: Captured = {};
+    const transport = fakeTransport(posts, captured);
+    const { io } = slackIo(cwd, transport);
+    let insertedId: string | undefined;
+    io.fetch = async (input: string, init?: RequestInit) => {
+      if (input.endsWith("/seq")) return new Response(JSON.stringify({ seq: 0 }), { status: 200 });
+      if (init?.method === "POST") {
+        insertedId = (JSON.parse(String(init.body)) as { id: string }).id;
+        return new Response(JSON.stringify({ seq: 9, crossings: [] }), { status: 200 });
+      }
+      // the stream: first deliver an inbound Slack message, then replay it
+      captured.h?.({ type: "message", channel: "C1", user: "U111", text: "hi from slack" });
+      await new Promise((r) => setTimeout(r, 5));
+      return firehose([
+        { seq: 9, ts: "t", room: "general", from: "ana", text: "hi from slack", id: insertedId ?? "x", mentions: [] },
+      ]);
+    };
+    const code = await main(["slack"], io);
+    expect(code).toBe(0);
+    expect(insertedId).toBeDefined();
+    expect(posts.some((p) => p.text === "hi from slack")).toBe(false);
   });
 });
 

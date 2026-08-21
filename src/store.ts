@@ -17,6 +17,8 @@ import {
 
 export interface RoomStore {
   post(input: PostInput): PostResult;
+  /** The highest seq appended so far, so a reader can start at the tip. */
+  tip(): number;
   read(room: string, since?: number): Message[];
   readAll(since?: number): Message[];
   join(name: string, persona: string, room: string): void;
@@ -179,6 +181,11 @@ export function createStore(dir: string): RoomStore {
   }
 
   return {
+    /** The highest seq appended so far. A bridge opens its stream here so a
+     *  reconnect resumes instead of republishing the room. */
+    tip(): number {
+      return nextSeq - 1;
+    },
     post,
     read,
     readAll,

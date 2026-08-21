@@ -457,3 +457,18 @@ describe("serve()", () => {
 function ndisos(lines: string[]) {
   return lines.map((l) => JSON.parse(l) as Record<string, unknown>);
 }
+
+test("GET /seq reports the current tip and rejects other methods", async () => {
+  // A bridge reads this once at startup and opens its stream there, so a
+  // reconnect resumes instead of republishing the room to Slack.
+  const store = createStore(freshDir());
+  const h = createHandler(store, {});
+  store.post({ room: "general", from: "a", text: "one", id: "i1" });
+  store.post({ room: "general", from: "a", text: "two", id: "i2" });
+  const ok = await h(new Request("http://x/seq"));
+  expect(ok.status).toBe(200);
+  expect(await ok.json()).toEqual({ seq: store.tip() });
+  expect(store.tip()).toBe(2);
+  const bad = await h(new Request("http://x/seq", { method: "POST" }));
+  expect(bad.status).toBe(405);
+});

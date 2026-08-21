@@ -220,6 +220,12 @@ export function createHandler(store: RoomStore, opts: ServerOptions = {}) {
         return agentStream(parts[1]!, url);
       return json(404, { error: "not found" });
     }
+    // The current global seq. A bridge reads it once at startup and opens its
+    // stream there, so a reconnect resumes rather than republishing the room.
+    if (parts[0] === "seq" && parts.length === 1) {
+      if (method === "GET") return json(200, { seq: store.tip() });
+      return json(405, { error: "method not allowed" });
+    }
     if (parts[0] === "rooms") {
       if (parts.length === 1) {
         if (method === "GET") return json(200, store.rooms());
