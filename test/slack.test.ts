@@ -36,39 +36,39 @@ function baseCfg(over?: Partial<SlackConfig>): SlackConfig {
     agents: { alice: { token: "T_ALICE" }, bob: {} },
     dmChannels: { D1: "alice" },
     roster: { U111: "ana", U222: "dev" },
-    postToRoom() {},
+    postToChannel() {},
     ...over,
   };
 }
 
 function make(cfg: SlackConfig) {
   const f = fake();
-  const posted: Array<{ room: string; from: string; text: string }> = [];
-  cfg.postToRoom = (room, from, text) => posted.push({ room, from, text });
+  const posted: Array<{ channel: string; from: string; text: string }> = [];
+  cfg.postToChannel = (channel, from, text) => posted.push({ channel, from, text });
   const bridge = createBridge(cfg, f.transport);
   bridge.connect();
   return { f, bridge, posted };
 }
 
-function route(b: SlackBridge, room: string, from: string, text: string) {
-  b.publish({ seq: 1, ts: "t", room, from, text, id: "i", mentions: [] });
+function route(b: SlackBridge, channel: string, from: string, text: string) {
+  b.publish({ seq: 1, ts: "t", channel, from, text, id: "i", mentions: [] });
 }
 
 describe("connect + inbound", () => {
-  test("a channel message posts into the room as the human's name", () => {
+  test("a channel message posts into the channel as the human's name", () => {
     const { f, posted } = make(baseCfg());
     f.handler?.({ type: "message", channel: "C1", user: "U111", text: "hi everyone" });
-    expect(posted).toEqual([{ room: "general", from: "ana", text: "hi everyone" }]);
+    expect(posted).toEqual([{ channel: "general", from: "ana", text: "hi everyone" }]);
   });
 
   test("a PRIVATE channel message routes exactly like a public one", () => {
     // Slack gates private channels behind groups:history + message.groups (see
     // docs/slack-manifest.yaml), but the bridge routes on the channel id in
     // cfg.channels, not on the channel's type. This proves that: a private
-    // channel id mapped like any other lands in its room.
+    // channel id mapped like any other lands in its channel.
     const { f, posted } = make(baseCfg({ channels: { general: "C1", secret: "G_PRIV" } }));
     f.handler?.({ type: "message", channel: "G_PRIV", user: "U111", text: "private note" });
-    expect(posted).toEqual([{ room: "secret", from: "ana", text: "private note" }]);
+    expect(posted).toEqual([{ channel: "secret", from: "ana", text: "private note" }]);
   });
 
   test("a private channel message from an unmapped id is ignored", () => {
@@ -80,19 +80,19 @@ describe("connect + inbound", () => {
   test("inbound <@U…> mention normalizes to @name via the roster", () => {
     const { f, posted } = make(baseCfg());
     f.handler?.({ type: "message", channel: "C1", user: "U111", text: "<@U222> confirm" });
-    expect(posted).toEqual([{ room: "general", from: "ana", text: "@dev confirm" }]);
+    expect(posted).toEqual([{ channel: "general", from: "ana", text: "@dev confirm" }]);
   });
 
   test("an unknown mention id is left verbatim", () => {
     const { f, posted } = make(baseCfg());
     f.handler?.({ type: "message", channel: "C1", user: "U111", text: "<@U999> ping" });
-    expect(posted).toEqual([{ room: "general", from: "ana", text: "@U999 ping" }]);
+    expect(posted).toEqual([{ channel: "general", from: "ana", text: "@U999 ping" }]);
   });
 
   test("a Slack user id not in the roster falls back to the raw id", () => {
     const { f, posted } = make(baseCfg());
     f.handler?.({ type: "message", channel: "C1", user: "U777", text: "who?" });
-    expect(posted).toEqual([{ room: "general", from: "U777", text: "who?" }]);
+    expect(posted).toEqual([{ channel: "general", from: "U777", text: "who?" }]);
   });
 
   test("the bridge's own bot ids are self-filtered and never loop back", () => {
@@ -114,16 +114,16 @@ describe("connect + inbound", () => {
     expect(posted).toEqual([]);
   });
 
-  test("a Slack DM maps to room dm/<agent>/<slack-user> and is created on first message", () => {
+  test("a Slack DM maps to channel dm/<agent>/<slack-user> and is created on first message", () => {
     const { f, posted } = make(baseCfg());
     f.handler?.({ type: "message", channel: "D1", user: "U111", text: "hello" });
-    expect(posted).toEqual([{ room: "dm/alice/ana", from: "ana", text: "hello" }]);
+    expect(posted).toEqual([{ channel: "dm/alice/ana", from: "ana", text: "hello" }]);
   });
 
   test("a DM with no user still routes (raw peer name is empty)", () => {
     const { f, posted } = make(baseCfg());
     f.handler?.({ type: "message", channel: "D1", text: "anon hello" });
-    expect(posted).toEqual([{ room: "dm/alice/", from: "", text: "anon hello" }]);
+    expect(posted).toEqual([{ channel: "dm/alice/", from: "", text: "anon hello" }]);
   });
 });
 
@@ -158,7 +158,7 @@ describe("outbound publish", () => {
     ]);
   });
 
-  test("a group room with no bound channel publishes nothing", () => {
+  test("a group channel with no bound channel publishes nothing", () => {
     const { bridge, f } = make(baseCfg());
     route(bridge, "unbound", "alice", "hi");
     expect(bridge.calls).toEqual([]);
@@ -189,13 +189,13 @@ describe("outbound publish", () => {
     expect(bridge.calls).toEqual([{ channel: "D1", text: "got it", token: "T_ALICE" }]);
   });
 
-  test("a DM room whose agent has no bound DM channel is skipped", () => {
+  test("a DM channel whose agent has no bound DM channel is skipped", () => {
     const { bridge } = make(baseCfg({ agents: { x: {} } }));
     route(bridge, "dm/x/y", "x", "hi");
     expect(bridge.calls).toEqual([]);
   });
 
-  test("a malformed dm room with no second segment is skipped", () => {
+  test("a malformed dm channel with no second segment is skipped", () => {
     const { bridge } = make(baseCfg());
     route(bridge, "dm", "alice", "hi");
     expect(bridge.calls).toEqual([]);
@@ -210,10 +210,10 @@ describe("dry-run", () => {
     expect(f.sent).toEqual([]);
   });
 
-  test("dry-run still routes inbound into the room", () => {
+  test("dry-run still routes inbound into the channel", () => {
     const { f, posted } = make(baseCfg({ dryRun: true }));
     f.handler?.({ type: "message", channel: "C1", user: "U111", text: "hi" });
-    expect(posted).toEqual([{ room: "general", from: "ana", text: "hi" }]);
+    expect(posted).toEqual([{ channel: "general", from: "ana", text: "hi" }]);
   });
 });
 

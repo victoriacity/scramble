@@ -133,16 +133,16 @@ function makeTimed(
 // --- computeMentions ------------------------------------------------------
 
 describe("computeMentions", () => {
-  test("a dm room addresses its peers, never the sender", () => {
+  test("a dm channel addresses its peers, never the sender", () => {
     expect(computeMentions("dm/ana/bob", "hi", "ana")).toEqual(["bob"]);
     expect(computeMentions("dm/ana/bob", "hi", "bob")).toEqual(["ana"]);
   });
 
-  test("a group room takes @-tokens from the text", () => {
+  test("a group channel takes @-tokens from the text", () => {
     expect(computeMentions("general", "@alice @dev check this", "x")).toEqual(["alice", "dev"]);
   });
 
-  test("a group room with no @-token has empty mentions", () => {
+  test("a group channel with no @-token has empty mentions", () => {
     expect(computeMentions("general", "hello there", "x")).toEqual([]);
   });
 });
@@ -167,10 +167,10 @@ describe("post", () => {
     expect((call.init?.headers as Record<string, string>).authorization).toBe("Bearer xoxb-app");
   });
 
-  test("an unknown room is a failure naming the room", async () => {
+  test("an unknown channel is a failure naming the channel", async () => {
     const h = make();
     const r = await h.backend.post("nope", "hi", "bob");
-    expect(r).toEqual({ ok: false, error: "no Slack channel for room nope" });
+    expect(r).toEqual({ ok: false, error: "no Slack channel for channel nope" });
   });
 
   test("Slack ok:false surfaces Slack's error text, never a success", async () => {
@@ -211,7 +211,7 @@ describe("history", () => {
     });
     const r = await h.backend.history("general");
     expect(r.code).toBe(0);
-    expect(r.messages[0]!.room).toBe("general");
+    expect(r.messages[0]!.channel).toBe("general");
     expect(r.messages[0]!.from).toBe("ana");
     expect(r.messages[0]!.text).toBe("start");
     expect(r.messages[0]!.ts).toBe("1");
@@ -226,7 +226,7 @@ describe("history", () => {
     expect(r.code).toBe(0);
   });
 
-  test("an unknown room history fails naming the room", async () => {
+  test("an unknown channel history fails naming the channel", async () => {
     const h = make();
     const r = await h.backend.history("nope");
     expect(r.code).toBe(1);
@@ -264,7 +264,7 @@ describe("listen", () => {
     await p;
     expect(lines).toHaveLength(1);
     const d = lines[0] as Record<string, unknown>;
-    expect(d.room).toBe("general");
+    expect(d.channel).toBe("general");
     expect(d.from).toBe("ana");
     expect(d.mentions).toContain("alice");
     expect(d.mentioned).toBe(true);
@@ -282,7 +282,7 @@ describe("listen", () => {
     expect(lines).toHaveLength(0);
   });
 
-  test("with no room list, every mapped channel is delivered", async () => {
+  test("with no channel list, every mapped channel is delivered", async () => {
     const h = make();
     const lines: unknown[] = [];
     const p = h.backend.listen([], "alice", (d) => lines.push(d), () => {});
@@ -292,7 +292,7 @@ describe("listen", () => {
     h.sockets[0]?.close();
     await p;
     expect(lines).toHaveLength(1);
-    expect((lines[0] as Record<string, unknown>).room).toBe("secret");
+    expect((lines[0] as Record<string, unknown>).channel).toBe("secret");
   });
 
   test("a non-message event and empty text are not delivered", async () => {
@@ -364,7 +364,7 @@ describe("listen", () => {
     expect(lines).toHaveLength(0);
   });
 
-  test("a room list filters to those rooms", async () => {
+  test("a channel list filters to those channels", async () => {
     const h = make();
     const lines: unknown[] = [];
     const p = h.backend.listen(["secret"], "alice", (d) => lines.push(d), () => {});
@@ -403,7 +403,7 @@ describe("listen", () => {
     expect((lines[0] as Record<string, unknown>).text).toBe("@fromUsers ping");
   });
 
-  test("a DM channel maps to a dm/<agent>/<peer> room", async () => {
+  test("a DM channel maps to a dm/<agent>/<peer> channel", async () => {
     const h = make();
     const lines: unknown[] = [];
     const p = h.backend.listen([], "alice", (d) => lines.push(d), () => {});
@@ -412,7 +412,7 @@ describe("listen", () => {
     await pump(5);
     h.sockets[0]?.close();
     await p;
-    expect((lines[0] as Record<string, unknown>).room).toBe("dm/alice/ana");
+    expect((lines[0] as Record<string, unknown>).channel).toBe("dm/alice/ana");
   });
 
   test("listen resolves when the socket closes", async () => {
@@ -452,7 +452,7 @@ describe("next", () => {
     const r = await p;
     expect(r.code).toBe(0);
     if (r.code === 0) {
-      expect(r.line.room).toBe("general");
+      expect(r.line.channel).toBe("general");
       expect(r.line.mentioned).toBe(true);
     }
     expect(h.sockets[0]!.closed.length).toBeGreaterThan(0);
@@ -512,7 +512,7 @@ describe("selectBackend", () => {
   });
 
   test("SCRAMBLE_BACKEND=slack selects slack without a flag", () => {
-    expect(selectBackend(["post", "room", "text"], env("slack"))).toBe("slack");
+    expect(selectBackend(["post", "channel", "text"], env("slack"))).toBe("slack");
   });
 
   test("SCRAMBLE_BACKEND=local selects local", () => {
@@ -588,7 +588,7 @@ describe("slack commands through main", () => {
     });
     const code = await main(["history", "general", "--backend", "slack"], io);
     expect(code).toBe(0);
-    expect(JSON.parse(writes[0]!)).toMatchObject({ room: "general", text: "hi" });
+    expect(JSON.parse(writes[0]!)).toMatchObject({ channel: "general", text: "hi" });
   });
 
   test("next through the slack backend blocks for one and exits 0", async () => {
@@ -611,7 +611,7 @@ describe("slack commands through main", () => {
     sockets[0]?.onmessage?.(frame({ type: "message", channel: "C1", user: "U123", text: "@alice hi", ts: "1" }));
     const code = await p;
     expect(code).toBe(0);
-    expect(JSON.parse(writes[0]!)).toMatchObject({ room: "general", mentioned: true });
+    expect(JSON.parse(writes[0]!)).toMatchObject({ channel: "general", mentioned: true });
   });
 
   test("a slack next with no config exits 1 naming the config path", async () => {
@@ -633,7 +633,7 @@ describe("slack commands through main", () => {
     expect(code).toBe(0);
   });
 
-  test("a slack post with no room exits 1 with a usage error", async () => {
+  test("a slack post with no channel exits 1 with a usage error", async () => {
     const { io, errs } = configuredIo();
     const code = await main(["post", "--backend", "slack"], io);
     expect(code).toBe(1);
@@ -687,11 +687,11 @@ describe("slack commands through main", () => {
     expect(writes).toHaveLength(1);
   });
 
-  test("a slack history with no room exits 1", async () => {
+  test("a slack history with no channel exits 1", async () => {
     const { io, errs } = configuredIo();
     const code = await main(["history", "--backend", "slack"], io);
     expect(code).toBe(1);
-    expect(errs[0]).toContain("room");
+    expect(errs[0]).toContain("channel");
   });
 
   test("a slack history missing config exits 1", async () => {

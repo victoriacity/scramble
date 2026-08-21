@@ -45,9 +45,9 @@
     min-width: 0;
   }
   #sidebar h1 { font-size: 18px; margin: 0 0 12px; }
-  #rooms { list-style: none; margin: 0; padding: 0; }
-  #rooms li { margin: 2px 0; }
-  #rooms button {
+  #channels { list-style: none; margin: 0; padding: 0; }
+  #channels li { margin: 2px 0; }
+  #channels button {
     width: 100%;
     text-align: left;
     background: transparent;
@@ -60,10 +60,10 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  #rooms button:hover { background: var(--panel); }
-  #rooms button.active { background: var(--accent); color: #fff; }
+  #channels button:hover { background: var(--panel); }
+  #channels button.active { background: var(--accent); color: #fff; }
   main { display: flex; flex-direction: column; min-width: 0; }
-  #room-title { padding: 12px; border-bottom: 1px solid var(--border); margin: 0; font-size: 16px; }
+  #channel-title { padding: 12px; border-bottom: 1px solid var(--border); margin: 0; font-size: 16px; }
   #messages {
     flex: 1;
     overflow-y: auto;
@@ -118,10 +118,10 @@
 <body>
 <header id="sidebar">
   <h1>scramble</h1>
-  <ul id="rooms"></ul>
+  <ul id="channels"></ul>
 </header>
 <main>
-  <h2 id="room-title">Select a room</h2>
+  <h2 id="channel-title">Select a channel</h2>
   <div id="messages"></div>
   <div id="notice"></div>
   <form id="composer">
@@ -132,8 +132,8 @@
 </main>
 <script>
 (function () {
-  var roomsEl = document.getElementById("rooms");
-  var titleEl = document.getElementById("room-title");
+  var channelsEl = document.getElementById("channels");
+  var titleEl = document.getElementById("channel-title");
   var messagesEl = document.getElementById("messages");
   var noticeEl = document.getElementById("notice");
   var composer = document.getElementById("composer");
@@ -174,31 +174,31 @@
     messagesEl.scrollTop = messagesEl.scrollHeight;
   }
 
-  // GET /rooms — the room list (every room, dm/* included)
-  function loadRooms() {
-    return fetch("/rooms")
+  // GET /channels — the channel list (every channel, dm/* included)
+  function loadChannels() {
+    return fetch("/channels")
       .then(function (res) {
-        if (!res.ok) throw new Error("room list failed");
+        if (!res.ok) throw new Error("channel list failed");
         return res.json();
       })
-      .then(function (rooms) {
-        roomsEl.textContent = "";
-        rooms.forEach(function (room) {
+      .then(function (channels) {
+        channelsEl.textContent = "";
+        channels.forEach(function (channel) {
           var li = document.createElement("li");
           var btn = document.createElement("button");
-          btn.textContent = room;
-          btn.addEventListener("click", function () { selectRoom(room); });
+          btn.textContent = channel;
+          btn.addEventListener("click", function () { selectChannel(channel); });
           li.appendChild(btn);
-          roomsEl.appendChild(li);
+          channelsEl.appendChild(li);
         });
       });
   }
 
-  // GET /rooms/:room/stream?since=N — live stream for the selected room
+  // GET /channels/:channel/stream?since=N — live stream for the selected channel
   function openStream() {
     if (streamReader) streamReader.cancel();
     latestSeq = 0;
-    return fetch("/rooms/" + encodeURIComponent(active) + "/stream?since=0")
+    return fetch("/channels/" + encodeURIComponent(active) + "/stream?since=0")
       .then(function (res) {
         if (!res.ok) throw new Error("stream failed");
         return res.body.getReader();
@@ -227,16 +227,16 @@
       });
   }
 
-  function selectRoom(room) {
-    active = room;
-    titleEl.textContent = room;
-    var btns = roomsEl.querySelectorAll("button");
-    btns.forEach(function (b) { b.classList.toggle("active", b.textContent === room); });
+  function selectChannel(channel) {
+    active = channel;
+    titleEl.textContent = channel;
+    var btns = channelsEl.querySelectorAll("button");
+    btns.forEach(function (b) { b.classList.toggle("active", b.textContent === channel); });
     // catch-up history, then live stream
     messagesEl.textContent = "";
     latestSeq = 0;
-    // GET /rooms/:room?since=0 — catch-up history
-    fetch("/rooms/" + encodeURIComponent(room) + "?since=0")
+    // GET /channels/:channel?since=0 — catch-up history
+    fetch("/channels/" + encodeURIComponent(channel) + "?since=0")
       .then(function (res) {
         if (!res.ok) throw new Error("history failed");
         return res.json();
@@ -245,18 +245,18 @@
         msgs.forEach(function (m) { render(m); });
         return openStream();
       })
-      .catch(function (e) { showNotice("Room load failed: " + e); });
+      .catch(function (e) { showNotice("Channel load failed: " + e); });
   }
 
-  // POST /rooms/:room — send a message
+  // POST /channels/:channel — send a message
   composer.addEventListener("submit", function (ev) {
     ev.preventDefault();
     var from = nameEl.value.trim();
     var text = textEl.value.trim();
     if (!from) return showNotice("Enter your name first");
     if (!text) return;
-    var room = active;
-    fetch("/rooms/" + encodeURIComponent(room), {
+    var channel = active;
+    fetch("/channels/" + encodeURIComponent(channel), {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ from: from, text: text, id: Date.now().toString(36) + Math.random().toString(36).slice(2) })
@@ -269,7 +269,7 @@
       .catch(function (e) { showNotice("Post rejected: " + (e.error || e.message || e)); });
   });
 
-  loadRooms().catch(function (e) { showNotice("Room list failed: " + e); });
+  loadChannels().catch(function (e) { showNotice("Channel list failed: " + e); });
 })();
 </script>
 </body>

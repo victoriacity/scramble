@@ -1,21 +1,21 @@
 // The seams every module shares. Hand-authored contract: modules are written in
 // parallel against THIS file, so it is the one place a shape is declared.
 
-/** One room message. `seq` is global across all rooms (one total order).
+/** One channel message. `seq` is global across all channels (one total order).
  *  `id` is the client-supplied dedup key; `mentions` is computed at append
  *  time so no reader parses text to learn who was addressed. */
 export interface Message {
   seq: number;
   ts: string;
-  room: string;
+  channel: string;
   from: string;
   text: string;
   id: string;
   mentions: string[];
 }
 
-/** A message as delivered to one subscriber: the record plus whether THIS
- *  subscriber was addressed (channel mention, or any message in a dm/ room). */
+/** A message as delivered to a subscriber: the record plus whether THIS
+ *  subscriber was addressed (channel mention, or any message in a dm/ channel). */
 export interface Delivery extends Message {
   mentioned: boolean;
 }
@@ -25,11 +25,11 @@ export interface Delivery extends Message {
 export interface Agent {
   name: string;
   persona: string;
-  rooms: string[];
+  channels: string[];
 }
 
 /** Result of a post: the new seq plus the messages that landed in the same
- *  room between the sender's last-seen seq and this one (the crossings), so a
+ *  channel between the sender's last-seen seq and this one (the crossings), so a
  *  sender learns what it raced with at the moment it speaks. */
 export interface PostResult {
   seq: number;
@@ -39,7 +39,7 @@ export interface PostResult {
 /** What a post attempt carries. `lastSeen` drives crossings; `id` drives
  *  dedup of a retried post. */
 export interface PostInput {
-  room: string;
+  channel: string;
   from: string;
   text: string;
   id: string;
@@ -61,5 +61,5 @@ export const DEFAULTS = {
   port: 7737,
 } as const;
 
-/** A room is a DM iff its name starts with this prefix: `dm/<a>/<b>`. */
+/** A channel is a DM iff its name starts with this prefix: `dm/<a>/<b>`. */
 export const DM_PREFIX = "dm/";

@@ -1,6 +1,6 @@
 // src/server.ts — the HTTP surface over the store.
 import { DEFAULTS, type Message, type PostResult, type ServerOptions } from "./types";
-import type { RoomStore } from "./store";
+import type { ChannelStore } from "./store";
 
 /** serve() merges the server-only knobs (hostname/port) onto the shared ones.
  *  Typed fields only: the CLI owns --bind string parsing and hands serve() a
@@ -24,7 +24,7 @@ function sinceNum(url: URL): number {
   return Number.isFinite(n) && n >= 0 ? n : 0;
 }
 
-export function createHandler(store: RoomStore, opts: ServerOptions = {}) {
+export function createHandler(store: ChannelStore, opts: ServerOptions = {}) {
   const maxChars = opts.maxChars ?? DEFAULTS.maxChars;
   const ratePerMin = opts.ratePerMin ?? DEFAULTS.ratePerMin;
   const repeatWindowMs = opts.repeatWindowMs ?? DEFAULTS.repeatWindowMs;
@@ -90,7 +90,7 @@ export function createHandler(store: RoomStore, opts: ServerOptions = {}) {
     return json(404, { error: "index.html not found" });
   }
 
-  async function postRoom(roomSeg: string, req: Request): Promise<Response> {
+  async function postChannel(channelSeg: string, req: Request): Promise<Response> {
     let body: { from?: string; text?: string; id?: string; lastSeen?: number };
     try {
       body = (await req.json()) as typeof body;
@@ -105,55 +105,55 @@ export function createHandler(store: RoomStore, opts: ServerOptions = {}) {
       const rejected = guard(from, text);
       if (rejected) return rejected;
     }
-    let room: string;
+    let channel: string;
     try {
-      room = decodeURIComponent(roomSeg);
+      channel = decodeURIComponent(channelSeg);
     } catch {
-      return json(400, { error: "invalid room", room: roomSeg });
+      return json(400, { error: "invalid channel", channel: channelSeg });
     }
     let result: PostResult;
     try {
-      result = store.post({ room, from, text, id, lastSeen: body.lastSeen });
+      result = store.post({ channel, from, text, id, lastSeen: body.lastSeen });
     } catch {
-      return json(400, { error: "invalid room", room });
+      return json(400, { error: "invalid channel", channel });
     }
     if (joined.has(from)) record(from, text);
     return json(200, { seq: result.seq, crossings: result.crossings });
   }
 
-  function roomCatchUp(roomSeg: string, url: URL): Response {
-    let room: string;
+  function channelCatchUp(channelSeg: string, url: URL): Response {
+    let channel: string;
     try {
-      room = decodeURIComponent(roomSeg);
+      channel = decodeURIComponent(channelSeg);
     } catch {
-      return json(400, { error: "invalid room", room: roomSeg });
+      return json(400, { error: "invalid channel", channel: channelSeg });
     }
     try {
-      return json(200, store.read(room, sinceNum(url)));
+      return json(200, store.read(channel, sinceNum(url)));
     } catch {
-      return json(400, { error: "invalid room", room });
+      return json(400, { error: "invalid channel", channel });
     }
   }
 
-  function roomStream(roomSeg: string, url: URL): Response {
-    let room: string;
+  function channelStream(channelSeg: string, url: URL): Response {
+    let channel: string;
     try {
-      room = decodeURIComponent(roomSeg);
+      channel = decodeURIComponent(channelSeg);
     } catch {
-      return json(400, { error: "invalid room", room: roomSeg });
+      return json(400, { error: "invalid channel", channel: channelSeg });
     }
     const exclude = url.searchParams.get("exclude");
     let initial: Message[];
     try {
-      initial = store.read(room, sinceNum(url));
+      initial = store.read(channel, sinceNum(url));
     } catch {
-      return json(400, { error: "invalid room", room });
+      return json(400, { error: "invalid channel", channel });
     }
     if (exclude !== null) initial = initial.filter((m) => m.from !== exclude);
     return new Response(
       lineStream(
         initial,
-        (m) => m.room === room && (exclude === null || m.from !== exclude),
+        (m) => m.channel === channel && (exclude === null || m.from !== exclude),
         JSON.stringify,
       ),
       { headers: { "content-type": "application/x-ndjson" } },
@@ -162,10 +162,10 @@ export function createHandler(store: RoomStore, opts: ServerOptions = {}) {
 
   function agentStream(name: string, url: URL): Response {
     const initial = store.readAll(sinceNum(url)).filter(
-      (m) => m.from !== name && store.roomsFor(name).includes(m.room),
+      (m) => m.from !== name && store.channelsFor(name).includes(m.channel),
     );
     const matches = (m: Message): boolean =>
-      m.from !== name && store.roomsFor(name).includes(m.room);
+      m.from !== name && store.channelsFor(name).includes(m.channel);
     return new Response(
       lineStream(initial, matches, (m) => JSON.stringify(store.deliveryFor(name, m))),
       { headers: { "content-type": "application/x-ndjson" } },
@@ -178,7 +178,7 @@ export function createHandler(store: RoomStore, opts: ServerOptions = {}) {
    *  per-agent cursor and asks for everything after it. */
   function agentPending(name: string, url: URL): Response {
     const msgs = store.readAll(sinceNum(url)).filter(
-      (m) => m.from !== name && store.roomsFor(name).includes(m.room),
+      (m) => m.from !== name && store.channelsFor(name).includes(m.channel),
     );
     return json(200, msgs.map((m) => store.deliveryFor(name, m)));
   }
@@ -190,7 +190,7 @@ export function createHandler(store: RoomStore, opts: ServerOptions = {}) {
   }
 
   async function joinAgent(name: string, req: Request): Promise<Response> {
-    let body: { persona?: string; room?: string };
+    let body: { persona?: string; channel?: string };
     try {
       body = (await req.json()) as typeof body;
     } catch {
@@ -198,10 +198,10 @@ export function createHandler(store: RoomStore, opts: ServerOptions = {}) {
     }
     joined.add(name);
     try {
-      store.join(name, body.persona ?? "", body.room ?? "");
+      store.join(name, body.persona ?? "", body.channel ?? "");
       return json(200, { name });
     } catch {
-      return json(400, { error: "invalid room", room: body.room });
+      return json(400, { error: "invalid channel", channel: body.channel });
     }
   }
 
@@ -234,30 +234,30 @@ export function createHandler(store: RoomStore, opts: ServerOptions = {}) {
       return json(404, { error: "not found" });
     }
     // The current global seq. A bridge reads it once at startup and opens its
-    // stream there, so a reconnect resumes rather than republishing the room.
+    // stream there, so a reconnect resumes rather than republishing the channel.
     if (parts[0] === "seq" && parts.length === 1) {
       if (method === "GET") return json(200, { seq: store.tip() });
       return json(405, { error: "method not allowed" });
     }
-    if (parts[0] === "rooms") {
+    if (parts[0] === "channels") {
       if (parts.length === 1) {
-        if (method === "GET") return json(200, store.rooms());
+        if (method === "GET") return json(200, store.channels());
         return json(405, { error: "method not allowed" });
       }
       if (parts.length === 2) {
-        if (method === "POST") return postRoom(parts[1]!, req);
-        if (method === "GET") return roomCatchUp(parts[1]!, url);
+        if (method === "POST") return postChannel(parts[1]!, req);
+        if (method === "GET") return channelCatchUp(parts[1]!, url);
         return json(405, { error: "method not allowed" });
       }
       if (parts.length === 3 && parts[2] === "stream" && method === "GET")
-        return roomStream(parts[1]!, url);
+        return channelStream(parts[1]!, url);
       return json(404, { error: "not found" });
     }
     return json(404, { error: "not found" });
   };
 }
 
-export function serve(store: RoomStore, opts: ServeOptions = {}) {
+export function serve(store: ChannelStore, opts: ServeOptions = {}) {
   return Bun.serve({
     port: opts.port ?? DEFAULTS.port,
     hostname: opts.hostname ?? "127.0.0.1",

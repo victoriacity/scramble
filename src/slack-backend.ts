@@ -9,7 +9,7 @@
 // and never mirrors a local store. Slack has no global sequence number, so the
 // message `ts` is the per-channel cursor (the honest mapping where Slack keeps
 // no shared total order). The line shape we emit matches the local backend
-// EXACTLY (room, from, text, ts, mentions plus a `mentioned` flag for this
+// EXACTLY (channel, from, text, ts, mentions plus a `mentioned` flag for this
 // agent) because the join skill and the hooks read it verbatim.
 import type { Delivery, Message } from "./types";
 import { DM_PREFIX } from "./types";
@@ -44,15 +44,15 @@ interface Frame {
 }
 
 /** The config the backend reads, a SUBSET of the bridge config (src/slack.ts):
- *  tokens, the room->channel map, per-agent identities, the mention roster and
- *  the self-filter bot ids. `postToRoom` is deliberately absent — the backend
- *  POSTS STRAIGHT TO SLACK, not into a stitched local room. */
+ *  tokens, the channel->Slack channel map, per-agent identities, the mention roster and
+ *  the self-filter bot ids. `postToChannel` is deliberately absent — the backend
+ *  POSTS STRAIGHT TO SLACK, not into a stitched local channel. */
 export interface SlackBackendConfig {
   /** main bot token (xoxb-) used as the fallback for every post. */
   token: string;
   /** app-level token (xapp-) for apps.connections.open (Socket Mode). */
   appToken?: string;
-  /** room name -> channel id. */
+  /** channel name -> Slack channel id. */
   channels: Record<string, string>;
   /** agent name -> { token?: per-agent bot token }. */
   agents: Record<string, { token?: string }>;
@@ -119,13 +119,13 @@ export interface SlackHistoryMessage {
   bot_id?: string;
 }
 
-/** The members a message addresses. A dm/ room addresses its peers (everyone
- *  but the sender); a group room addresses the @-tokens in the text. Pure so
+/** The members a message addresses. A dm/ channel addresses its peers (everyone
+ *  but the sender); a group channel addresses the @-tokens in the text. Pure so
  *  it is trivially unit-tested. */
-export function computeMentions(room: string, text: string, sender: string): string[] {
+export function computeMentions(channel: string, text: string, sender: string): string[] {
   const out = new Set<string>();
-  if (room.startsWith(DM_PREFIX)) {
-    for (const seg of room.split("/").slice(1)) {
+  if (channel.startsWith(DM_PREFIX)) {
+    for (const seg of channel.split("/").slice(1)) {
       if (seg && seg !== sender) out.add(seg);
     }
   } else {
@@ -150,8 +150,8 @@ export class SlackBackend {
   private readonly appToken?: string;
   private readonly botIds: string[];
   private readonly dmChannels: Record<string, string>;
-  private readonly roomByChannel: Record<string, string>;
-  private readonly channelByRoom: Record<string, string>;
+  private readonly channelById: Record<string, string>;
+  private readonly channels: Record<string, string>;
   private readonly agents: Record<string, { token?: string }>;
   private readonly roster: Record<string, string>;
   /** Cache of users.info answers so a repeat unknown id never re-queries. */
@@ -168,22 +168,22 @@ export class SlackBackend {
     this.roster = cfg.roster;
     this.botIds = cfg.botIds;
     this.dmChannels = cfg.dmChannels;
-    this.roomByChannel = Object.fromEntries(Object.entries(cfg.channels).map(([r, c]) => [c, r]));
-    this.channelByRoom = { ...cfg.channels };
+    this.channelById = Object.fromEntries(Object.entries(cfg.channels).map(([r, c]) => [c, r]));
+    this.channels = cfg.channels;
   }
 
-  /** POST one post to the channel a room maps to, with the agent's own bot
+  /** POST one post to the Slack channel a channel maps to, with the agent's own bot
    *  token when it has one, else the config token. A Slack failure (`ok:false`
    *  with error text) is surfaced as a FAILURE carrying that text, never read
    *  as a success. */
-  async post(room: string, text: string, as: string): Promise<{ ok: true } | { ok: false; error: string }> {
-    const channel = this.channelByRoom[room];
-    if (!channel) return { ok: false, error: `no Slack channel for room ${room}` };
+  async post(channel: string, text: string, as: string): Promise<{ ok: true } | { ok: false; error: string }> {
+    const slackChannel = this.channels[channel];
+    if (!slackChannel) return { ok: false, error: `no Slack channel for channel ${channel}` };
     const token = this.agents[as]?.token ?? this.token;
     const r = await readOk<{ error?: string }>(this.fetch, POST_URL, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-      body: JSON.stringify({ channel, text }),
+      body: JSON.stringify({ channel: slackChannel, text }),
     });
     if (!r.ok) return { ok: false, error: r.error };
     return { ok: true };
@@ -239,13 +239,13 @@ export class SlackBackend {
     const text = await this.normalize(ev.text);
     const from = await this.resolveSender(ev);
     const dmAgent = this.dmChannels[channel];
-    const room = dmAgent === undefined ? this.roomByChannel[channel] : `${DM_PREFIX}${dmAgent}/${from}`;
-    if (room === undefined) return undefined;
+    const channelName = dmAgent === undefined ? this.channelById[channel] : `${DM_PREFIX}${dmAgent}/${from}`;
+    if (channelName === undefined) return undefined;
     // Slack ts is the per-channel cursor (no global seq), used as both ts and the
     // dedup id for a line, exactly as the comment on the CLI documents.
     const ts = ev.ts ?? new Date().toISOString();
-    const mentions = computeMentions(room, text, from);
-    return { seq: 0, ts, room, from, text, id: ts, mentions, mentioned: mentions.includes(as) };
+    const mentions = computeMentions(channelName, text, from);
+    return { seq: 0, ts, channel: channelName, from, text, id: ts, mentions, mentioned: mentions.includes(as) };
   }
 
   /** Resolve the sender's name: a user token shaped like a Slack id is looked
@@ -288,32 +288,32 @@ export class SlackBackend {
     if (env.type === "events_api" && env.payload?.event) onEvent(env.payload.event);
   }
 
-  /** Route an inbound event through the room filter and deliver (or problem-report). */
+  /** Route an inbound event through the channel filter and deliver (or problem-report). */
   private deliver(
     ev: SlackInboundEvent,
-    rooms: string[],
+    channels: string[],
     as: string,
     wantsAll: boolean,
     onLine: (d: Delivery) => void,
   ): void {
     void this.toDelivery(ev, as).then((d) => {
-      if (d !== undefined && (wantsAll || rooms.includes(d.room))) onLine(d);
+      if (d !== undefined && (wantsAll || channels.includes(d.channel))) onLine(d);
     });
   }
 
-  /** history(room, since): conversations.history mapped into the local line
-   *  shape (a room-scoped Message with mentions). `since` maps to Slack's
+  /** history(channel, since): conversations.history mapped into the local line
+   *  shape (a channel-scoped Message with mentions). `since` maps to Slack's
    *  `oldest` cursor, so a resume picks up where the last ts stopped. */
   async history(
-    room: string,
+    channel: string,
     since?: string,
   ): Promise<{ code: 0 | 1; error?: string; messages: Message[] }> {
-    const channel = this.channelByRoom[room];
-    if (!channel) return { code: 1, error: `no Slack channel for room ${room}`, messages: [] };
+    const slackChannel = this.channels[channel];
+    if (!slackChannel) return { code: 1, error: `no Slack channel for channel ${channel}`, messages: [] };
     const qs = since !== undefined ? `&oldest=${encodeURIComponent(since)}` : "";
     const r = await readOk<{ messages?: SlackHistoryMessage[] }>(
       this.fetch,
-      `${HISTORY_URL}?channel=${encodeURIComponent(channel)}${qs}`,
+      `${HISTORY_URL}?channel=${encodeURIComponent(slackChannel)}${qs}`,
       { headers: { authorization: `Bearer ${this.token}` } },
     );
     if (!r.ok) return { code: 1, error: r.error, messages: [] };
@@ -321,32 +321,32 @@ export class SlackBackend {
     let seq = 0;
     for (const m of r.data.messages ?? []) {
       const d = await this.toDelivery(
-        { type: "message", channel, user: m.user, username: m.user, ts: m.ts, text: m.text, bot_id: m.bot_id },
+        { type: "message", channel: slackChannel, user: m.user, username: m.user, ts: m.ts, text: m.text, bot_id: m.bot_id },
         "",
       );
       if (d === undefined) continue;
-      // history is room-scoped: force the requested `room` (a Slack id tells us
-      // the channel, the room mapping is the caller's frame). Slack has no
+      // history is channel-scoped: force the requested `channel` (a Slack id tells us
+      // the Slack channel, the channel mapping is the caller's frame). Slack has no
       // global seq, so a synthetic per-history counter stands in where the
       // local line's `seq` lives; the message's ts is the real cursor.
       const { mentioned, ...rest } = d;
       void mentioned;
-      messages.push({ ...rest, room, seq: ++seq });
+      messages.push({ ...rest, channel, seq: ++seq });
     }
     return { code: 0, messages };
   }
 
-  /** next(rooms, as, timeoutSecs, onProblem): block for ONE message then
+  /** next(channels, as, timeoutSecs, onProblem): block for ONE message then
    *  resolve 0; exit-64 semantics preserved by timing out with nothing
    *  delivered-and-nothing-printed. */
   async next(
-    rooms: string[],
+    channels: string[],
     as: string,
     timeoutSecs: number,
     onProblem: (p: string) => void,
   ): Promise<{ code: 0; line: Delivery } | { code: 64 }> {
     const deadline = this.now() + timeoutSecs * 1000;
-    const wantsAll = rooms.length === 0;
+    const wantsAll = channels.length === 0;
     // Connect asynchronously; the caller-facing promise settles on the first
     // matching delivery OR the deadline, whichever comes first.
     return new Promise((resolve) => {
@@ -364,7 +364,7 @@ export class SlackBackend {
           conn = c;
           c.socket.onmessage = (raw) =>
             this.routeFrame(raw, c.socket, (ev) => {
-              this.deliver(ev, rooms, as, wantsAll, (d) => settle({ code: 0, line: d }));
+              this.deliver(ev, channels, as, wantsAll, (d) => settle({ code: 0, line: d }));
             });
           if (this.now() >= deadline) settle({ code: 64 });
         },
@@ -382,21 +382,21 @@ export class SlackBackend {
     });
   }
 
-  /** listen(rooms, as, onLine, onProblem): the Socket Mode event stream, ONE
+  /** listen(channels, as, onLine, onProblem): the Socket Mode event stream, ONE
    *  JSON line per message as the local backend emits. Resolves when the
    *  underlying socket disconnects cleanly. */
   async listen(
-    rooms: string[],
+    channels: string[],
     as: string,
     onLine: (d: Delivery) => void,
     onProblem: (p: string) => void,
   ): Promise<void> {
-    const wantsAll = rooms.length === 0;
+    const wantsAll = channels.length === 0;
     await new Promise<void>((resolve) => {
       void this.connectSocket().then(
         (c) => {
           c.socket.onmessage = (raw) =>
-            this.routeFrame(raw, c.socket, (ev) => this.deliver(ev, rooms, as, wantsAll, onLine));
+            this.routeFrame(raw, c.socket, (ev) => this.deliver(ev, channels, as, wantsAll, onLine));
           c.socket.onclose = () => resolve();
         },
         (e) => {

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""lint_language.py -- does this prose obey the room's language rules?
+"""lint_language.py -- does this prose obey the channel's language rules?
 
 The rules live in ~/.claude/skills/raft/SKILL.md ("How to write"). This script is
 how a file gets CHECKED against them instead of trusted. Fenced code blocks are

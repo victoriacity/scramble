@@ -1,5 +1,5 @@
 // src/slack.ts — the Slack frontend bridge.
-// The Slack transport and the room POST seam are both injected, so tests drive
+// The Slack transport and the channel POST seam are both injected, so tests drive
 // the whole bridge with fakes — no Slack account, no network. Every outbound
 // Slack call is recorded on `bridge.calls`; in dryRun mode that recording is
 // the whole result and the transport is never invoked.
@@ -41,16 +41,16 @@ export interface SlackAgent {
 }
 
 export interface SlackConfig {
-  /** room name -> channel id. */
+  /** channel name -> Slack channel id. */
   channels: Record<string, string>;
   /** name -> identity config. */
   agents: Record<string, SlackAgent>;
   /** Slack DM channel id -> agent whose bot that DM is opened with = the agent. */
   dmChannels: Record<string, string>;
-  /** Slack user id -> room name, for <@U…> -> @name normalization. */
+  /** Slack user id -> channel name, for <@U…> -> @name normalization. */
   roster: Record<string, string>;
-  /** The room POST seam: post inbound Slack text into a room as a human. */
-  postToRoom(room: string, from: string, text: string): void;
+  /** The channel POST seam: post inbound Slack text into a channel as a human. */
+  postToChannel(channel: string, from: string, text: string): void;
   /** Own bot ids the bridge never re-posts (self-filter). */
   botIds?: string[];
   /** App token, used for every persona-tier post (chat:write.customize). */
@@ -68,7 +68,7 @@ export interface SlackBridge {
   calls: SlackPostOptions[];
   /** Open the socket-mode connection and route its events. */
   connect(): void;
-  /** Push one room/firehose message out to Slack. */
+  /** Push one channel/firehose message out to Slack. */
   publish(msg: Message): void;
 }
 
@@ -76,7 +76,7 @@ export function createBridge(cfg: SlackConfig, transport: SlackTransport): Slack
   const calls: SlackPostOptions[] = [];
   const ownBotIds = new Set(cfg.botIds ?? []);
   const mirror = cfg.dmMirrorChannel ?? "#scramble-dms";
-  const roomByChannel = Object.fromEntries(Object.entries(cfg.channels).map(([r, c]) => [c, r]));
+  const channelById = Object.fromEntries(Object.entries(cfg.channels).map(([r, c]) => [c, r]));
   const dmChannelByAgent = Object.fromEntries(Object.entries(cfg.dmChannels).map(([c, a]) => [a, c]));
 
   function replyTo(opts: SlackPostOptions): void {
@@ -114,22 +114,22 @@ export function createBridge(cfg: SlackConfig, transport: SlackTransport): Slack
     const dmAgent = cfg.dmChannels[ev.channel ?? ""];
     if (dmAgent) {
       const from = rosterName(ev.user);
-      cfg.postToRoom(`dm/${dmAgent}/${from}`, from, text);
+      cfg.postToChannel(`dm/${dmAgent}/${from}`, from, text);
       return;
     }
-    const room = roomByChannel[ev.channel ?? ""];
-    if (room === undefined) return;
-    cfg.postToRoom(room, rosterName(ev.user), text);
+    const channel = channelById[ev.channel ?? ""];
+    if (channel === undefined) return;
+    cfg.postToChannel(channel, rosterName(ev.user), text);
   }
 
-  function dmParts(room: string): [string | undefined, string | undefined] {
-    const parts = room.split("/");
+  function dmParts(channel: string): [string | undefined, string | undefined] {
+    const parts = channel.split("/");
     return [parts[1], parts[2]];
   }
 
   function publish(msg: Message): void {
-    const [a, b] = dmParts(msg.room);
-    if (msg.room.startsWith(DM_PREFIX)) {
+    const [a, b] = dmParts(msg.channel);
+    if (msg.channel.startsWith(DM_PREFIX)) {
       if (a !== undefined && b !== undefined && cfg.agents[a] && cfg.agents[b]) {
         // agent <-> agent DM is mirrored read-only into the designated channel.
         replyTo({ channel: mirror, text: `[${a}↔${b}] ${msg.from}: ${msg.text}` });
@@ -140,9 +140,9 @@ export function createBridge(cfg: SlackConfig, transport: SlackTransport): Slack
       replyTo({ channel: dmChannel, text: msg.text, ...identityFor(msg.from) });
       return;
     }
-    const channel = cfg.channels[msg.room];
-    if (channel === undefined) return;
-    replyTo({ channel, text: msg.text, ...identityFor(msg.from) });
+    const slackChannel = cfg.channels[msg.channel];
+    if (slackChannel === undefined) return;
+    replyTo({ channel: slackChannel, text: msg.text, ...identityFor(msg.from) });
   }
 
   return { calls, connect: () => transport.connect(handleEvent), publish };

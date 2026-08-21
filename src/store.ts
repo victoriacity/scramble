@@ -1,4 +1,4 @@
-// room: append-only JSONL log under <dir>/<room>.jsonl
+// channel: append-only JSONL log under <dir>/<channel>.jsonl
 import {
   appendFileSync,
   mkdirSync,
@@ -15,34 +15,34 @@ import {
   type PostResult,
 } from "./types";
 
-export interface RoomStore {
+export interface ChannelStore {
   post(input: PostInput): PostResult;
   /** The highest seq appended so far, so a reader can start at the tip. */
   tip(): number;
-  read(room: string, since?: number): Message[];
+  read(channel: string, since?: number): Message[];
   readAll(since?: number): Message[];
-  join(name: string, persona: string, room: string): void;
+  join(name: string, persona: string, channel: string): void;
   agents(): Agent[];
-  rooms(): string[];
+  channels(): string[];
   subscribe(fn: (m: Message) => void): () => void;
-  roomsFor(name: string): string[];
+  channelsFor(name: string): string[];
   deliveryFor(name: string, msg: Message): Delivery;
 }
 
-function assertSafeRoom(room: string): void {
-  if (room.length === 0) throw new Error(`room name may not be empty`);
-  for (const seg of room.split("/")) {
+function assertSafeChannel(channel: string): void {
+  if (channel.length === 0) throw new Error(`channel name may not be empty`);
+  for (const seg of channel.split("/")) {
     if (seg === "." || seg === ".." || seg.includes("..") || seg === "") {
-      throw new Error(`room name escapes data dir: ${room}`);
+      throw new Error(`channel name escapes data dir: ${channel}`);
     }
   }
 }
 
-function roomPath(dir: string, room: string): string {
-  assertSafeRoom(room);
+function channelPath(dir: string, channel: string): string {
+  assertSafeChannel(channel);
   const base = normalize(dir) + sep;
-  const full = normalize(pathJoin(dir, room + ".jsonl"));
-  if (!full.startsWith(base)) throw new Error(`room name escapes data dir: ${room}`);
+  const full = normalize(pathJoin(dir, channel + ".jsonl"));
+  if (!full.startsWith(base)) throw new Error(`channel name escapes data dir: ${channel}`);
   return full;
 }
 
@@ -55,12 +55,12 @@ function parseLog(text: string): Message[] {
   return out;
 }
 
-export function createStore(dir: string): RoomStore {
+export function createStore(dir: string): ChannelStore {
   mkdirSync(dir, { recursive: true });
 
-  const rooms = new Map<string, Message[]>();
+  const channels = new Map<string, Message[]>();
   const byId = new Map<string, PostResult>();
-  const memberRooms = new Map<string, Set<string>>();
+  const memberChannels = new Map<string, Set<string>>();
   const personas = new Map<string, string>();
   const listeners: Array<(m: Message) => void> = [];
   let nextSeq = 1;
@@ -73,14 +73,14 @@ export function createStore(dir: string): RoomStore {
       const childRel = rel ? `${rel}/${ent.name}` : ent.name;
       if (ent.isDirectory()) stack.push([pathJoin(d, ent.name), childRel]);
       else if (ent.isFile() && ent.name.endsWith(".jsonl")) {
-        const room = childRel.slice(0, -".jsonl".length);
+        const channel = childRel.slice(0, -".jsonl".length);
         const msgs = parseLog(readFileSync(pathJoin(d, ent.name), "utf8"));
-        rooms.set(room, msgs);
+        channels.set(channel, msgs);
         for (const m of msgs) {
           if (m.seq >= nextSeq) nextSeq = m.seq + 1;
-          let set = memberRooms.get(m.from);
-          if (!set) { set = new Set<string>(); memberRooms.set(m.from, set); }
-          set.add(room);
+          let set = memberChannels.get(m.from);
+          if (!set) { set = new Set<string>(); memberChannels.set(m.from, set); }
+          set.add(channel);
           if (!byId.has(m.id)) byId.set(m.id, { seq: m.seq, crossings: [] });
         }
       }
@@ -88,16 +88,16 @@ export function createStore(dir: string): RoomStore {
   }
 
   function append(msg: Message): void {
-    const path = roomPath(dir, msg.room);
+    const path = channelPath(dir, msg.channel);
     mkdirSync(dirname(path), { recursive: true });
     appendFileSync(path, JSON.stringify(msg) + "\n");
   }
 
-  function computeMentions(from: string, room: string, text: string): string[] {
-    const known = new Set<string>([...memberRooms.keys(), ...personas.keys()]);
-    if (room.startsWith(DM_PREFIX)) {
+  function computeMentions(from: string, channel: string, text: string): string[] {
+    const known = new Set<string>([...memberChannels.keys(), ...personas.keys()]);
+    if (channel.startsWith(DM_PREFIX)) {
       const peers = new Set<string>();
-      for (const seg of room.split("/").slice(1)) {
+      for (const seg of channel.split("/").slice(1)) {
         if (seg && seg !== from) peers.add(seg);
       }
       return [...peers];
@@ -113,10 +113,10 @@ export function createStore(dir: string): RoomStore {
     return [...out];
   }
 
-  function roomsFor(name: string): string[] {
-    const out = new Set<string>(memberRooms.get(name) ?? []);
-    for (const room of rooms.keys()) {
-      if (room.startsWith(`${DM_PREFIX}${name}/`)) out.add(room);
+  function channelsFor(name: string): string[] {
+    const out = new Set<string>(memberChannels.get(name) ?? []);
+    for (const channel of channels.keys()) {
+      if (channel.startsWith(`${DM_PREFIX}${name}/`)) out.add(channel);
     }
     return [...out];
   }
@@ -124,56 +124,56 @@ export function createStore(dir: string): RoomStore {
   function post(input: PostInput): PostResult {
     const dup = byId.get(input.id);
     if (dup) return dup;
-    assertSafeRoom(input.room);
-    const roomMsgs = rooms.get(input.room) ?? [];
+    assertSafeChannel(input.channel);
+    const channelMsgs = channels.get(input.channel) ?? [];
     const msg: Message = {
       seq: nextSeq++,
       ts: new Date().toISOString(),
-      room: input.room,
+      channel: input.channel,
       from: input.from,
       text: input.text,
       id: input.id,
-      mentions: computeMentions(input.from, input.room, input.text),
+      mentions: computeMentions(input.from, input.channel, input.text),
     };
     append(msg);
-    rooms.set(input.room, [...roomMsgs, msg]);
-    let set = memberRooms.get(input.from);
-    if (!set) { set = new Set<string>(); memberRooms.set(input.from, set); }
-    set.add(input.room);
+    channels.set(input.channel, [...channelMsgs, msg]);
+    let set = memberChannels.get(input.from);
+    if (!set) { set = new Set<string>(); memberChannels.set(input.from, set); }
+    set.add(input.channel);
     const lastSeen = input.lastSeen ?? 0;
-    const crossings = roomMsgs.filter((m) => m.seq > lastSeen && m.from !== input.from);
+    const crossings = channelMsgs.filter((m) => m.seq > lastSeen && m.from !== input.from);
     const result: PostResult = { seq: msg.seq, crossings };
     byId.set(input.id, result);
     for (const fn of [...listeners]) fn(msg);
     return result;
   }
 
-  function read(room: string, since = 0): Message[] {
-    roomPath(dir, room);
-    return (rooms.get(room) ?? []).filter((m) => m.seq > since);
+  function read(channel: string, since = 0): Message[] {
+    channelPath(dir, channel);
+    return (channels.get(channel) ?? []).filter((m) => m.seq > since);
   }
 
   function readAll(since = 0): Message[] {
     const out: Message[] = [];
-    for (const msgs of rooms.values()) for (const m of msgs) if (m.seq > since) out.push(m);
+    for (const msgs of channels.values()) for (const m of msgs) if (m.seq > since) out.push(m);
     return out.sort((a, b) => a.seq - b.seq);
   }
 
-  function join(name: string, persona: string, room: string): void {
+  function join(name: string, persona: string, channel: string): void {
     personas.set(name, persona);
-    if (room === "") return;
-    assertSafeRoom(room);
-    let set = memberRooms.get(name);
-    if (!set) { set = new Set<string>(); memberRooms.set(name, set); }
-    set.add(room);
+    if (channel === "") return;
+    assertSafeChannel(channel);
+    let set = memberChannels.get(name);
+    if (!set) { set = new Set<string>(); memberChannels.set(name, set); }
+    set.add(channel);
   }
 
   function agents(): Agent[] {
-    const names = new Set<string>([...memberRooms.keys(), ...personas.keys()]);
+    const names = new Set<string>([...memberChannels.keys(), ...personas.keys()]);
     return [...names].map((name) => ({
       name,
       persona: personas.get(name) ?? "",
-      rooms: roomsFor(name),
+      channels: channelsFor(name),
     }));
   }
 
@@ -183,7 +183,7 @@ export function createStore(dir: string): RoomStore {
 
   return {
     /** The highest seq appended so far. A bridge opens its stream here so a
-     *  reconnect resumes instead of republishing the room. */
+     *  reconnect resumes instead of republishing the channel. */
     tip(): number {
       return nextSeq - 1;
     },
@@ -192,7 +192,7 @@ export function createStore(dir: string): RoomStore {
     readAll,
     join,
     agents,
-    rooms: () => [...rooms.keys()],
+    channels: () => [...channels.keys()],
     subscribe(fn) {
       listeners.push(fn);
       return () => {
@@ -200,7 +200,7 @@ export function createStore(dir: string): RoomStore {
         if (i >= 0) listeners.splice(i, 1);
       };
     },
-    roomsFor,
+    channelsFor,
     deliveryFor,
   };
 }
