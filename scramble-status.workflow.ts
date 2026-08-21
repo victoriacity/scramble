@@ -1,66 +1,77 @@
 export const meta = {
   name: 'scramble-status',
-  description: 'Show an agent working: Slack assistant status and a living progress message',
+  description: 'Show an agent working, set automatically by delivery and cleared by the reply',
   phases: [{ title: 'status' }],
 }
 
 phase('status')
-const out = await agent(`You are adding a WORKING-STATUS surface to "scramble", the repo
-you are running in. Read src/slack-backend.ts, src/raft.ts, src/cli.ts, src/types.ts,
-PLAN.md ("The raft-mirrored surface") and skills/scramble/SKILL.md first.
+const out = await agent(`You are adding an AUTOMATIC working-status surface to "scramble",
+the repo you are running in. Read src/slack-backend.ts, src/raft.ts, src/cli.ts,
+src/types.ts and skills/scramble/SKILL.md first.
 
-WHY: an agent that takes 40 seconds to answer looks dead in Slack. Slack has a native
-indicator for this, and the app already holds the scope: a probe of
-\`assistant.threads.setStatus\` with this app's bot token returned \`invalid_thread_ts\`
-rather than \`missing_scope\`, so the token is accepted and only the fake thread id was
-rejected. The capability is available and unused.
+WHY: an agent that takes 40 seconds to answer looks dead in Slack, and Slack has a native
+indicator for it. The scope is already granted: a probe of \`assistant.threads.setStatus\`
+with this app's bot token returned \`invalid_thread_ts\` rather than \`missing_scope\`.
 
-DELIVER \`scramble status\`, one verb with two shapes:
+THE DESIGN RULE, from the operator: status is NOT an agent-invoked verb. An agent that has
+to remember to set a status will forget, and a rule that depends on remembering is not a
+mechanism. Status is set and cleared by scramble itself, from events scramble already
+sees:
 
-  scramble status --target <channel> "<text>"    # show what you are doing
-  scramble status --target <channel> --clear     # stop showing it
+  delivery of a message to this agent  ->  status ON for that channel
+  a post by this agent to that channel ->  status OFF
+  no post within the TTL               ->  status OFF
 
-Backend behavior, each with the network seam INJECTED so tests need no token:
+So the whole lifecycle is bracketed by \`next\` / \`listen\` / \`message check\` on one side
+and \`post\` / \`message send\` on the other. Do NOT add a \`scramble status\` verb, and do
+not ask the agent to describe its work: the text is scramble's, short and fixed
+("working"), because agent-authored progress prose is a message pretending to be a
+status.
 
-1. SLACK, two mechanisms, in this order of preference:
-   - \`assistant.threads.setStatus\` with \`channel_id\` and \`thread_ts\` when the target is
-     an assistant thread. This is Slack's own indicator, and \`--clear\` sets an empty
-     status. Slack answers 200 with {"ok":false,...} on failure, so treat that as a
-     FAILURE carrying Slack's error text.
-   - a LIVING MESSAGE when the target is an ordinary channel or DM, which is where most
-     agents work: post once with \`chat.postMessage\`, remember the \`ts\`, and \`chat.update\`
-     that same message on each later status. \`--clear\` deletes it with \`chat.delete\`, or
-     replaces its text when delete is refused. Remember the ts per channel in
-     \`.scramble/status.json\` so a later invocation updates rather than posting again,
-     which is what keeps a channel from filling with progress lines.
-2. RAFT: raft has an activity surface of its own and its docs admit it is unreliable for
-   external agents, so map status to a NO-OP that reports on stderr what it would have
-   shown. Do not invent a raft API.
-3. LOCAL: record the status on the channel so a test can read it back.
+DELIVER:
+
+1. SET ON DELIVERY. When a verb delivers a message addressed to this agent, set the
+   status for that channel before the line reaches stdout. A message that is NOT
+   addressed to this agent sets nothing, since a channel where the agent will stay silent
+   must not show it working.
+2. CLEAR ON REPLY. When this agent posts to a channel with an active status, clear it as
+   part of the same call.
+3. TTL. Record each active status in \`.scramble/status.json\` as channel, agent, the
+   Slack ts when a living message backs it, and an expiry. Default TTL 120 seconds,
+   overridable by \`SCRAMBLE_STATUS_TTL\`. Every scramble invocation clears whatever has
+   expired before doing its own work, and \`listen\`, being long-lived, clears on expiry
+   while it runs. A status must never outlive the work it describes.
+4. BACKENDS, network seams INJECTED so tests need no token:
+   - Slack, preferring \`assistant.threads.setStatus\` with \`channel_id\` + \`thread_ts\`
+     when the target is an assistant thread, and otherwise a LIVING MESSAGE: post once,
+     remember the ts, \`chat.update\` it on change, delete it on clear, and replace its
+     text when delete is refused. One living message per channel, never a second.
+   - raft: a no-op that reports on stderr what it would have shown. raft's own activity
+     surface is documented as unreliable for external agents, so do not invent an API.
+   - local: record it so a test can read it back.
+5. OPT OUT with \`SCRAMBLE_STATUS=off\`, one switch, for an operator who wants silence.
 
 RULES:
-- Status is never a message. It must not appear in \`history\`, must not carry a \`seq\`,
-  and must not reach a listener, because a status line waking a peer agent would turn
-  progress into traffic.
-- A failed status NEVER fails the work it describes: report it on stderr and exit 0, so
-  a status outage cannot stop an agent from answering.
-- The living message is one per channel, and \`--clear\` on a channel with none is a
-  no-op that exits 0.
+- Status is never a message: no \`seq\`, absent from \`history\`, never delivered to a
+  listener. A status line waking a peer agent would turn progress into traffic.
+- A failed status NEVER fails the work it brackets. Report on stderr, carry on, exit as
+  the underlying verb would have.
+- Setting a status twice for one channel updates rather than posting again.
 
-Then: skills/scramble/SKILL.md gains a short section saying to set a status before work
-that will outlast a few seconds, to clear it when the answer goes out, and that status is
-not a message. Re-lint with
-\`python3 skills/scramble/lint_language.py skills/scramble/SKILL.md\` until 0 hits.
+Then: skills/scramble/SKILL.md gets a SHORT note saying status is automatic, that an
+agent neither sets nor clears it, and that \`SCRAMBLE_STATUS=off\` disables it. Re-lint
+with \`python3 skills/scramble/lint_language.py skills/scramble/SKILL.md\` until 0 hits.
 
 TESTS, behavioral:
-- an assistant-thread target calls setStatus with the channel and thread, and --clear
-  sends an empty status;
-- an ordinary channel posts once then UPDATES the same ts on the second status, proven by
-  asserting chat.update carries the remembered ts and that chat.postMessage ran once;
-- --clear deletes the living message, and a refused delete falls back to replacing text;
-- a Slack {"ok":false} answer is reported and the process still exits 0;
-- status never appears in history and never reaches a listener;
-- the raft backend reports the no-op without calling any raft command.
+- a delivered message addressed to this agent sets the status, and one not addressed to
+  it sets nothing;
+- a post to that channel clears it, in the same call;
+- a second status for one channel calls chat.update with the remembered ts, proven by
+  asserting postMessage ran once;
+- an expired entry is cleared by the next invocation, whatever verb that is;
+- a Slack {"ok":false} answer is reported and the underlying verb still succeeds;
+- SCRAMBLE_STATUS=off performs no status call at all;
+- status appears in neither history nor a listener's output.
 
 INVARIANTS: TypeScript on bun, strict, ZERO runtime dependencies. The FULL gate must be
 green: run \`bash scripts/gate.sh\` and paste its summary lines plus the coverage table.
