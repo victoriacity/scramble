@@ -1682,6 +1682,137 @@ describe("doctor, and the warning an agent gets without asking", () => {
     expect(await main(["doctor", "--as", "dev", "--backend", "slack"], io)).toBe(0);
   });
 
+  test("doctor --wake FAILS when the socket opens and no frame arrives", async () => {
+    // The exact defect: a socket that connects and delivers nothing looks
+    // identical to a quiet channel, which is how an armed monitor was reported
+    // working while it delivered nothing for hours.
+    const cwd = scratchDir("wake-dead");
+    writeSlackConfig(cwd, {
+      token: "xoxb-d",
+      appToken: "xapp-1",
+      channels: { room: "C1" },
+      agents: { dev: { token: "T", handle: "dev_bot" } },
+    });
+    const errs: string[] = [];
+    const io: Io = {
+      write: () => {},
+      writeErr: (l) => errs.push(l),
+      fetch: async (input) => {
+        const u = String(input);
+        if (u.includes("connections.open")) return new Response(JSON.stringify({ ok: true, url: "wss://x" }), { status: 200 });
+        if (u.includes("chat.postMessage")) return new Response(JSON.stringify({ ok: true, ts: "9.9" }), { status: 200 });
+        if (u.includes("auth.test")) {
+          return new Response(JSON.stringify({ ok: true, user: "dev_bot" }), { status: 200, headers: { "x-oauth-scopes": ALL } });
+        }
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      },
+      env: () => undefined,
+      cwd: () => cwd,
+      sleep: async () => {},
+      serve: async () => 0,
+      // A socket that connects and never delivers: onmessage is never called.
+      createSocket: () => ({ send: () => {}, close: () => {}, onopen: null, onmessage: null, onclose: null, onerror: null }),
+    };
+    expect(await main(["doctor", "--as", "dev", "--wake", "room", "--backend", "slack"], io)).toBe(1);
+    const said = errs.join(" ");
+    expect(said).toContain("no frame arrived");
+    expect(said).toContain("DEAD");
+  });
+
+  test("doctor --wake PASSES when the frame for the probe comes back", async () => {
+    const cwd = scratchDir("wake-live");
+    writeSlackConfig(cwd, {
+      token: "xoxb-d",
+      appToken: "xapp-1",
+      channels: { room: "C1" },
+      agents: { dev: { token: "T", handle: "dev_bot" } },
+    });
+    const writes: string[] = [];
+    const sock: { send: () => void; close: () => void; onopen: null; onmessage: ((d: string) => void) | null; onclose: null; onerror: null } = {
+      send: () => {}, close: () => {}, onopen: null, onmessage: null, onclose: null, onerror: null,
+    };
+    const io: Io = {
+      write: (l) => writes.push(l),
+      writeErr: () => {},
+      fetch: async (input) => {
+        const u = String(input);
+        if (u.includes("connections.open")) return new Response(JSON.stringify({ ok: true, url: "wss://x" }), { status: 200 });
+        if (u.includes("chat.postMessage")) {
+          // Slack echoes the app's own post back over the socket, which is what
+          // makes a self-probe a valid transport test.
+          queueMicrotask(() => sock.onmessage?.(JSON.stringify({ payload: { event: { ts: "9.9" } } })));
+          return new Response(JSON.stringify({ ok: true, ts: "9.9" }), { status: 200 });
+        }
+        if (u.includes("auth.test")) {
+          return new Response(JSON.stringify({ ok: true, user: "dev_bot" }), { status: 200, headers: { "x-oauth-scopes": ALL } });
+        }
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      },
+      env: () => undefined,
+      cwd: () => cwd,
+      sleep: async () => {},
+      serve: async () => 0,
+      createSocket: () => sock,
+    };
+    expect(await main(["doctor", "--as", "dev", "--wake", "room", "--backend", "slack"], io)).toBe(0);
+    expect(writes.join(" ")).toContain('"delivered":"9.9"');
+  });
+
+  test("doctor --wake reports an agent with no appToken rather than passing it", async () => {
+    const cwd = scratchDir("wake-noapp");
+    writeSlackConfig(cwd, { token: "xoxb-d", channels: { room: "C1" }, agents: { dev: { token: "T", handle: "dev_bot" } } });
+    const errs: string[] = [];
+    const io: Io = {
+      write: () => {},
+      writeErr: (l) => errs.push(l),
+      fetch: async () => new Response(JSON.stringify({ ok: true, user: "dev_bot" }), { status: 200, headers: { "x-oauth-scopes": ALL } }),
+      env: () => undefined,
+      cwd: () => cwd,
+      sleep: async () => {},
+      serve: async () => 0,
+      createSocket: () => ({ send: () => {}, close: () => {}, onopen: null, onmessage: null, onclose: null, onerror: null }),
+    };
+    expect(await main(["doctor", "--as", "dev", "--wake", "room", "--backend", "slack"], io)).toBe(1);
+    expect(errs.join(" ")).toContain("no socket to wake on");
+  });
+
+  test("doctor --wake reports an unmapped channel and a refused socket", async () => {
+    const cwd = scratchDir("wake-bad");
+    writeSlackConfig(cwd, { token: "xoxb-d", appToken: "xapp-1", channels: { room: "C1" }, agents: { dev: { token: "T", handle: "dev_bot" } } });
+    const mk = (fetch: (u: string) => Promise<Response>) => {
+      const errs: string[] = [];
+      const io: Io = {
+        write: () => {}, writeErr: (l) => errs.push(l),
+        fetch: (input) => fetch(String(input)),
+        env: () => undefined, cwd: () => cwd, sleep: async () => {}, serve: async () => 0,
+        createSocket: () => ({ send: () => {}, close: () => {}, onopen: null, onmessage: null, onclose: null, onerror: null }),
+      };
+      return { io, errs };
+    };
+    const auth = (u: string) =>
+      new Response(JSON.stringify({ ok: true, user: "dev_bot" }), { status: 200, headers: { "x-oauth-scopes": ALL } });
+    const a1 = mk(async (u) => auth(u));
+    expect(await main(["doctor", "--as", "dev", "--wake", "ghost", "--backend", "slack"], a1.io)).toBe(1);
+    expect(a1.errs.join(" ")).toContain("no Slack channel for channel ghost");
+    const a2 = mk(async (u) =>
+      u.includes("connections.open")
+        ? new Response(JSON.stringify({ ok: false, error: "invalid_auth" }), { status: 200 })
+        : auth(u));
+    expect(await main(["doctor", "--as", "dev", "--wake", "room", "--backend", "slack"], a2.io)).toBe(1);
+    expect(a2.errs.join(" ")).toContain("invalid_auth");
+    // The probe itself refused: a channel this agent was never invited to. This
+    // is the live shape (`channel_not_found`), and it must FAIL rather than pass
+    // quietly, since an unpostable probe proves nothing about the wake path.
+    const a3 = mk(async (u) =>
+      u.includes("connections.open")
+        ? new Response(JSON.stringify({ ok: true, url: "wss://x" }), { status: 200 })
+        : u.includes("chat.postMessage")
+          ? new Response(JSON.stringify({ ok: false, error: "channel_not_found" }), { status: 200 })
+          : auth(u));
+    expect(await main(["doctor", "--as", "dev", "--wake", "room", "--backend", "slack"], a3.io)).toBe(1);
+    expect(a3.errs.join(" ")).toContain("the probe could not be posted: channel_not_found");
+  });
+
   test("staleConfigWarning names the repair when a handle is absent, and is silent when it is not", () => {
     const base = { token: "t", appToken: "a", channels: {}, agents: {}, roster: {}, dmChannels: {}, filesDir: "/tmp" };
     const missing = { ...base, agents: { dev: { token: "T" } } };

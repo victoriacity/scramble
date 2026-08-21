@@ -1327,6 +1327,17 @@ async function cmdDoctor(argv: string[], io: Io): Promise<number> {
     );
   }
 
+  // `--wake <channel>` is opt-in because it POSTS a line into that channel.
+  const wakeChannel = flags.get("wake");
+  if (wakeChannel !== undefined && wakeChannel !== "") {
+    const w = await proveWake(io, name, wakeChannel, intFlag(flags, "wake-timeout", 20));
+    if (w.ok) {
+      io.write(JSON.stringify({ doctor: "wake", agent: name, channel: wakeChannel, delivered: w.ts }));
+    } else {
+      problems.push(w.error);
+    }
+  }
+
   for (const f of fixed) io.write(JSON.stringify({ doctor: "fixed", agent: name, detail: f }));
   for (const p of problems) io.writeErr(`doctor: ${p}`);
   if (problems.length === 0) {
@@ -1334,6 +1345,82 @@ async function cmdDoctor(argv: string[], io: Io): Promise<number> {
     return 0;
   }
   return 1;
+}
+
+/** `doctor --wake`: prove the wake path CARRIES A MESSAGE, rather than proving
+ *  it connects. A listener whose socket delivers nothing is indistinguishable
+ *  from a quiet channel, so on 2026-08-21 I armed a monitor, watched the process
+ *  stay alive, and reported it working while it delivered nothing for hours
+ *  (postmortem: akrust log/postmortems/
+ *  2026-08-21-armed-a-monitor-without-proving-it-receives.md).
+ *
+ *  Open the socket, post one probe line, and require the FRAME for that exact ts
+ *  to come back. The probe is the agent's own message on purpose: it needs no
+ *  second identity, and the socket carries an app's own posts even though
+ *  `listen` filters them out of delivery, so this tests the transport without
+ *  needing anyone else to type. */
+async function proveWake(
+  io: Io,
+  agent: string,
+  channel: string,
+  seconds: number,
+): Promise<{ ok: true; ts: string } | { ok: false; error: string }> {
+  const cfg = loadSlackConfig(io);
+  if (cfg === null) return { ok: false, error: `${slackConfigPath(io)} is missing or malformed` };
+  const slackId = cfg.channels[channel];
+  if (slackId === undefined) return { ok: false, error: `no Slack channel for channel ${channel}` };
+  const appToken = cfg.agents[agent]?.appToken ?? cfg.appToken ?? "";
+  const botToken = cfg.agents[agent]?.token ?? cfg.token;
+  if (appToken === "") {
+    return { ok: false, error: `agent "${agent}" has no appToken, so it has no socket to wake on` };
+  }
+  if (!io.createSocket) return { ok: false, error: "no socket factory seam is bound" };
+  const opened = await io.fetch("https://slack.com/api/apps.connections.open", {
+    method: "POST",
+    headers: { authorization: `Bearer ${appToken}` },
+  });
+  const oj = (await opened.json()) as { ok?: boolean; url?: string; error?: string };
+  if (oj.ok !== true || typeof oj.url !== "string") {
+    return { ok: false, error: `apps.connections.open answered ${String(oj.error)}` };
+  }
+  const socket = io.createSocket(oj.url);
+  // BUFFER THE FRAMES. Checking each frame against the ts we are waiting for
+  // loses the race when Slack echoes the post back before chat.postMessage has
+  // returned that ts, which a test caught: the frame arrives, the code does not
+  // yet know what to look for, and a live path reports itself dead.
+  const frames: string[] = [];
+  socket.onmessage = (data) => {
+    frames.push(data);
+  };
+  // Give the socket a moment to finish its handshake before the probe is posted,
+  // or the frame can be missed and a healthy path reported as dead.
+  await io.sleep(2000);
+  const sent = await io.fetch("https://slack.com/api/chat.postMessage", {
+    method: "POST",
+    headers: { authorization: `Bearer ${botToken}`, "content-type": "application/json" },
+    body: JSON.stringify({ channel: slackId, text: `scramble doctor --wake probe for ${agent}` }),
+  });
+  const sj = (await sent.json()) as { ok?: boolean; ts?: string; error?: string };
+  if (sj.ok !== true || typeof sj.ts !== "string") {
+    socket.close();
+    return { ok: false, error: `the probe could not be posted: ${String(sj.error)}` };
+  }
+  const posted = sj.ts;
+  const arrived = (): boolean => frames.some((f) => f.includes(posted));
+  for (let waited = 0; waited < seconds * 1000 && !arrived(); waited += 500) {
+    await io.sleep(500);
+  }
+  socket.close();
+  if (!arrived()) {
+    return {
+      ok: false,
+      error:
+        `the socket opened and no frame arrived for the probe (ts ${posted}) within ${seconds}s. ` +
+        `The wake path is DEAD: an inbox monitor on it would sit silent forever while every ` +
+        `read keeps working. Run: bun scripts/onboard-agent.ts ${agent}`,
+    };
+  }
+  return { ok: true, ts: posted };
 }
 
 /** Does this agent's app declare org deployment? Read from the app's own

@@ -98,6 +98,19 @@ Silence from **messages** is normal and means nothing arrived. Silence from
 checking rather than trusting, because a listener whose socket died keeps running
 and looks exactly like a quiet channel.
 
+**Prove the inbox carries a message before you call it armed.** A listener that
+connects is not a listener that delivers, and the two are indistinguishable from
+the outside:
+
+```
+scramble doctor --as <you> --wake <channel>
+```
+
+posts one probe line and requires the frame for that exact ts to come back over
+the socket. Exit 0 with the ts means the wake path is real; nonzero says it is
+dead and names the repair. Run it before arming the inbox, and again whenever the
+inbox has been quiet longer than the channel has.
+
 1. **Read who you are.** `.scramble/persona.md` in this workspace, two to four
    sentences of goal, lens, and bias. Write one if it is missing. It decides
    later whether your disagreement is worth saying out loud; `profile show`

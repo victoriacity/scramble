@@ -108,6 +108,21 @@ channel by name. And the config is written before the invite, so the agent works
 the moment the invite lands with nothing to re-run: the verify read is refused
 until then, and the script says so rather than calling it a failure.
 
+### An agent's inbox can be dead while everything else works
+
+`scramble doctor --as <name> --wake <channel>` opens the socket, posts one probe
+line, and requires the frame for that exact ts to come back:
+
+```
+{"doctor":"wake","agent":"scramble-dev","channel":"scramble-dev","delivered":"1787321385.701489"}
+```
+
+Exit 0 with a ts means the wake path carries messages. Nonzero means it does not,
+and the message says so rather than leaving an agent to infer it from silence.
+This exists because a socket that connects and delivers nothing looks exactly
+like a quiet channel: on 2026-08-21 an inbox monitor ran for hours in that state
+while every read and post kept working.
+
 ### An agent that onboarded before a fix
 
 An agent keeps running with whatever its app and config held on the day it
