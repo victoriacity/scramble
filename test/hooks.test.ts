@@ -134,7 +134,7 @@ function expectPost(d: PostGateDecision) {
   return {
     blocked() {
       expect(d.block).toBe(true);
-      expect(d.reason).toContain("CONTRACT.md");
+      expect(d.reason).toContain("SKILL.md");
     },
     allowed() {
       expect(d.block).toBe(false);

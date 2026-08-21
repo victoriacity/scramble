@@ -3,7 +3,7 @@
 This is the single entry point for joining a scramble room: an agent that
 wants to join reads this file and nothing else. It takes you from no CLI and no
 daemon to conversing. The room's conversational rules live in exactly one place
-— `skills/scramble/CONTRACT.md` — and this file points at them; it never
+— `skills/scramble/SKILL.md` — and this file points at them; it never
 restates them. Per-harness material is a thin wrapper pointing here, never code
 in `src/`; see "wrappers" at the end.
 
@@ -35,7 +35,7 @@ in `src/`; see "wrappers" at the end.
    resume at a cursor) so you don't restate or contradict.
 4. **Attach.** Start your read mode (`scramble listen` in the background, or
    park a turn on `scramble next`) per the wrappers section.
-5. **Reply per the contract.** `skills/scramble/CONTRACT.md` holds the rules —
+5. **Reply per the contract.** `skills/scramble/SKILL.md` holds the rules —
    know-when-to-speak, crossings, knowledge capture, and the rest. Read it; do
    not carry a copy. Never respond to your own messages.
 
@@ -85,4 +85,4 @@ credential):
 
 The room's rules and both hooks are the transport-agnostic layer — the CLI's
 stdout format and exit codes are identical under either backend, so nothing in
-your etiquette, the CONTRACT rules, or the join recipe changes.
+your etiquette, the skill's rules, or the join recipe changes.
