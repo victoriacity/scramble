@@ -172,10 +172,91 @@ describe("post", () => {
     expect((call.init?.headers as Record<string, string>).authorization).toBe("Bearer xoxb-app");
   });
 
-  test("an unknown channel is a failure naming the channel", async () => {
+  test("an unknown channel is a failure naming the channel AND what was asked", async () => {
     const h = make();
     const r = await h.backend.post("nope", "hi", "bob");
-    expect(r).toEqual({ ok: false, error: "no Slack channel for channel nope" });
+    expect(r.ok).toBe(false);
+    // Both halves matter. The name, so the reader knows which channel; and that
+    // the lookup RAN and came back without it, so this is distinguishable from
+    // the case where Slack refused the question — which is what actually
+    // happened on this org, where conversations.list wanted a team_id it was not
+    // given and every name resolved to this same sentence.
+    expect(r.ok ? "" : r.error).toContain("no Slack channel for channel nope");
+    expect(r.ok ? "" : r.error).toContain("conversations.list answered without it");
+  });
+
+  test("a channel NAME resolves through the WORKSPACE id, never the enterprise id", async () => {
+    // The trap this exists for, measured on a real Enterprise Grid org: on an
+    // enterprise install auth.test reports team_id = the E… ORG, identical to
+    // its own enterprise_id, and conversations.list answers
+    // team_access_not_granted to that. auth.teams.list is the only method that
+    // names the workspace. Reading the obvious field produced an id that was
+    // wrong in a way whose error named neither the field nor the fix.
+    const seen: string[] = [];
+    const h = make({}, async (url) => {
+      seen.push(url);
+      if (url.includes("auth.test")) {
+        return new Response(
+          JSON.stringify({ ok: true, team_id: "E0EXAMPLE010", enterprise_id: "E0EXAMPLE010", is_enterprise_install: true }),
+          { status: 200 },
+        );
+      }
+      if (url.includes("auth.teams.list")) {
+        return new Response(JSON.stringify({ ok: true, teams: [{ id: "T0EXAMPLE012", name: "Example" }] }), { status: 200 });
+      }
+      if (url.includes("conversations.list")) {
+        // Slack's real behaviour: the org id is refused outright.
+        if (url.includes("team_id=E0EXAMPLE010")) {
+          return new Response(JSON.stringify({ ok: false, error: "team_access_not_granted" }), { status: 200 });
+        }
+        return new Response(JSON.stringify({ ok: true, channels: [{ id: "C9", name: "invited" }] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    });
+    const r = await h.backend.post("invited", "hi", "bob");
+    expect(r).toEqual({ ok: true });
+    expect(seen.some((u) => u.includes("conversations.list") && u.includes("team_id=T0EXAMPLE012"))).toBe(true);
+    expect(seen.some((u) => u.includes("conversations.list") && u.includes("team_id=E0EXAMPLE010"))).toBe(false);
+  });
+
+  test("a login covering several workspaces names none of them rather than guessing", async () => {
+    const seen: string[] = [];
+    const h = make({}, async (url) => {
+      seen.push(url);
+      if (url.includes("auth.teams.list")) {
+        return new Response(JSON.stringify({ ok: true, teams: [{ id: "T1" }, { id: "T2" }] }), { status: 200 });
+      }
+      if (url.includes("conversations.list")) {
+        return new Response(JSON.stringify({ ok: true, channels: [{ id: "C9", name: "invited" }] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    });
+    expect(await h.backend.post("invited", "hi", "bob")).toEqual({ ok: true });
+    // No team_id at all: with two workspaces there is no single right answer, so
+    // Slack decides and its refusal (if any) is what gets reported.
+    expect(seen.some((u) => u.includes("conversations.list") && u.includes("team_id="))).toBe(false);
+  });
+
+  test("a RAW channel id is the answer, without asking Slack to name a channel after it", async () => {
+    const seen: string[] = [];
+    const h = make({}, async (url) => {
+      seen.push(url);
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    });
+    expect(await h.backend.post("C0EXAMPLE007", "hi", "bob")).toEqual({ ok: true });
+    expect(seen.some((u) => u.includes("conversations.list"))).toBe(false);
+  });
+
+  test("a REFUSED lookup is not reported as a missing channel", async () => {
+    const h = make({}, async (url) =>
+      url.includes("conversations.list")
+        ? new Response(JSON.stringify({ ok: false, error: "missing_argument" }), { status: 200 })
+        : new Response(JSON.stringify({ ok: true }), { status: 200 }),
+    );
+    const r = await h.backend.post("nope", "hi", "bob");
+    expect(r.ok).toBe(false);
+    expect(r.ok ? "" : r.error).toContain("missing_argument");
+    expect(r.ok ? "" : r.error).toContain('NOT "no such channel"');
   });
 
   test("Slack ok:false surfaces Slack's error text, never a success", async () => {
@@ -829,6 +910,26 @@ describe("selectBackend", () => {
 
   test("SCRAMBLE_BACKEND=local selects local", () => {
     expect(selectBackend(["post"], env("local"))).toBe("local");
+  });
+
+  test("with neither given, the backend FOLLOWS THE CONFIG on disk", () => {
+    // It used to default to local whatever was configured, which is not a
+    // preference but a failure surface: the local backend answers from a store
+    // the listener fills, so a Slack agent that forgot the variable got a
+    // TRANSCRIPT rather than an error. `message read` on the channel the
+    // operator had just invited it into printed nothing and exited 0 while
+    // Slack held twenty messages in it (2026-08-22).
+    const dir = makeTmpDir("backend-default");
+    mkdirSync(join(dir, ".scramble"), { recursive: true });
+    const io = stubIo({ env: () => undefined, cwd: () => dir });
+    expect(selectBackend(["message", "read"], io)).toBe("local");
+    writeFileSync(
+      join(dir, ".scramble", "slack.json"),
+      JSON.stringify({ token: "xoxb-x", channels: {}, agents: { dev: { token: "T" } } }),
+    );
+    expect(selectBackend(["message", "read"], io)).toBe("slack");
+    // And an explicit choice still wins over the file, in both directions.
+    expect(selectBackend(["message", "read", "--backend", "local"], io)).toBe("local");
   });
 });
 

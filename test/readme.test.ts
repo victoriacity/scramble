@@ -1,12 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { SCOPE_NAMES, BOT_EVENT_NAMES } from "../src/app-manifest";
 
 const ROOT = join(import.meta.dir, "..");
 const plan = readFileSync(join(ROOT, "PLAN.md"), "utf8");
 const readme = readFileSync(join(ROOT, "README.md"), "utf8");
-// The onboarding script is the single source for the app manifest: it creates
-// the app from this list and `--print-manifest` prints it for a manual paste.
+// The onboarding script builds the app manifest from src/app-manifest.ts, which
+// `doctor` checks a live app against. The script's TEXT is still read here for
+// the settings it writes literally (socket mode, org deploy).
 const onboard = readFileSync(join(ROOT, "scripts", "onboard-agent.ts"), "utf8");
 const joinDoc = readFileSync(join(ROOT, "JOIN.md"), "utf8");
 
@@ -175,25 +177,34 @@ describe("the app manifest the onboarding script builds", () => {
       "channels:history",
       "groups:history",
       "im:history",
+      "im:read",
       "im:write",
       "users:read",
       "channels:read",
+      "groups:read",
       "files:read",
       "files:write",
+      "reactions:write",
+      "reactions:read",
       "assistant:write",
     ]) {
-      expect(onboard).toContain(scope);
+      expect(SCOPE_NAMES).toContain(scope);
     }
-    expect(onboard).not.toContain("chat:write.customize");
+    expect(SCOPE_NAMES).not.toContain("chat:write.customize");
     // No channels:join either: an app cannot add itself to a Slack conversation,
     // public or private, so a member invites it and the scope buys nothing.
-    expect(onboard).not.toContain("channels:join");
+    expect(SCOPE_NAMES).not.toContain("channels:join");
   });
 
-  test("subscribes the three bot events, one per conversation kind", () => {
-    expect(onboard).toContain("message.channels");
-    expect(onboard).toContain("message.groups");
-    expect(onboard).toContain("message.im");
+  test("subscribes one event per conversation kind, AND the invite", () => {
+    expect(BOT_EVENT_NAMES).toContain("message.channels");
+    expect(BOT_EVENT_NAMES).toContain("message.groups");
+    expect(BOT_EVENT_NAMES).toContain("message.im");
+    // Without this one an invite delivers NOTHING and nothing reports it: Slack
+    // sends no event an app has not subscribed to, so being added to a channel
+    // is news the agent never hears. Every app created before it was added kept
+    // three events until `doctor` learned to compare (operator, 2026-08-22).
+    expect(BOT_EVENT_NAMES).toContain("member_joined_channel");
   });
 
   test("enables socket mode AND declares org deploy, or the inbox is silently dead", () => {

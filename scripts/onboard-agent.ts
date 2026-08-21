@@ -46,29 +46,9 @@
 import { existsSync, readFileSync, mkdirSync, writeFileSync, chmodSync } from "node:fs";
 import { join, dirname } from "node:path";
 
-// The scopes, and why each one is here. THIS LIST IS THE SOURCE: the app is
-// created from it, and `--print-manifest` prints the manifest for anyone pasting
-// it into the browser by hand, so there is no second copy to drift.
-const SCOPES: Array<[string, string]> = [
-  ["chat:write", "post a message, a threaded reply, and the living status message"],
-  ["channels:history", "read a public channel"],
-  ["groups:history", "read a private channel"],
-  ["im:history", "read a DM"],
-  ["im:read", "FIND your own DM conversation. Without it conversations.list types=im answers missing_scope, so a human's DM exists and the agent cannot locate it"],
-  ["im:write", "open and write a DM, so a human can talk to this agent alone"],
-  ["users:read", "resolve <@U…> to a name; without it a mention matches no agent"],
-  ["channels:read", "name a channel by its id, and find a public channel by name"],
-  ["groups:read", "FIND a private channel you were invited to. groups:history reads one you already know; without groups:read an agent cannot discover its own channel id and needs the Slack CLI credential to look it up"],
-  ["files:write", "upload an attachment"],
-  ["files:read", "download an inbound attachment"],
-  ["reactions:write", "react to a message with an emoji, which is how a channel acknowledges without adding a line"],
-  ["reactions:read", "see which reactions a message already carries, so a reply does not repeat what a reaction already said"],
-  ["assistant:write", "the automatic working status on an assistant thread"],
-];
-// member_joined_channel is here so an INVITE reaches the agent's inbox the way it
-// reaches a human's: being added to a channel is news, and without this event an
-// agent learns it was added only by overhearing later traffic.
-const BOT_EVENTS = ["message.channels", "message.groups", "message.im", "member_joined_channel"];
+// The scopes and events the app declares live in src/app-manifest.ts, which
+// `doctor` reads too. They were duplicated here once and the two copies drifted.
+import { SCOPES, SCOPE_NAMES, BOT_EVENT_NAMES } from "../src/app-manifest";
 
 /** Slack's own constraint, measured: a `long_description` under 175 characters
  *  is rejected with
@@ -90,9 +70,9 @@ function manifestFor(
         : {}),
     },
     features: { bot_user: { display_name: name, always_online: false } },
-    oauth_config: { scopes: { bot: SCOPES.map(([s]) => s) } },
+    oauth_config: { scopes: { bot: SCOPE_NAMES } },
     settings: {
-      event_subscriptions: { bot_events: BOT_EVENTS },
+      event_subscriptions: { bot_events: BOT_EVENT_NAMES },
       socket_mode_enabled: true,
       token_rotation_enabled: false,
       // TRUE, and this field decides whether the agent's inbox works at all.
@@ -300,7 +280,7 @@ async function setIcon(appId: string, path: string): Promise<void> {
 // AN AGENT THAT ALREADY HAS AN APP UPDATES IT. Running this again to change a
 // description or an avatar must not create a second Slack app, so the appId in
 // the agent's own config entry decides between update and create.
-const existingCfg: { agents?: Record<string, { appId?: string }> } = existsSync(
+const existingCfg: { agents?: Record<string, { appId?: string; token?: string }> } = existsSync(
   process.env.SCRAMBLE_SLACK_CONFIG ?? join(process.env.HOME ?? ".", ".config", "scramble", "slack.json"),
 )
   ? (JSON.parse(
@@ -308,9 +288,46 @@ const existingCfg: { agents?: Record<string, { appId?: string }> } = existsSync(
         process.env.SCRAMBLE_SLACK_CONFIG ?? join(process.env.HOME ?? ".", ".config", "scramble", "slack.json"),
         "utf8",
       ),
-    ) as { agents?: Record<string, { appId?: string }> })
+    ) as { agents?: Record<string, { appId?: string; token?: string }> })
   : {};
-const existingAppId = existingCfg.agents?.[agent]?.appId;
+
+/** The app behind a bot TOKEN. auth.test names the bot's user, and that user's
+ *  profile carries `api_app_id`, so an agent whose config predates the appId
+ *  field can still find its own app instead of being read as a new agent.
+ *
+ *  THIS EXISTS BECAUSE THE ABSENCE OF ONE FIELD MEANT "CREATE". Two agents in
+ *  this config were made by hand before appId was recorded, and running onboard
+ *  on them built two NEW Slack apps: `akari` became @akari2, a bot in no
+ *  channel, and the config's copy of the working token was overwritten with the
+ *  new one. Everything was recoverable — the original apps still existed and
+ *  users.info gave their ids back — but nothing about the run said a second app
+ *  was about to be born. A missing record is a question to answer, not a licence
+ *  to create. */
+async function appIdBehindToken(botToken: string): Promise<string> {
+  const who = await get(botToken, "auth.test");
+  if (who.ok !== true) return "";
+  const info = await get(botToken, `users.info?user=${encodeURIComponent(String(who.user_id))}`);
+  if (info.ok !== true) return "";
+  const profile = (info.user as { profile?: { api_app_id?: string } } | undefined)?.profile;
+  return typeof profile?.api_app_id === "string" ? profile.api_app_id : "";
+}
+
+const recordedAppId = existingCfg.agents?.[agent]?.appId;
+const recordedToken = existingCfg.agents?.[agent]?.token;
+let existingAppId = recordedAppId;
+if ((existingAppId === undefined || existingAppId === "") && recordedToken !== undefined && recordedToken !== "") {
+  const found = await appIdBehindToken(recordedToken);
+  if (found === "") {
+    die(
+      `agent "${agent}" already has a bot token in the config but no appId, and the app behind\n` +
+        `that token could not be read (auth.test or users.info refused it). Creating an app now\n` +
+        `would make a SECOND bot under this name and overwrite the working token, so nothing was\n` +
+        `done. Either fix the token, or remove the "${agent}" entry to start it fresh.`,
+    );
+  }
+  console.log(`onboard: agent "${agent}" had no appId recorded; its token belongs to ${found}, updating that`);
+  existingAppId = found;
+}
 if (existingAppId !== undefined && existingAppId !== "") {
   console.log(`onboard: agent "${agent}" already owns app ${existingAppId}, updating it`);
   if (description !== undefined || longDescription !== undefined) {
@@ -353,46 +370,69 @@ if (existingAppId !== undefined && existingAppId !== "") {
   }
   if (iconPath !== undefined) await setIcon(existingAppId, iconPath);
 
-  // SCOPES ARE RECONCILED EVERY RUN, with no flag. The list above is what a
-  // scramble agent needs, so an app installed before a scope was added is behind
-  // and its owner cannot tell from the outside: the missing scope shows up as a
-  // one-word error from an unrelated call. Comparing and reinstalling is cheap,
-  // and the reinstall hands back the token carrying the new scope.
+  // THE WHOLE DECLARATION IS RECONCILED EVERY RUN, with no flag: scopes, events
+  // and org deployment, compared against src/app-manifest.ts in ONE pass. An app
+  // created before any of them was added is behind, and its owner cannot tell
+  // from the outside — a missing scope shows up as a one-word error from an
+  // unrelated call, and a missing EVENT shows up as nothing at all. This was
+  // three separate branches and the third was never written, which is how
+  // member_joined_channel reached the manifest that CREATES an app while every
+  // app that already existed stayed subscribed to three events.
   const exported = await api(token, "apps.manifest.export", { app_id: existingAppId });
   const cur = (exported.manifest ?? {}) as Record<string, unknown>;
-  const curScopes = new Set(
-    ((((cur.oauth_config ?? {}) as Record<string, unknown>).scopes as Record<string, unknown> | undefined)
-      ?.bot as string[] | undefined) ?? [],
-  );
-  const want = SCOPES.map(([sc]) => sc);
-  // ORG DEPLOY IS RECONCILED TOO. An app created before this was understood
-  // declares org_deploy_enabled:false while being installed org-wide, which
-  // Slack accepts while delivering no events at all, so the agent's inbox is
-  // dead and nothing says so. Repaired on the same run as the scopes.
+  const oauthNow = (cur.oauth_config ?? {}) as Record<string, unknown>;
   const settingsNow = (cur.settings ?? {}) as Record<string, unknown>;
-  const orgDeployBroken = settingsNow.org_deploy_enabled !== true;
-  if (orgDeployBroken) {
-    console.log("onboard: this app declares org_deploy_enabled:false, which silently kills its event delivery");
-    await api(token, "apps.manifest.update", {
-      app_id: existingAppId,
-      manifest: { ...cur, settings: { ...settingsNow, org_deploy_enabled: true } },
-    });
+  const subsNow = (settingsNow.event_subscriptions ?? {}) as Record<string, unknown>;
+  const curScopes = new Set(((oauthNow.scopes as Record<string, unknown> | undefined)?.bot as string[]) ?? []);
+  const curEvents = new Set((subsNow.bot_events as string[] | undefined) ?? []);
+  const want = SCOPE_NAMES;
+
+  const drift: string[] = [];
+  const missing = want.filter((sc) => !curScopes.has(sc));
+  if (missing.length > 0) drift.push(`missing ${missing.length} scope(s): ${missing.join(", ")}`);
+  const missingEvents = BOT_EVENT_NAMES.filter((e) => !curEvents.has(e));
+  if (missingEvents.length > 0) {
+    drift.push(
+      `not subscribed to ${missingEvents.join(", ")}. Slack sends NOTHING for an event an app ` +
+        `does not subscribe to, so the socket opens, says hello, and stays quiet`,
+    );
+  }
+  if (settingsNow.org_deploy_enabled !== true) {
+    drift.push("declares org_deploy_enabled:false, which silently kills its event delivery");
   }
 
-  const missing = want.filter((sc) => !curScopes.has(sc));
-  if (missing.length > 0 || orgDeployBroken) {
-    if (missing.length > 0) console.log(`onboard: this app is missing ${missing.length} scope(s): ${missing.join(", ")}`);
-    if (missing.length > 0) {
-      const oauth = { ...((cur.oauth_config ?? {}) as Record<string, unknown>) };
-      oauth.scopes = { ...((oauth.scopes ?? {}) as Record<string, unknown>), bot: want };
-      await api(token, "apps.manifest.update", {
-        app_id: existingAppId,
-        manifest: { ...cur, oauth_config: oauth, settings: { ...settingsNow, org_deploy_enabled: true } },
-      });
-    }
+  // ADD, NEVER REPLACE. This list is what scramble needs, not the whole of what
+  // the app is allowed to be: an app can hold scopes for features scramble knows
+  // nothing about, and sending `want` as the entire list REMOVES them. Measured:
+  // reconciling an older app whose manifest declares slash commands was rejected
+  // outright, `requires_commands_bot_scope … pointer /features/slash_commands`,
+  // because the replacement dropped `commands`. Slack caught that one; a scope
+  // with no manifest feature behind it would have been dropped in silence.
+  const unionScopes = [...new Set([...curScopes, ...want])];
+  const unionEvents = [...new Set([...curEvents, ...BOT_EVENT_NAMES])];
+
+  if (drift.length > 0) {
+    for (const d of drift) console.log(`onboard: this app ${d}`);
+    // ONE update carrying every repair. apps.manifest.update REPLACES the
+    // manifest, so `cur` is spread and only the drifted fields are overwritten.
+    await api(token, "apps.manifest.update", {
+      app_id: existingAppId,
+      manifest: {
+        ...cur,
+        oauth_config: {
+          ...oauthNow,
+          scopes: { ...((oauthNow.scopes ?? {}) as Record<string, unknown>), bot: unionScopes },
+        },
+        settings: {
+          ...settingsNow,
+          org_deploy_enabled: true,
+          event_subscriptions: { ...subsNow, bot_events: unionEvents },
+        },
+      },
+    });
     const re = await api(token, "apps.developerInstall", {
       app_id: existingAppId,
-      bot_scopes: want,
+      bot_scopes: unionScopes,
       team_id: team,
     });
     const fresh = (re.api_access_tokens as { bot?: string; app_level?: string } | undefined) ?? {};
@@ -420,10 +460,11 @@ if (existingAppId !== undefined && existingAppId !== "") {
     description === undefined &&
     longDescription === undefined &&
     iconPath === undefined &&
-    missing.length === 0 &&
-    !orgDeployBroken
+    drift.length === 0
   ) {
-    console.log("onboard: nothing to change. Scopes already match, and no --description or --icon was passed.");
+    console.log(
+      "onboard: nothing to change. Scopes, events and org deployment already match, and no --description or --icon was passed.",
+    );
   }
   process.exit(0);
 }
@@ -444,7 +485,7 @@ console.log(`onboard: app ${appId} created`);
 
 const installed = await api(token, "apps.developerInstall", {
   app_id: appId,
-  bot_scopes: SCOPES.map(([s]) => s),
+  bot_scopes: SCOPE_NAMES,
   team_id: team,
 });
 const tokens = installed.api_access_tokens as { bot?: string; app_level?: string } | undefined;

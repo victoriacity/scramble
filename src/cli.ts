@@ -28,6 +28,7 @@ import {
   type Attachment,
 } from "./attachments";
 import { StatusManager } from "./status";
+import { SCOPE_NAMES, BOT_EVENT_NAMES } from "./app-manifest";
 
 const DEFAULT_URL = "http://127.0.0.1:7737";
 const MAX_BACKOFF = 2000; // ms cap on reconnect delay
@@ -665,26 +666,10 @@ function slackFilesDir(io: Io): string {
  *  config path, and every outbound call/socket goes through io.fetch and
  *  io.createSocket, so tests need no token, network or socket. Returns an
  *  error string instead of a backend when the config or seams are missing. */
-/** What a scramble agent's Slack app must hold TODAY. The onboarding script
- *  creates an app from its own annotated copy of this list; this one exists so a
- *  RUNNING agent can tell that its app predates a scope without reading that
- *  script, which may live in a checkout it does not have. Two lists is a
- *  duplication with a named reason, and `doctor` compares them so a drift
- *  between the two is reported rather than silent. */
-const REQUIRED_SCOPES = [
-  "chat:write",
-  "channels:history",
-  "groups:history",
-  "im:history",
-  "im:read",
-  "im:write",
-  "users:read",
-  "channels:read",
-  "groups:read",
-  "files:write",
-  "files:read",
-  "assistant:write",
-];
+// What a scramble agent's app must declare lives in one place, which the
+// onboarding script builds the manifest from and doctor checks a live app
+// against. It used to be a second hand-kept copy here, under a comment claiming
+// doctor compared the two; doctor never did, and the copies had diverged.
 
 /** The one line an agent whose config is stale must see. Returned rather than
  *  printed so the caller decides the stream, and empty when nothing is wrong. */
@@ -1395,14 +1380,29 @@ async function cmdDoctor(argv: string[], io: Io): Promise<number> {
   // delivered, so `listen` runs forever and the agent looks like it is in a quiet
   // channel. Checked here because doctor is where an agent asks whether its own
   // wake path is real, and because nothing else would ever say it.
-  if (body.is_enterprise_install === true) {
-    const deploy = await orgDeployDeclared(io, name);
-    if (deploy === false) {
+  //
+  // AN UNSUBSCRIBED EVENT IS THE SAME SILENCE, reached a different way: Slack
+  // sends nothing for an event the app does not ask for, so an app created
+  // before an event was added to the manifest keeps a wake path that is dead for
+  // exactly that one kind of news and healthy for every other. That is how an
+  // invite delivered nothing while mentions kept arriving (operator, 2026-08-22:
+  // "invited but inbox does not fire"). Both answers come from ONE manifest read.
+  const declared = await declaredManifest(io, name);
+  if (declared !== undefined) {
+    if (body.is_enterprise_install === true && !declared.orgDeploy) {
       problems.push(
         `this app is installed ORG-WIDE (auth.test: is_enterprise_install true) while its ` +
           `manifest declares org_deploy_enabled:false. Slack accepts that combination and ` +
           `delivers NO events for it, so your inbox monitor will sit silent forever while ` +
           `every read still works. Fix: bun scripts/onboard-agent.ts ${name}`,
+      );
+    }
+    const unsubscribed = BOT_EVENT_NAMES.filter((e) => !declared.botEvents.includes(e));
+    if (unsubscribed.length > 0) {
+      problems.push(
+        `this app does not subscribe to ${unsubscribed.join(", ")}. Slack delivers NOTHING ` +
+          `for an unsubscribed event, so that news never reaches your inbox while everything ` +
+          `else arrives normally. Fix: bun scripts/onboard-agent.ts ${name}`,
       );
     }
   }
@@ -1412,7 +1412,7 @@ async function cmdDoctor(argv: string[], io: Io): Promise<number> {
   const staleProblem = staleListenerProblem(staleListeners(io, name), name);
   if (staleProblem !== undefined) problems.push(staleProblem);
 
-  const missing = REQUIRED_SCOPES.filter((sc) => !granted.has(sc));
+  const missing = SCOPE_NAMES.filter((sc) => !granted.has(sc));
   if (missing.length > 0) {
     problems.push(
       `this app is missing ${missing.length} scope(s): ${missing.join(", ")}. ` +
@@ -1595,16 +1595,29 @@ export function pickStale(
   agent: string,
   newestSourceMs: number,
 ): Array<{ pid: string; ageBehind: number }> {
+  // `--as <agent>`, not the name ANYWHERE in the command line. A bare substring
+  // match reported every listener as belonging to every agent whenever an
+  // agent's name also appeared in the checkout path, which is ordinary: name an
+  // agent after the product and every process running from the product's own
+  // directory matches it. Measured here, doctor named the same three pids under
+  // two agents and told me to restart listeners that were not mine. A detector
+  // that cries wolf is worth less than no detector, since I stop reading it.
+  const asFlag = `--as ${agent}`;
   return procs
-    .filter((p) => p.cmd.includes("bin.ts listen") && p.cmd.includes(agent) && p.startedMs < newestSourceMs)
+    .filter((p) => p.cmd.includes("bin.ts listen") && p.cmd.includes(asFlag) && p.startedMs < newestSourceMs)
     .map((p) => ({ pid: p.pid, ageBehind: Math.round((newestSourceMs - p.startedMs) / 1000) }));
 }
 
-/** Does this agent's app declare org deployment? Read from the app's own
- *  manifest through the Slack CLI credential, which is the only token that can
- *  export it. Returns undefined when that credential is absent, so a host
- *  without it reports nothing rather than guessing. */
-async function orgDeployDeclared(io: Io, agent: string): Promise<boolean | undefined> {
+/** What this agent's app DECLARES: whether it deploys org-wide, and which events
+ *  it subscribes to. Read from the app's own manifest through the Slack CLI
+ *  credential, which is the only token that can export it, in ONE call because
+ *  both answers come from the same document. Returns undefined when that
+ *  credential is absent, so a host without it reports nothing rather than
+ *  guessing. */
+async function declaredManifest(
+  io: Io,
+  agent: string,
+): Promise<{ orgDeploy: boolean; botEvents: string[] } | undefined> {
   const home = io.env("HOME");
   if (home === undefined || home === "") return undefined;
   let cliToken = "";
@@ -1636,9 +1649,18 @@ async function orgDeployDeclared(io: Io, agent: string): Promise<boolean | undef
     headers: { authorization: `Bearer ${cliToken}`, "content-type": "application/json; charset=utf-8" },
     body: JSON.stringify({ app_id: appId }),
   });
-  const j = (await r.json()) as { ok?: boolean; manifest?: { settings?: { org_deploy_enabled?: boolean } } };
+  const j = (await r.json()) as {
+    ok?: boolean;
+    manifest?: {
+      settings?: { org_deploy_enabled?: boolean; event_subscriptions?: { bot_events?: string[] } };
+    };
+  };
   if (j.ok !== true) return undefined;
-  return j.manifest?.settings?.org_deploy_enabled === true;
+  const settings = j.manifest?.settings;
+  return {
+    orgDeploy: settings?.org_deploy_enabled === true,
+    botEvents: settings?.event_subscriptions?.bot_events ?? [],
+  };
 }
 
 async function cmdChannel(argv: string[], io: Io): Promise<number> {
@@ -1684,11 +1706,22 @@ async function joinChannelSlack(channel: string, flags: Map<string, string>, io:
   return 1;
 }
 
-/** Which backend this run uses: the local daemon (the default) or the slack
- *  backend. Selected by `--backend <name>` (highest precedence) or
- *  `SCRAMBLE_BACKEND`. Defaults to local. An unknown backend name is REPORTED,
- *  naming the two backends that exist. Returns null when a name was given but
- *  matched neither, after the error is written to stderr. */
+/** Which backend this run uses. Selected by `--backend <name>` (highest
+ *  precedence), then `SCRAMBLE_BACKEND`, and with NEITHER given it follows the
+ *  config on disk: a slack config present means slack, its absence means the
+ *  local daemon. An unknown backend name is REPORTED, naming the two backends
+ *  that exist. Returns null when a name was given but matched neither, after the
+ *  error is written to stderr.
+ *
+ *  IT USED TO DEFAULT TO LOCAL WHATEVER WAS CONFIGURED, and that is a failure
+ *  surface rather than a preference. The local backend answers from a store that
+ *  the listener fills, so a Slack agent that forgot the environment variable got
+ *  a TRANSCRIPT, not an error: `message read` on a channel it had just been
+ *  invited to printed nothing and exited 0 while Slack held twenty messages in
+ *  it, and the same read of a busy channel returned whatever the store happened
+ *  to have cached. An empty answer that looks like a quiet channel is exactly the
+ *  shape that has to be impossible to construct, so the default now comes from
+ *  the same file that decides everything else about a Slack agent. */
 export function selectBackend(argv: string[], io: Io): "local" | "slack" | null {
   let name: string | undefined;
   for (let i = 0; i < argv.length; i++) {
@@ -1703,7 +1736,8 @@ export function selectBackend(argv: string[], io: Io): "local" | "slack" | null 
     }
   }
   if (name === undefined) name = io.env("SCRAMBLE_BACKEND");
-  if (name === undefined || name === "local") return "local";
+  if (name === undefined) return loadSlackConfig(io) === null ? "local" : "slack";
+  if (name === "local") return "local";
   if (name === "slack") return "slack";
   io.writeErr(`unknown backend '${name}'; the backends are 'local' and 'slack'`);
   return null;

@@ -11,10 +11,15 @@
     "noEmit": true,
     "skipLibCheck": true
   },
-  // src + test only. scramble.workflow.ts is an akari dispatch script, not
-  // product code: it runs under akari's workflow runtime, where `agent`,
-  // `phase`, `parallel` and a top-level `return` are provided by the host. Type
-  // checking it here reports those as errors and turns the gate red on a file
-  // that ships nothing.
-  "include": ["src", "test"]
+  // A WHITELIST, so *.workflow.ts at the repo root stays out: those are akari
+  // dispatch scripts, not product code, and they run under a host that provides
+  // `agent`, `phase`, `parallel` and a top-level `return`, which tsc reports as
+  // errors on a file that ships nothing.
+  //
+  // scripts/ IS product code and belongs in: onboarding is how a new agent gets
+  // into Slack at all, and the live smoke is the only check that talks to Slack.
+  // It sat outside this list by accident, sharing the exclusion written for the
+  // workflow files, and a reference to a variable I had just deleted passed a
+  // green tsc and crashed onboarding at runtime.
+  "include": ["src", "test", "scripts"]
 }

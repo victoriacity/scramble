@@ -30,16 +30,27 @@ const cfg = JSON.parse(readFileSync(CFG_PATH, "utf8")) as {
   channels: Record<string, string>;
   agents: Record<string, { token?: string }>;
 };
-const slackId = cfg.channels[CHANNEL];
+const configuredId = cfg.channels[CHANNEL];
 const names = Object.keys(cfg.agents).filter((n) => cfg.agents[n]?.token);
-const [SELF, PEER] = names;
-if (!slackId || SELF === undefined || PEER === undefined) {
-  console.error(
-    `live-smoke: need channel "${CHANNEL}" and two agents with tokens in ${CFG_PATH}; ` +
-      `found channel=${slackId ?? "(none)"} agents=[${names.join(", ")}]`,
-  );
+const [firstAgent, secondAgent] = names;
+/** Exit with a reason. Declared `never` so the guard below narrows. */
+function die(msg: string): never {
+  console.error(msg);
   process.exit(2);
 }
+if (!configuredId || firstAgent === undefined || secondAgent === undefined) {
+  die(
+    `live-smoke: need channel "${CHANNEL}" and two agents with tokens in ${CFG_PATH}; ` +
+      `found channel=${configuredId ?? "(none)"} agents=[${names.join(", ")}]`,
+  );
+}
+// BOUND AFTER THE GUARD, and typed, so they are `string` for the rest of the
+// file. A narrowing at module scope does not reach inside a function declared
+// later, since that function could be called from anywhere, so every stage below
+// would otherwise be handling `string | undefined`.
+const slackId: string = configuredId;
+const SELF: string = firstAgent;
+const PEER: string = secondAgent;
 const TOKEN = cfg.agents[SELF]!.token!;
 const stamp = process.env.SMOKE_STAMP ?? String(Math.floor(Date.now() / 1000));
 const env = { ...process.env, SCRAMBLE_BACKEND: "slack" };
@@ -50,9 +61,10 @@ const env = { ...process.env, SCRAMBLE_BACKEND: "slack" };
 async function scramble(
   args: string[],
   stdin?: string,
+  envOver?: Record<string, string>,
 ): Promise<{ code: number; out: string; err: string }> {
   const p = Bun.spawn(["bun", "src/bin.ts", ...args], {
-    env,
+    env: envOver === undefined ? env : { ...env, ...envOver },
     stdin: stdin === undefined ? "ignore" : new TextEncoder().encode(stdin),
     stdout: "pipe",
     stderr: "pipe",
@@ -287,8 +299,43 @@ async function stageInbound(): Promise<void> {
   );
 }
 
+/** RESOLVING A CHANNEL BY NAME when the config does not map it — the path an
+ *  agent takes the moment it is invited somewhere new, and the one nothing
+ *  covered. It ran through conversations.list without a team_id, which on an org
+ *  install answers `missing_argument`; the code swallowed that and reported "no
+ *  Slack channel for <name>", so a channel the operator had just added the agent
+ *  to looked like a channel that did not exist. Then, given auth.test's team_id,
+ *  Slack answered `team_access_not_granted`, because on an enterprise install
+ *  that field is the E… ORG and only auth.teams.list names the workspace.
+ *
+ *  Run against a config whose `channels` map is EMPTY, so the map cannot answer
+ *  and the lookup has to. No invite and no human needed: it is the same
+ *  resolution, reached by removing the shortcut. */
+async function stageResolve(): Promise<void> {
+  // The channel's own Slack name, which is what an invited agent has and need
+  // not equal the scramble alias the config maps: here `team` is an alias and
+  // Slack calls the channel something else entirely.
+  const info = await slack("conversations.info", { channel: slackId });
+  const real = (info.channel as { name?: string } | undefined)?.name;
+  if (!check("resolve/name", typeof real === "string" && real !== "", `Slack calls it #${real ?? "(unnamed)"}`)) return;
+  const bare = `/tmp/scramble-smoke-nomap-${stamp}.json`;
+  await Bun.write(bare, JSON.stringify({ ...cfg, channels: {} }));
+  const r = await scramble(["message", "read", "--target", String(real), "--as", SELF], undefined, {
+    SCRAMBLE_SLACK_CONFIG: bare,
+  });
+  const lines = r.out.split("\n").filter((l) => l.startsWith("{"));
+  check(
+    "resolve/byName",
+    r.code === 0 && lines.length > 0,
+    r.code === 0 && lines.length > 0
+      ? `read #${real} by name with no mapping, ${lines.length} line(s)`
+      : `exit ${r.code}, ${lines.length} line(s). What scramble said: ${r.err.trim() || "(nothing)"}`,
+  );
+}
+
 const STAGES: Record<string, () => Promise<void>> = {
   read: stageRead,
+  resolve: stageResolve,
   thread: stageThread,
   attach: stageAttach,
   wake: stageWakeAndStatus,
@@ -297,7 +344,7 @@ const STAGES: Record<string, () => Promise<void>> = {
 };
 
 /** The default run. `inbound` is excluded and must be asked for by name. */
-const DEFAULT_STAGES = ["read", "thread", "attach", "wake", "check"];
+const DEFAULT_STAGES = ["read", "resolve", "thread", "attach", "wake", "check"];
 
 const asked = process.argv.slice(2).filter((a) => !a.startsWith("-"));
 const run = asked.length ? asked : DEFAULT_STAGES;

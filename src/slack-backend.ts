@@ -28,6 +28,7 @@ const WITH_METADATA = "include_all_metadata=true";
 const REPLIES_URL = "https://slack.com/api/conversations.replies";
 const USERS_INFO_URL = "https://slack.com/api/users.info";
 const AUTH_TEST_URL = "https://slack.com/api/auth.test";
+const AUTH_TEAMS_LIST_URL = "https://slack.com/api/auth.teams.list";
 const REACT_URL = "https://slack.com/api/reactions.add";
 const CONV_INFO_URL = "https://slack.com/api/conversations.info";
 const CONV_LIST_URL = "https://slack.com/api/conversations.list";
@@ -258,6 +259,7 @@ export class SlackBackend {
   private readonly channelNameCache = new Map<string, string>();
   /** Channel name -> its Slack id, "" for a name this agent cannot reach. */
   private readonly channelIdCache = new Map<string, string>();
+  private readonly teamIdCache = new Map<string, string>();
   private readonly roster: Record<string, string>;
   private readonly filesDir: string;
   /** Cache of users.info answers so a repeat unknown id never re-queries. The
@@ -413,40 +415,98 @@ export class SlackBackend {
     return t.ok ? t.token : this.token;
   }
 
-  /** The Slack id for a channel NAME. The config's map wins; a name absent from
-   *  it is looked up among the conversations this agent is actually in.
+  /** This agent's WORKSPACE id, which conversations.list requires on an org
+   *  install: without it Slack answers `missing_argument` and every name lookup
+   *  fails.
+   *
+   *  From auth.teams.list, which is the only method that names WORKSPACES, and
+   *  not from auth.test. On an enterprise install auth.test reports
+   *  `team_id` = the E… ORG (identical to its own `enterprise_id`), and
+   *  conversations.list answers `team_access_not_granted` to that — so reading
+   *  the obvious field gives an id that is wrong in a way whose error names
+   *  neither the field nor the fix. Measured against this org: auth.test says
+   *  E0EXAMPLE010, auth.teams.list says T0EXAMPLE012, and only the second works.
+   *
+   *  Empty when the login covers no workspace or several, since there is then no
+   *  single answer to invent; the lookup still runs, and Slack's own refusal is
+   *  what the caller reports. Cached per token: it cannot change under a running
+   *  process. */
+  private async teamIdFor(token: string): Promise<string> {
+    const hit = this.teamIdCache.get(token);
+    if (hit !== undefined) return hit;
+    const r = await readOk<{ teams?: Array<{ id?: string }> }>(this.fetch, AUTH_TEAMS_LIST_URL, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const teams = r.ok ? (r.data.teams ?? []) : [];
+    const only = teams.length === 1 ? teams[0]?.id : undefined;
+    const id = typeof only === "string" ? only : "";
+    this.teamIdCache.set(token, id);
+    return id;
+  }
+
+  /** The Slack id for a channel NAME, or the id itself when the caller already
+   *  has one. The config's map wins; a name absent from it is looked up among
+   *  the conversations this agent is actually in.
    *
    *  The mirror of channelNameFor, and it was missing: after inbound resolution
    *  landed, a peer measured 129 messages arriving from a channel whose name
    *  `message read`, `send`, `react` and `channel join` all refused with "no
    *  Slack channel for channel <name>". An agent could hear a room and not answer
-   *  in it. Cached, including the miss, so a wrong name costs one lookup. */
-  private async slackChannelFor(token: string, name: string): Promise<string | undefined> {
+   *  in it. Cached, including the miss, so a wrong name costs one lookup.
+   *
+   *  RETURNS SLACK'S OWN REFUSAL rather than a bare miss. The lookup used to
+   *  `break` out of the paging loop on any API error and report the same "no
+   *  Slack channel for <name>" a genuine typo produces, so the two were
+   *  indistinguishable — and on this org EVERY lookup was the error one, because
+   *  conversations.list needs a team_id it was not being given. The name of the
+   *  channel the operator had just invited an agent into came back as if the
+   *  channel did not exist. */
+  private async slackChannelFor(
+    token: string,
+    name: string,
+  ): Promise<{ id: string; error?: undefined } | { id?: undefined; error: string }> {
     const mapped = this.channels[name];
-    if (mapped !== undefined) return mapped;
+    if (mapped !== undefined) return { id: mapped };
+    // A RAW SLACK ID IS ALREADY THE ANSWER. `channel` here is a scramble name
+    // that usually is not one, but an agent reading an id out of an event or a
+    // log has the very thing the lookup is for, and sending it through
+    // conversations.list only asks whether some channel is NAMED "C0EXAMPLE007".
+    if (/^[CGD][A-Z0-9]{6,}$/.test(name)) return { id: name };
     const cached = this.channelIdCache.get(name);
-    if (cached !== undefined) return cached === "" ? undefined : cached;
+    if (cached !== undefined && cached !== "") return { id: cached };
+    const team = await this.teamIdFor(token);
     let cursor = "";
     for (let page = 0; page < 10; page++) {
       const q =
         `${CONV_LIST_URL}?types=public_channel,private_channel&exclude_archived=true&limit=200` +
+        (team === "" ? "" : `&team_id=${encodeURIComponent(team)}`) +
         (cursor === "" ? "" : `&cursor=${encodeURIComponent(cursor)}`);
       const r = await readOk<{
         channels?: Array<{ id?: string; name?: string; is_member?: boolean }>;
         response_metadata?: { next_cursor?: string };
       }>(this.fetch, q, { headers: { authorization: `Bearer ${token}` } });
-      if (!r.ok) break;
+      if (!r.ok) {
+        return {
+          error:
+            `looking up the Slack channel for "${name}" failed: conversations.list answered ` +
+            `${r.error}. This is NOT "no such channel" — Slack refused the question.`,
+        };
+      }
       for (const c of r.data.channels ?? []) {
         if (c.name === name && typeof c.id === "string") {
           this.channelIdCache.set(name, c.id);
-          return c.id;
+          return { id: c.id };
         }
       }
       cursor = r.data.response_metadata?.next_cursor ?? "";
       if (cursor === "") break;
     }
     this.channelIdCache.set(name, "");
-    return undefined;
+    return {
+      error:
+        `no Slack channel for channel ${name}. conversations.list answered without it, so this ` +
+        `agent is either not in that channel or the name is wrong.`,
+    };
   }
 
   /** This agent's own Slack user id, from the roster the config already keeps
@@ -496,8 +556,9 @@ export class SlackBackend {
     emoji: string,
     as: string,
   ): Promise<{ ok: true } | { ok: false; error: string }> {
-    const slackChannel = await this.slackChannelFor(this.tokenOrDefault(as), channel);
-    if (!slackChannel) return { ok: false, error: `no Slack channel for channel ${channel}` };
+    const resolved = await this.slackChannelFor(this.tokenOrDefault(as), channel);
+    if (resolved.id === undefined) return { ok: false, error: resolved.error };
+    const slackChannel = resolved.id;
     const t = this.agentToken(as);
     if (!t.ok) return { ok: false, error: t.error };
     const name = emoji.replace(/^:|:$/g, "");
@@ -522,8 +583,9 @@ export class SlackBackend {
     channel: string,
     as: string,
   ): Promise<{ ok: true; joined: boolean; handle: string; detail: string } | { ok: false; error: string }> {
-    const slackChannel = await this.slackChannelFor(this.tokenOrDefault(as), channel);
-    if (!slackChannel) return { ok: false, error: `no Slack channel for channel ${channel}` };
+    const resolved = await this.slackChannelFor(this.tokenOrDefault(as), channel);
+    if (resolved.id === undefined) return { ok: false, error: resolved.error };
+    const slackChannel = resolved.id;
     const t = this.agentToken(as);
     if (!t.ok) return { ok: false, error: t.error };
     const who = await readOk<{ user?: string }>(this.fetch, AUTH_TEST_URL, {
@@ -550,8 +612,9 @@ export class SlackBackend {
     as: string,
     thread?: string,
   ): Promise<{ ok: true } | { ok: false; error: string }> {
-    const slackChannel = await this.slackChannelFor(this.tokenOrDefault(as), channel);
-    if (!slackChannel) return { ok: false, error: `no Slack channel for channel ${channel}` };
+    const resolved = await this.slackChannelFor(this.tokenOrDefault(as), channel);
+    if (resolved.id === undefined) return { ok: false, error: resolved.error };
+    const slackChannel = resolved.id;
     const t = this.agentToken(as);
     if (!t.ok) return { ok: false, error: t.error };
     const token = t.token;
@@ -881,8 +944,9 @@ export class SlackBackend {
     // transcript and needs neither, and paying for them per row there is waste.
     forDelivery = false,
   ): Promise<{ code: 0 | 1; error?: string; messages: Message[]; problems: string[] }> {
-    const slackChannel = await this.slackChannelFor(this.tokenOrDefault(as ?? ""), channel);
-    if (!slackChannel) return { code: 1, error: `no Slack channel for channel ${channel}`, messages: [], problems: [] };
+    const resolved = await this.slackChannelFor(this.tokenOrDefault(as ?? ""), channel);
+    if (resolved.id === undefined) return { code: 1, error: resolved.error, messages: [], problems: [] };
+    const slackChannel = resolved.id;
     const t = this.agentToken(as ?? "");
     if (!t.ok) return { code: 1, error: t.error, messages: [], problems: [] };
     const token = t.token;

@@ -26,6 +26,12 @@ function runCli(args: string[], cwd: string): Promise<RunResult> {
     const proc = Bun.spawn({
       cmd: [process.execPath, binPath, ...args],
       cwd,
+      // THESE ARE THE LOCAL BACKEND'S e2e, said out loud. With neither a flag
+      // nor this variable, scramble follows the config on disk, and the machine
+      // running these tests is usually an agent's own machine with a real
+      // ~/.config/scramble/slack.json — so the suite would spawn a CLI that
+      // talks to a live Slack workspace instead of the daemon these tests start.
+      env: { ...process.env, SCRAMBLE_BACKEND: "local" },
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -64,6 +70,10 @@ function spawnFollow(args: string[], cwd: string): Follower {
   const proc = Bun.spawn({
     cmd: [process.execPath, binPath, ...args],
     cwd,
+    // The local backend, said out loud, for the same reason runCli says it: the
+    // backend follows the config on disk when nothing names one, and this
+    // machine has a real slack config.
+    env: { ...process.env, SCRAMBLE_BACKEND: "local" },
     stdout: "pipe",
     stderr: "pipe",
   });

@@ -6,6 +6,7 @@ import type { ChannelStore } from "../src/store";
 import { createStore } from "../src/store";
 import { createHandler } from "../src/server";
 import { main, parseBind, loadSlackConfig, slackConfigPath, slackCliToken, staleConfigWarning, staleListeners, pickStale, staleListenerProblem, readProcesses, type Io } from "../src/cli";
+import { SCOPE_NAMES, BOT_EVENT_NAMES } from "../src/app-manifest";
 
 function scratchDir(name: string): string {
   const d = join(tmpdir(), `zz-${name}-${process.pid}-${Math.random().toString(36).slice(2)}`);
@@ -1485,6 +1486,16 @@ describe("staleListeners", () => {
     expect(pickStale([proc("102", "bun src/bin.ts listen --as other", 1_000)], "dev", 5_000)).toEqual([]);
   });
 
+  test("the agent's name appearing in the working directory is not the agent's listener", () => {
+    // Measured: an agent named after the product, and a checkout under a
+    // directory carrying that same name, made a substring match report every
+    // listener under every agent. doctor named the same three pids twice and
+    // told me to restart processes that were not mine.
+    const other = proc("104", "cd /srv/hark/scramble && bun src/bin.ts listen --as scramble-dev", 1_000);
+    expect(pickStale([other], "hark", 5_000)).toEqual([]);
+    expect(pickStale([other], "scramble-dev", 5_000)).toEqual([{ pid: "104", ageBehind: 4 }]);
+  });
+
   test("a process that is not a listener is ignored, however old", () => {
     expect(pickStale([proc("103", "bun src/bin.ts serve --as dev", 1)], "dev", 5_000)).toEqual([]);
   });
@@ -1613,9 +1624,14 @@ describe("message react", () => {
     expect(a1.errs.join(" ")).toContain("--to");
     const a2 = reactIo(cwd, ok);
     expect(await main(["message", "react", "--target", "ghost", "--to", "1.1", "--emoji", "x", "--as", "dev", "--backend", "slack"], a2.io)).toBe(1);
-    expect(a2.errs.join(" ")).toContain("no Slack channel for channel ghost");
+    expect(a2.errs.join(" ")).toContain("channel ghost");
+    // --backend local said out loud: with neither a flag nor SCRAMBLE_BACKEND,
+    // the backend follows the config on disk, and this workspace HAS a slack
+    // config, so the derived answer here is slack.
     const a3 = reactIo(cwd, ok);
-    expect(await main(["message", "react", "--target", "room", "--to", "1.1", "--emoji", "x", "--as", "dev"], a3.io)).toBe(1);
+    expect(
+      await main(["message", "react", "--target", "room", "--to", "1.1", "--emoji", "x", "--as", "dev", "--backend", "local"], a3.io),
+    ).toBe(1);
     expect(a3.errs.join(" ")).toContain("needs the slack backend");
   });
 });
@@ -1690,7 +1706,10 @@ describe("doctor, and the warning an agent gets without asking", () => {
     };
     return { io, writes, errs };
   }
-  const ALL = "chat:write,channels:history,groups:history,im:history,im:read,im:write,users:read,channels:read,groups:read,files:write,files:read,assistant:write";
+  // DERIVED, not retyped. This was a hand-kept copy and it fell behind the real
+  // list by two scopes, so "a healthy agent" was healthy against a list that no
+  // longer existed — the same drift that let the events go unchecked.
+  const ALL = SCOPE_NAMES.join(",");
 
   test("a healthy agent reports ok with its handle", async () => {
     const cwd = scratchDir("doc-ok");
@@ -1816,7 +1835,18 @@ describe("doctor, and the warning an agent gets without asking", () => {
             headers: { "x-oauth-scopes": ALL },
           });
         }
-        return new Response(JSON.stringify({ ok: true, manifest: { settings: { org_deploy_enabled: true } } }), { status: 200 });
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            manifest: {
+              settings: {
+                org_deploy_enabled: true,
+                event_subscriptions: { bot_events: BOT_EVENT_NAMES },
+              },
+            },
+          }),
+          { status: 200 },
+        );
       },
       env: (n) => (n === "HOME" ? home : n === "SCRAMBLE_SLACK_CONFIG" ? join(home, ".scramble", "slack.json") : undefined),
       cwd: () => home,
@@ -1826,6 +1856,61 @@ describe("doctor, and the warning an agent gets without asking", () => {
     };
     expect(await main(["doctor", "--as", "dev", "--backend", "slack"], io)).toBe(0);
     expect(writes.join(" ")).toContain('"doctor":"ok"');
+  });
+
+  test("an app that subscribes to no invite event is named as the silent half of an inbox", async () => {
+    // THE DEFECT THIS EXISTS FOR, measured live on 2026-08-22: the operator
+    // invited an agent to a channel and nothing arrived. The app declared
+    // org_deploy_enabled:true, held every scope, and its socket was delivering
+    // mentions the whole time — it was subscribed to three events and not to
+    // member_joined_channel, and Slack sends nothing for an event an app has not
+    // asked for. Everything else about the agent was healthy, which is why the
+    // wake path has to be checked field by field rather than by whether messages
+    // are arriving.
+    const home = scratchDir("doc-events");
+    mkdirSync(join(home, ".slack"), { recursive: true });
+    writeFileSync(join(home, ".slack", "credentials.json"), JSON.stringify({ E1: { token: "xoxe-cli" } }));
+    mkdirSync(join(home, ".scramble"), { recursive: true });
+    writeFileSync(
+      join(home, ".scramble", "slack.json"),
+      JSON.stringify({ token: "xoxb-d", channels: {}, agents: { dev: { token: "T", handle: "dev_bot", appId: "A1" } } }),
+    );
+    const errs: string[] = [];
+    const io: Io = {
+      write: () => {},
+      writeErr: (l) => errs.push(l),
+      fetch: async (input) => {
+        const u = String(input);
+        if (u.includes("auth.test")) {
+          return new Response(JSON.stringify({ ok: true, user: "dev_bot" }), {
+            status: 200,
+            headers: { "x-oauth-scopes": ALL },
+          });
+        }
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            manifest: {
+              settings: {
+                org_deploy_enabled: true,
+                bot_events: undefined,
+                event_subscriptions: { bot_events: ["message.channels", "message.groups", "message.im"] },
+              },
+            },
+          }),
+          { status: 200 },
+        );
+      },
+      env: (n) => (n === "HOME" ? home : n === "SCRAMBLE_SLACK_CONFIG" ? join(home, ".scramble", "slack.json") : undefined),
+      cwd: () => home,
+      sleep: async () => {},
+      serve: async () => 0,
+      createSocket: () => ({ send: () => {}, close: () => {}, onopen: null, onmessage: null, onclose: null, onerror: null }),
+    };
+    expect(await main(["doctor", "--as", "dev", "--backend", "slack"], io)).toBe(1);
+    const said = errs.join(" ");
+    expect(said).toContain("member_joined_channel");
+    expect(said).toContain("onboard-agent.ts dev");
   });
 
   test("with no Slack CLI credential the org-deploy question is left unanswered rather than guessed", async () => {
