@@ -208,9 +208,9 @@ describe("attachment upload through the slack backend", () => {
       }
       if (url.includes("completeUploadExternal")) {
         order.push("complete");
-        const body = JSON.parse(String(init?.body));
-        expect(body.channels).toEqual(["C1"]);
-        expect(body.files).toEqual([{ id: "UPLOAD1", title: "upload.txt" }]);
+        const form = new URLSearchParams(String(init?.body ?? ""));
+        expect(JSON.parse(form.get("channels")!)).toEqual(["C1"]);
+        expect(JSON.parse(form.get("files")!)).toEqual([{ id: "UPLOAD1", title: "upload.txt" }]);
         return new Response(JSON.stringify({ ok: true, files: [{ id: "UPLOAD1" }] }), { status: 200 });
       }
       return new Response(JSON.stringify({ ok: true }), { status: 200 });
@@ -426,18 +426,20 @@ describe("uploadToSlack failure branches", () => {
     if (!r.ok) expect(r.error).toContain("cannot read");
   });
 
-  test("a failed PUT is reported", async () => {
+  test("a failed PUT is reported and completeUploadExternal is never called", async () => {
     const d = scratchDir("up-put");
     const f = join(d, "x.txt");
     writeFileSync(f, "hello");
+    let completes = 0;
     const r = await uploadToSlack(async (url, init) => {
       if (url.includes("getUploadURLExternal")) return new Response(JSON.stringify({ ok: true, upload_url: "https://pt/", file_id: "F" }), { status: 200 });
       if (url.startsWith("https://pt/")) throw new Error("put down");
+      if (url.includes("completeUploadExternal")) { completes++; }
       return new Response(JSON.stringify({ ok: true }), { status: 200 });
     }, "tok", f, "C1");
-    expect(r.ok).toBe(true);
-    // the PUT failure is benign: complete still runs; assert we got a file id
-    if (r.ok) expect(r.out.id).toBe("F");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toContain("PUT");
+    expect(completes).toBe(0);
   });
 
   test("a non-JSON completeUploadExternal answer is reported", async () => {
@@ -466,6 +468,155 @@ describe("uploadToSlack failure branches", () => {
     }, "tok", f, "C1");
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toContain("non-object");
+  });
+});
+
+// --- the file endpoints send FORM ENCODING with detail kept ----------------
+
+describe("slack upload form encoding and detail", () => {
+  /** Parse an x-www-form-urlencoded body into its decoded field values. */
+  function parseForm(body: string): Record<string, string> {
+    const out: Record<string, string> = {};
+    for (const [k, v] of new URLSearchParams(body)) out[k] = v;
+    return out;
+  }
+
+  test("getUploadURLExternal receives form encoding with exactly filename and length, not JSON", async () => {
+    const d = scratchDir("form-get");
+    const f = join(d, "data.txt");
+    writeFileSync(f, "0123456789");
+    let contentType = "";
+    let body = "";
+    await uploadToSlack(async (url, init) => {
+      if (url.includes("getUploadURLExternal")) {
+        contentType = String(init?.headers && "content-type" in init.headers ? (init.headers as Record<string, string>)["content-type"] : "");
+        body = String(init?.body);
+        return new Response(JSON.stringify({ ok: true, upload_url: "https://pt/", file_id: "F" }), { status: 200 });
+      }
+      if (url.startsWith("https://pt/")) return new Response("", { status: 200 });
+      return new Response(JSON.stringify({ ok: true, files: [{ id: "F" }] }), { status: 200 });
+    }, "tok", f, "C1");
+    expect(contentType).toContain("application/x-www-form-urlencoded");
+    expect(contentType.toLowerCase()).not.toContain("application/json");
+    const form = parseForm(body);
+    expect(Object.keys(form)).toEqual(["filename", "length"]);
+    expect(form["filename"]).toBe("data.txt");
+    expect(form["length"]).toBe("10");
+  });
+
+  test("completeUploadExternal receives the form encoding with files as one JSON string", async () => {
+    const d = scratchDir("form-complete");
+    const f = join(d, "data.txt");
+    writeFileSync(f, "hello");
+    let body = "";
+    await uploadToSlack(async (url, init) => {
+      if (url.includes("getUploadURLExternal")) return new Response(JSON.stringify({ ok: true, upload_url: "https://pt/", file_id: "F1" }), { status: 200 });
+      if (url.startsWith("https://pt/")) return new Response("", { status: 200 });
+      if (url.includes("completeUploadExternal")) {
+        body = String(init?.body);
+        return new Response(JSON.stringify({ ok: true, files: [{ id: "F1" }] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }, "tok", f, "C1");
+    const form = parseForm(body);
+    expect(Object.keys(form).sort()).toEqual(["channels", "files"]);
+    const files = JSON.parse(form["files"]!) as Array<{ id: string; title: string }>;
+    expect(files).toHaveLength(1);
+    expect(files[0]!.id).toBe("F1");
+    expect(files[0]!.title).toBe("data.txt");
+  });
+
+  test("an ok:false carrying response_metadata.messages reports both code and messages", async () => {
+    const d = scratchDir("detail-meta");
+    const f = join(d, "x.txt");
+    writeFileSync(f, "hello");
+    const r = await uploadToSlack(async (url) => {
+      if (url.includes("getUploadURLExternal")) return new Response(JSON.stringify({ ok: false, error: "invalid_arguments", response_metadata: { messages: ["[ERROR] missing required field: length", "[ERROR] missing required field: filename"] } }), { status: 200 });
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }, "tok", f, "C1");
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.error).toContain("invalid_arguments");
+      expect(r.error).toContain("missing required field: length");
+      expect(r.error).toContain("missing required field: filename");
+    }
+  });
+
+  test("an ok:false with no error field falls back to a generic failure", async () => {
+    const d = scratchDir("detail-noerr");
+    const f = join(d, "x.txt");
+    writeFileSync(f, "hello");
+    const r = await uploadToSlack(async (url) => {
+      if (url.includes("getUploadURLExternal")) return new Response(JSON.stringify({ ok: false }), { status: 200 });
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }, "tok", f, "C1");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toContain("slack request failed");
+  });
+
+  test("an ok:false with a messages-bearing metadata but empty error list", async () => {
+    const d = scratchDir("detail-emptymeta");
+    const f = join(d, "x.txt");
+    writeFileSync(f, "hello");
+    const r = await uploadToSlack(async (url) => {
+      if (url.includes("getUploadURLExternal")) return new Response(JSON.stringify({ ok: false, error: "bad", response_metadata: { messages: [] } }), { status: 200 });
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }, "tok", f, "C1");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toBe("bad");
+  });
+
+  test("a PUT answering 400 fails the upload and completeUploadExternal is never called", async () => {
+    const d = scratchDir("form-put400");
+    const f = join(d, "x.txt");
+    writeFileSync(f, "hello");
+    let completes = 0;
+    const r = await uploadToSlack(async (url) => {
+      if (url.includes("getUploadURLExternal")) return new Response(JSON.stringify({ ok: true, upload_url: "https://pt/", file_id: "F" }), { status: 200 });
+      if (url.startsWith("https://pt/")) return new Response("gone", { status: 400 });
+      if (url.includes("completeUploadExternal")) completes++;
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }, "tok", f, "C1");
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.error).toContain("400");
+      expect(r.error).toContain("gone");
+    }
+    expect(completes).toBe(0);
+  });
+
+  test("a PUT whose 400 body cannot be read still fails the upload", async () => {
+    const d = scratchDir("form-put400-notext");
+    const f = join(d, "x.txt");
+    writeFileSync(f, "hello");
+    let completes = 0;
+    const unreadable = {
+      status: 400,
+      text: async (): Promise<string> => { throw new Error("body read failed"); },
+    } as unknown as Response;
+    const r = await uploadToSlack(async (url) => {
+      if (url.includes("getUploadURLExternal")) return new Response(JSON.stringify({ ok: true, upload_url: "https://pt/", file_id: "F" }), { status: 200 });
+      if (url.startsWith("https://pt/")) return unreadable;
+      if (url.includes("completeUploadExternal")) completes++;
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }, "tok", f, "C1");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toContain("answered 400");
+    expect(completes).toBe(0);
+  });
+
+  test("a successful three-step run returns the file id", async () => {
+    const d = scratchDir("form-ok");
+    const f = join(d, "x.txt");
+    writeFileSync(f, "hello");
+    const bytes = new Uint8Array([1, 2, 3]);
+    const r = await uploadToSlack(async (url) => {
+      if (url.includes("getUploadURLExternal")) return new Response(JSON.stringify({ ok: true, upload_url: "https://pt/", file_id: "F456" }), { status: 200 });
+      if (url.startsWith("https://pt/")) return new Response(bytes, { status: 200 });
+      return new Response(JSON.stringify({ ok: true, files: [{ id: "F456" }] }), { status: 200 });
+    }, "tok", f, "C1");
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.out.id).toBe("F456");
   });
 });
 

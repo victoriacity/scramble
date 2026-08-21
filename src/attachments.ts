@@ -183,18 +183,23 @@ export async function uploadToSlack(
   if (!get.ok) return { ok: false, error: get.error };
   const uploadUrl = get.data.upload_url as string;
   const fileId = get.data.file_id as string;
-  let putBytes: Uint8Array;
+  let put: Response;
   try {
-    const put = await fetch(uploadUrl, {
+    put = await fetch(uploadUrl, {
       method: "PUT",
       headers: { "content-type": mime },
       body: bytes,
     });
-    putBytes = new Uint8Array(await put.arrayBuffer());
   } catch {
-    putBytes = new Uint8Array(0);
+    return { ok: false, error: `PUT to ${uploadUrl} failed` };
   }
-  void putBytes;
+  if (put.status < 200 || put.status >= 300) {
+    const text = await put.text().catch(() => "");
+    return {
+      ok: false,
+      error: `PUT to ${uploadUrl} answered ${put.status}${text ? `: ${text}` : ""}`,
+    };
+  }
   const complete = await readSlack(fetch, COMPLETE_UPLOAD_URL, token, {
     files: [{ id: fileId, title: name }],
     channels: [slackChannelId],
@@ -203,20 +208,52 @@ export async function uploadToSlack(
   return { ok: true, out: { id: fileId, name, mime, size } };
 }
 
-/** CRUD one Slack REST POST and readOk the JSON, same error discipline as the
- *  backend: ok:false with Slack's error text is a FAILURE, never a success. */
+/** Encode an object as an `application/x-www-form-urlencoded` body. Arrays and
+ *  objects become ONE JSON-encoded field value (a form field cannot hold an
+ *  array), so `files`/`channels` travel as `[...]` in a single value. */
+function urlForm(obj: Record<string, unknown>): string {
+  const parts: string[] = [];
+  for (const key of Object.keys(obj)) {
+    const v = obj[key];
+    const val = v === undefined ? "" : typeof v === "object" ? JSON.stringify(v) : String(v);
+    parts.push(`${encodeURIComponent(key)}=${encodeURIComponent(val)}`);
+  }
+  return parts.join("&");
+}
+
+/** Build a REPORTABLE error from a Slack ok:false reply: Slack puts the real
+ *  reason in `response_metadata.messages` while `error` alone often says only
+ *  `invalid_arguments`. Carry both so the next failure names itself. */
+function slackError(rec: Record<string, unknown>): string {
+  const code = (rec.error as string) ?? "slack request failed";
+  const meta = rec["response_metadata"];
+  if (meta && typeof meta === "object") {
+    const arr = (meta as Record<string, unknown>).messages;
+    if (Array.isArray(arr) && arr.length > 0) {
+      return `${code}: ${arr.join("; ")}`;
+    }
+  }
+  return code;
+}
+
+/** POST one Slack REST call as FORM ENCODING (the file endpoints read no JSON
+ *  fields) and readOk the JSON. ok:false carries `error` plus any
+ *  `response_metadata.messages`; status:false is a FAILURE, never a success. */
 async function readSlack(
   fetch: (input: string, init?: RequestInit) => Promise<Response>,
   url: string,
   token: string,
-  body: unknown,
+  body: Record<string, unknown>,
 ): Promise<{ ok: true; data: Record<string, unknown> } | { ok: false; error: string }> {
   let res: Response;
   try {
     res = await fetch(url, {
       method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-      body: JSON.stringify(body),
+      headers: {
+        "content-type": "application/x-www-form-urlencoded; charset=utf-8",
+        authorization: `Bearer ${token}`,
+      },
+      body: urlForm(body),
     });
   } catch {
     return { ok: false, error: `slack request failed: ${url}` };
@@ -229,7 +266,7 @@ async function readSlack(
   }
   if (typeof j !== "object" || j === null) return { ok: false, error: `slack answered non-object to ${url}` };
   const rec = j as Record<string, unknown>;
-  if (rec.ok !== true) return { ok: false, error: (rec.error as string) ?? "slack upload failed" };
+  if (rec.ok !== true) return { ok: false, error: slackError(rec) };
   return { ok: true, data: rec };
 }
 
