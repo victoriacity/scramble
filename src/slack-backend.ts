@@ -21,7 +21,23 @@ import { downloadFile, type SlackFileMeta } from "./attachments";
 const SOCKET_OPEN_URL = "https://slack.com/api/apps.connections.open";
 const POST_URL = "https://slack.com/api/chat.postMessage";
 const HISTORY_URL = "https://slack.com/api/conversations.history";
+const REPLIES_URL = "https://slack.com/api/conversations.replies";
 const USERS_INFO_URL = "https://slack.com/api/users.info";
+
+/** Cap on the number of threaded ROOTS expanded per history call — the fan-out
+ *  is bounded: one extra conversations.replies request per expanded root, on
+ *  the NEWEST roots only. Unbounded expansion on a busy channel is not
+ *  acceptable; a root dropped by the cap is REPORTED, never silent. */
+export const THREAD_EXPANSION_CAP = 5;
+
+/** True for a top-level row that CARRIES a thread (Slack marks it with a
+ *  reply_count above zero and a thread_ts equal to its own ts). Only such a
+ *  row expands via conversations.replies; a reply-less row never triggers a
+ *  request at all. A reply (thread_ts != ts) is not a root. */
+export function isThreadRoot(m: SlackHistoryMessage): boolean {
+  const rc = m.reply_count ?? 0;
+  return rc > 0 && m.thread_ts !== undefined && m.thread_ts === m.ts;
+}
 
 /** One Slack message event arriving off the Socket Mode wires. Only the fields
  *  mapped to our line shape are read, deliberately. */
@@ -120,6 +136,10 @@ async function readOk<T = Record<string, unknown>>(
 export interface SlackHistoryMessage {
   ts?: string;
   thread_ts?: string;
+  /** Slack's count of replies under this message when it is a threaded root
+   *  (reply_count above zero with thread_ts equal to its own ts marks the
+   *  row as a root whose replies live under conversations.replies). */
+  reply_count?: number;
   user?: string;
   username?: string;
   text?: string;
@@ -377,9 +397,48 @@ export class SlackBackend {
     });
   }
 
+  /** Build one Message from a Slack history/replies row through the SAME
+   *  ingest path as a live event, so its thread/mentions/files come out
+   *  byte-identical, and append it to `messages`. Returns the seq after the
+   *  append (the prior seq when the row carries no text and is dropped). */
+  private async appendLine(
+    m: SlackHistoryMessage,
+    slackChannel: string,
+    channel: string,
+    messages: Message[],
+    problems: string[],
+    seq: number,
+  ): Promise<number> {
+    const { delivery, problems: dlProblems } = await this.toDelivery(
+      { type: "message", channel: slackChannel, user: m.user, username: m.user, ts: m.ts, thread_ts: m.thread_ts, text: m.text, bot_id: m.bot_id, files: m.files },
+      "",
+    );
+    problems.push(...dlProblems);
+    if (delivery === undefined) return seq;
+    // history is channel-scoped: force the requested `channel` (a Slack id tells us
+    // the Slack channel, the channel mapping is the caller's frame). Slack has no
+    // global seq, so a synthetic per-history counter stands in where the
+    // local line's `seq` lives; the message's ts is the real cursor.
+    const { mentioned, ...rest } = delivery;
+    void mentioned;
+    messages.push({ ...rest, channel, seq: seq + 1 });
+    return seq + 1;
+  }
+
   /** history(channel, since): conversations.history mapped into the local line
    *  shape (a channel-scoped Message with mentions). `since` maps to Slack's
-   *  `oldest` cursor, so a resume picks up where the last ts stopped. */
+   *  `oldest` cursor, so a resume picks up where the last ts stopped.
+   *
+   *  THREADED REPLIES: conversations.history returns only TOP-LEVEL messages; a
+   *  threaded reply lives under conversations.replies. A top-level row Slack
+   *  marks as a threaded ROOT (reply_count above zero with thread_ts equal to
+   *  its own ts) is expanded here with one conversations.replies call, so
+   *  `message read` and `message history` see the replies an agent posted under
+   *  that root. The root is never duplicated: conversations.replies returns the
+   *  root as its first entry, so that entry (whose ts equals the root's) is
+   *  dropped; a root that merely HAS replies is not itself a reply and carries
+   *  no `thread`, while each reply's `thread` names the root by the ingest
+   *  rule (thread_ts differs from its own ts). */
   async history(
     channel: string,
     since?: string,
@@ -396,20 +455,51 @@ export class SlackBackend {
     const messages: Message[] = [];
     const problems: string[] = [];
     let seq = 0;
+    // ORDER — a caller keeps its cursor on ts: conversations.history returns
+    // rows NEWEST-FIRST and we walk them in exactly that order (Slack's ts is
+    // the per-channel cursor). A threaded root's replies land IN PLACE,
+    // immediately UNDER the root (conversations.replies lists the root first,
+    // then its replies), so a resume at a ts sees every line after it in the
+    // same relative order it always used — a reply never reorders a line above
+    // its own root, and the read is a single pass preserving Slack's newest-
+    // first sequence overall.
+    let expandedRoots = 0;
+    let droppedRoots = 0;
     for (const m of r.data.messages ?? []) {
-      const { delivery, problems: dlProblems } = await this.toDelivery(
-        { type: "message", channel: slackChannel, user: m.user, username: m.user, ts: m.ts, thread_ts: m.thread_ts, text: m.text, bot_id: m.bot_id, files: m.files },
-        "",
+      seq = await this.appendLine(m, slackChannel, channel, messages, problems, seq);
+      if (!isThreadRoot(m)) continue;
+      // FAN-OUT IS BOUND: one extra conversations.replies request per threaded
+      // root, capped at THREAD_EXPANSION_CAP on the NEWEST roots (history walks
+      // newest-first). Unbounded expansion on a busy channel is unacceptable.
+      if (expandedRoots >= THREAD_EXPANSION_CAP) {
+        droppedRoots += 1;
+        continue;
+      }
+      expandedRoots += 1;
+      const rootTs = m.ts ?? "";
+      const rep = await readOk<{ messages?: SlackHistoryMessage[] }>(
+        this.fetch,
+        `${REPLIES_URL}?channel=${encodeURIComponent(slackChannel)}&ts=${encodeURIComponent(rootTs)}`,
+        { headers: { authorization: `Bearer ${this.token}` } },
       );
-      problems.push(...dlProblems);
-      if (delivery === undefined) continue;
-      // history is channel-scoped: force the requested `channel` (a Slack id tells us
-      // the Slack channel, the channel mapping is the caller's frame). Slack has no
-      // global seq, so a synthetic per-history counter stands in where the
-      // local line's `seq` lives; the message's ts is the real cursor.
-      const { mentioned, ...rest } = delivery;
-      void mentioned;
-      messages.push({ ...rest, channel, seq: ++seq });
+      // A replies request that fails must not fail the whole read: keep the
+      // top-level messages, REPORT the problem, carry on.
+      if (!rep.ok) {
+        problems.push(`thread replies failed for root ${rootTs}: ${rep.error ?? "slack call failed"}`);
+        continue;
+      }
+      for (const reply of rep.data.messages ?? []) {
+        // conversations.replies returns the ROOT as its first entry; the root
+        // already appeared exactly once above with no `thread`, so drop it.
+        if (reply.ts !== undefined && reply.ts === m.ts) continue;
+        seq = await this.appendLine(reply, slackChannel, channel, messages, problems, seq);
+      }
+    }
+    if (droppedRoots > 0) {
+      // A dropped root must never look like an empty thread: the cap truncates
+      // the read, so it is REPORTED through the same problems channel a partial
+      // read already uses, naming how many roots went unexpanded.
+      problems.push(`read capped: ${droppedRoots} threaded root(s) left unexpanded`);
     }
     return { code: 0, messages, problems };
   }
