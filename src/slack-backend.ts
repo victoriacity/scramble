@@ -34,6 +34,7 @@ export interface SlackInboundEvent {
   user?: string;
   username?: string;
   ts?: string;
+  thread_ts?: string;
   files?: SlackFileMeta[];
 }
 
@@ -118,6 +119,7 @@ async function readOk<T = Record<string, unknown>>(
 /** A line (message) read from conversations.history. */
 export interface SlackHistoryMessage {
   ts?: string;
+  thread_ts?: string;
   user?: string;
   username?: string;
   text?: string;
@@ -184,14 +186,23 @@ export class SlackBackend {
    *  token when it has one, else the config token. A Slack failure (`ok:false`
    *  with error text) is surfaced as a FAILURE carrying that text, never read
    *  as a success. */
-  async post(channel: string, text: string, as: string): Promise<{ ok: true } | { ok: false; error: string }> {
+  async post(
+    channel: string,
+    text: string,
+    as: string,
+    thread?: string,
+  ): Promise<{ ok: true } | { ok: false; error: string }> {
     const slackChannel = this.channels[channel];
     if (!slackChannel) return { ok: false, error: `no Slack channel for channel ${channel}` };
     const token = this.agents[as]?.token ?? this.token;
     const r = await readOk<{ error?: string }>(this.fetch, POST_URL, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-      body: JSON.stringify({ channel: slackChannel, text }),
+      body: JSON.stringify({
+        channel: slackChannel,
+        text,
+        ...(thread !== undefined ? { thread_ts: thread } : {}),
+      }),
     });
     if (!r.ok) return { ok: false, error: r.error };
     return { ok: true };
@@ -285,6 +296,7 @@ export class SlackBackend {
     // dedup id for a line.
     const ts = ev.ts ?? new Date().toISOString();
     const mentions = computeMentions(channelName, text, from);
+    const thread = ev.thread_ts !== undefined && ev.thread_ts !== ts ? ev.thread_ts : undefined;
     const dl = await this.downloadFiles(ev.files);
     const delivery: Delivery = {
       seq: 0,
@@ -295,6 +307,7 @@ export class SlackBackend {
       id: ts,
       mentions,
       mentioned: mentions.includes(as),
+      ...(thread !== undefined ? { thread } : {}),
     };
     if (dl.files.length > 0) delivery.files = dl.files;
     return { delivery, problems: dl.problems };
@@ -380,7 +393,7 @@ export class SlackBackend {
     let seq = 0;
     for (const m of r.data.messages ?? []) {
       const { delivery, problems: dlProblems } = await this.toDelivery(
-        { type: "message", channel: slackChannel, user: m.user, username: m.user, ts: m.ts, text: m.text, bot_id: m.bot_id, files: m.files },
+        { type: "message", channel: slackChannel, user: m.user, username: m.user, ts: m.ts, thread_ts: m.thread_ts, text: m.text, bot_id: m.bot_id, files: m.files },
         "",
       );
       problems.push(...dlProblems);

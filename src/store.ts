@@ -133,6 +133,7 @@ export function createStore(dir: string): ChannelStore {
       id: input.id,
       mentions: computeMentions(input.from, input.channel, input.text),
       ...(input.files && input.files.length > 0 ? { files: input.files } : {}),
+      ...(input.thread !== undefined ? { thread: input.thread } : {}),
     };
     append(msg);
     channels.set(input.channel, [...channelMsgs, msg]);

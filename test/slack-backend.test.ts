@@ -201,6 +201,22 @@ describe("post", () => {
     const r = await h.backend.post("general", "hi", "bob");
     expect(r).toEqual({ ok: false, error: "slack request failed: https://slack.com/api/chat.postMessage" });
   });
+
+  test("posts into a thread by passing thread_ts", async () => {
+    const h = make();
+    const r = await h.backend.post("general", "hi", "alice", "1.1");
+    expect(r).toEqual({ ok: true });
+    const call = h.fetches.find((f) => f.url.includes(POST))!;
+    expect(JSON.parse(call.init?.body as string)).toEqual({ channel: "C1", text: "hi", thread_ts: "1.1" });
+  });
+
+  test("posts without thread_ts when no thread is given", async () => {
+    const h = make();
+    await h.backend.post("general", "hi", "alice");
+    const call = h.fetches.find((f) => f.url.includes(POST))!;
+    const body = JSON.parse(call.init?.body as string) as Record<string, unknown>;
+    expect("thread_ts" in body).toBe(false);
+  });
 });
 
 // --- history ---------------------------------------------------------------
@@ -249,6 +265,21 @@ describe("history", () => {
     const r = await h.backend.history("general");
     expect(r.code).toBe(0);
     expect(r.messages).toHaveLength(0);
+  });
+
+  test("history round-trips a threaded reply's thread id and leaves a parent unmarked", async () => {
+    const h = make({}, async () =>
+      new Response(JSON.stringify({ ok: true, messages: [
+        { ts: "5.1", thread_ts: "5.0", user: "U111", text: "inside" },
+        { ts: "5.0", thread_ts: "5.0", user: "U111", text: "root" },
+        { ts: "5.2", user: "U111", text: "plain" },
+      ] }), { status: 200 }),
+    );
+    const r = await h.backend.history("general");
+    expect(r.code).toBe(0);
+    expect(r.messages[0]!.thread).toBe("5.0");
+    expect("thread" in r.messages[1]!).toBe(false);
+    expect("thread" in r.messages[2]!).toBe(false);
   });
 });
 
@@ -429,6 +460,42 @@ describe("listen", () => {
     expect(done).toBe(true);
   });
 
+  test("an inbound reply (thread_ts != ts) carries the thread id", async () => {
+    const h = make();
+    const lines: Delivery[] = [];
+    const p = h.backend.listen([], "alice", (d) => lines.push(d), () => {});
+    await pump();
+    emit(h, msg({ ts: "2.2", thread_ts: "1.1" }));
+    await pump(5);
+    h.sockets[0]?.close();
+    await p;
+    expect(lines[0]!.thread).toBe("1.1");
+  });
+
+  test("a parent (thread_ts == ts) carries no thread", async () => {
+    const h = make();
+    const lines: Delivery[] = [];
+    const p = h.backend.listen([], "alice", (d) => lines.push(d), () => {});
+    await pump();
+    emit(h, msg({ ts: "1.1", thread_ts: "1.1" }));
+    await pump(5);
+    h.sockets[0]?.close();
+    await p;
+    expect("thread" in lines[0]!).toBe(false);
+  });
+
+  test("a plain message carries no thread field at all", async () => {
+    const h = make();
+    const lines: Delivery[] = [];
+    const p = h.backend.listen([], "alice", (d) => lines.push(d), () => {});
+    await pump();
+    emit(h, msg({ text: "anything" })); // no thread_ts, default ts=1.1
+    await pump(5);
+    h.sockets[0]?.close();
+    await p;
+    expect("thread" in lines[0]!).toBe(false);
+  });
+
   test("a listen socket-open failure reports a problem and still resolves", async () => {
     const h = make({}, async (url) => {
       if (url.includes(SOCKET_OPEN)) return new Response(JSON.stringify({ ok: false, error: "bad_app" }), { status: 200 });
@@ -564,6 +631,22 @@ describe("slack commands through main", () => {
     const code = await main(["post", "general", "hi", "--as", "bob", "--backend", "slack"], io);
     expect(code).toBe(0);
     expect(sawPost).toBe(true);
+  });
+
+  test("message send --thread reaches chat.postMessage with thread_ts", async () => {
+    const { io } = configuredIo({
+      fetch: async (url, init) => {
+        if (String(url).includes(POST)) {
+          expect(JSON.parse(String(init?.body))).toEqual({ channel: "C1", text: "thread reply", thread_ts: "1787291684.717739" });
+          return new Response(JSON.stringify({ ok: true }), { status: 200 });
+        }
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      },
+      createSocket: () => new FakeSocket(),
+    });
+    io.readStdin = async () => "thread reply";
+    const code = await main(["message", "send", "--target", "general", "--thread", "1787291684.717739", "--as", "bob", "--backend", "slack"], io);
+    expect(code).toBe(0);
   });
 
   test("a slack post failure exits 1 with Slack's error on stderr", async () => {

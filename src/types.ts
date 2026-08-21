@@ -31,6 +31,11 @@ export interface Message {
   id: string;
   mentions: string[];
   files?: Attachment[];
+  /** present ONLY when this message is a REPLY inside a thread: the id of the
+   *  thread's root message. A line carrying `thread` is a reply; a line without
+   *  it is top-level. Absent-when-unset like `files`, so the two optional
+   *  fields read as one design. */
+  thread?: string;
 }
 
 /** A message as delivered to a subscriber: the record plus whether THIS
@@ -65,6 +70,9 @@ export interface PostInput {
   id: string;
   lastSeen?: number;
   files?: Attachment[];
+  /** the thread-root id when this post is the reply inside a thread; absent for
+   *  a top-level message. Mirrors Message.thread. */
+  thread?: string;
 }
 
 /** Server knobs. `token` unset means no auth check (localhost default). */
