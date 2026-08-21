@@ -165,6 +165,26 @@ async function stageWakeAndStatus(): Promise<void> {
       woke?.from !== undefined && !/^[UWB][A-Z0-9]{6,}$/.test(woke.from),
       `from=${woke?.from ?? "(none)"} resolved to a name rather than a raw id`,
     );
+    // The LIVE path stamps `thread` from the Socket Mode event, which is a
+    // different code path from the history read, so it gets its own check here.
+    const root = (await history()).find((m) => m.text?.includes(`smoke ${stamp}`))?.ts;
+    if (root !== undefined) {
+      await scramble(
+        ["message", "send", "--target", CHANNEL, "--as", PEER, "--thread", root],
+        `smoke ${stamp} @${SELF} threaded wake`,
+      );
+      await sleep(6000);
+      const threaded = (await Bun.file(wake).text())
+        .split("\n")
+        .filter((l) => l.startsWith("{"))
+        .map((l) => JSON.parse(l) as { text?: string; thread?: string })
+        .find((l) => l.text?.includes("threaded wake"));
+      check(
+        "wake/threadStamped",
+        threaded?.thread === root,
+        `the delivered reply carries thread=${threaded?.thread ?? "(absent)"} for root ${root}`,
+      );
+    }
     const ledger = join(".scramble", "status.json");
     const active = JSON.parse((await Bun.file(ledger).text()) || '{"entries":[]}') as {
       entries: Array<{ channel: string; ts?: string }>;

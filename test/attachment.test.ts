@@ -823,3 +823,68 @@ describe("a file download re-sends the auth header across a redirect", () => {
     expect(n).toBe(4);
   });
 });
+
+describe("message send --attach on the slack backend", () => {
+  test("the file's permalink is appended to the message text, since that is what attaches it", async () => {
+    const cwd = scratchDir("attach-link");
+    const filesDir = scratchDir("attach-link-files");
+    writeSlackCfg(cwd, filesDir);
+    const src = join(cwd, "shot.png");
+    writeFileSync(src, "PNGDATA");
+    let postedText = "";
+    const { io } = slackIo(cwd, async (url, init) => {
+      if (url.includes("getUploadURLExternal")) return new Response(JSON.stringify({ ok: true, upload_url: "https://pt/", file_id: "F77" }), { status: 200 });
+      if (url.startsWith("https://pt/")) return new Response("", { status: 200 });
+      if (url.includes("completeUploadExternal")) return new Response(JSON.stringify({ ok: true, files: [{ id: "F77", permalink: "https://x.slack.com/files/U1/F77/shot.png" }] }), { status: 200 });
+      if (url.includes("chat.postMessage")) {
+        postedText = JSON.parse(String(init?.body)).text as string;
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    });
+    io.readStdin = async () => "here is the mockup";
+    const code = await main(["message", "send", "--target", "general", "--as", "alice", "--attach", src, "--backend", "slack"], io);
+    expect(code).toBe(0);
+    expect(postedText).toBe("here is the mockup\nhttps://x.slack.com/files/U1/F77/shot.png");
+  });
+
+  test("the upload uses the SENDING agent's own token, not the default app token", async () => {
+    const cwd = scratchDir("attach-token");
+    const filesDir = scratchDir("attach-token-files");
+    writeSlackCfg(cwd, filesDir);
+    const src = join(cwd, "f.txt");
+    writeFileSync(src, "bytes");
+    let uploadAuth = "";
+    const { io } = slackIo(cwd, async (url, init) => {
+      if (url.includes("getUploadURLExternal")) {
+        uploadAuth = String((init?.headers as Record<string, string>)["authorization"]);
+        return new Response(JSON.stringify({ ok: true, upload_url: "https://pt/", file_id: "F78" }), { status: 200 });
+      }
+      if (url.startsWith("https://pt/")) return new Response("", { status: 200 });
+      if (url.includes("completeUploadExternal")) return new Response(JSON.stringify({ ok: true, files: [{ id: "F78", permalink: "https://x/F78" }] }), { status: 200 });
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    });
+    io.readStdin = async () => "with a file";
+    // alice has her own token in the config; a file she sends must be her file.
+    const code = await main(["message", "send", "--target", "general", "--as", "alice", "--attach", src, "--backend", "slack"], io);
+    expect(code).toBe(0);
+    expect(uploadAuth).toBe("Bearer T_A");
+  });
+
+  test("with no attachment the text is sent unchanged", async () => {
+    const cwd = scratchDir("attach-none");
+    const filesDir = scratchDir("attach-none-files");
+    writeSlackCfg(cwd, filesDir);
+    let postedText = "";
+    const { io } = slackIo(cwd, async (url, init) => {
+      if (url.includes("chat.postMessage")) {
+        postedText = JSON.parse(String(init?.body)).text as string;
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    });
+    io.readStdin = async () => "just words";
+    expect(await main(["message", "send", "--target", "general", "--as", "alice", "--backend", "slack"], io)).toBe(0);
+    expect(postedText).toBe("just words");
+  });
+});

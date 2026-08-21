@@ -937,7 +937,12 @@ function collectValues(args: string[], flag: string): string[] {
   return out;
 }
 
-type AttachResult = { ok: true; id: string } | { ok: false; error: string };
+type AttachResult =
+  /** `permalink` is Slack's link to the stored file, absent on the local
+   *  backend. The SEND path puts it in the message text, which is what makes
+   *  Slack attach the file to that message; without it the bytes sit in Slack's
+   *  storage attached to nothing. */
+  { ok: true; id: string; permalink?: string } | { ok: false; error: string };
 
 /** Upload one local file under the selected backend and return the file id the
  *  backend assigned (Slack's file id or a local ledger id). The `path` carries
@@ -948,14 +953,16 @@ async function attachmentUpload(
   mimeOverride: string | undefined,
   io: Io,
   backend: "local" | "slack",
+  as?: string,
 ): Promise<AttachResult> {
   if (backend === "slack") {
     const cfg = loadSlackConfig(io);
     if (cfg === null || !cfg.token) return { ok: false, error: "slack backend requires a bot token" };
     const slackId = cfg.channels[targetChannel];
     if (!slackId) return { ok: false, error: `no Slack channel for channel ${targetChannel}` };
-    const r = await uploadToSlack(io.fetch, cfg.token, path, slackId, mimeOverride);
-    return r.ok ? { ok: true, id: r.out.id } : { ok: false, error: r.error };
+    const token = (as !== undefined ? cfg.agents[as]?.token : undefined) ?? cfg.token;
+    const r = await uploadToSlack(io.fetch, token, path, slackId, mimeOverride);
+    return r.ok ? { ok: true, id: r.out.id, permalink: r.out.permalink } : { ok: false, error: r.error };
   }
   const r = recordLocalUpload(slackFilesDir(io), path, mimeOverride);
   if (!r.ok) return { ok: false, error: r.error };
@@ -996,7 +1003,7 @@ async function cmdAttachment(args: string[], io: Io): Promise<number> {
     }
     const req = requireTarget(flags, io);
     if (!req.ok) return 1;
-    const r = await attachmentUpload(path, req.channel, flags.get("mime-type"), io, backend);
+    const r = await attachmentUpload(path, req.channel, flags.get("mime-type"), io, backend, nameFor(flags, io));
     if (!r.ok) {
       io.writeErr(r.error);
       return 1;
@@ -1039,18 +1046,26 @@ async function cmdMessage(args: string[], io: Io, backend: "local" | "slack"): P
       // text carrying the uploaded file metadata (the id + local path).
       const attachPaths = collectValues(args, "--attach");
       let files: Attachment[] | undefined;
+      const links: string[] = [];
       if (attachPaths.length > 0) {
         for (const p of attachPaths) {
-          const up = await attachmentUpload(p, req.channel, flags.get("mime-type"), io, backend);
+          const up = await attachmentUpload(p, req.channel, flags.get("mime-type"), io, backend, nameFor(flags, io));
           if (!up.ok) {
             io.writeErr(up.error);
             return 1;
           }
           files = files ?? [];
           files.push({ id: up.id, name: basename(p), mime: guessMime(p), size: sizeOf(p), path: p });
+          if (up.permalink !== undefined) links.push(up.permalink);
         }
       }
-      return postText(req.channel, text, flags, io, backend, files);
+      // THE LINK IS THE ATTACHMENT on Slack. Slack unfurls a file permalink in
+      // the message text into the file itself, and asking
+      // completeUploadExternal to share instead answers ok:true while sharing
+      // with nothing. So the link rides in the text, and the local backend,
+      // which carries `files` on the line, needs no link.
+      const body = links.length > 0 ? `${text.trimEnd()}\n${links.join("\n")}` : text;
+      return postText(req.channel, body, flags, io, backend, files);
     }
     case "check":
       return cmdMessageCheck(args, io, backend);
