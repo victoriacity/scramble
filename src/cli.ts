@@ -513,7 +513,10 @@ async function historyRead(
       io.writeErr(s.error ?? "slack unavailable");
       return 1;
     }
-    const r = await s.backend.history(channel, since > 0 ? String(since) : undefined);
+    // This caller (src/cli.ts) builds BOTH the status manager (which reads the
+    // ledger) and the slack backend, so the living-status ts is read here and
+    // handed in, rather than letting the backend know where the ledger lives.
+    const r = await s.backend.history(channel, since > 0 ? String(since) : undefined, statusTts(statusTracker(io, "slack")));
     for (const p of r.problems) io.writeErr(`slack: ${p}`);
     if (r.code !== 0) {
       io.writeErr(`read failed: ${r.error}`);
@@ -741,6 +744,14 @@ async function settleStatus(p: Promise<unknown> | undefined, io: Io): Promise<vo
   }
 }
 
+/** The living-status message ts for a run, read from the status ledger by the
+ *  caller (src/cli.ts) that builds BOTH the status manager and the slack
+ *  backend — handed into a read or a delivery so the backend filters a status
+ *  line without knowing where the ledger lives. No status means no line hidden. */
+function statusTts(status: StatusManager | undefined): ReadonlySet<string> {
+  return status === undefined ? new Set<string>() : status.livingTts();
+}
+
 /** A slack-backend `message check` cursor is a PER-CHANNEL map (channel name ->
  *  newest Slack ts), stored under a namespaced key in the same cursor.json so it
  *  never collides with the local backend's agent-keyed integer cursor. Slack has
@@ -797,7 +808,7 @@ async function slackCmdNext(argv: string[], io: Io): Promise<number> {
     io.writeErr(s.error ?? "slack unavailable");
     return 1;
   }
-  const r = await s.backend.next(positionals, name, timeoutSec, (p) => io.writeErr(`slack: ${p}`));
+  const r = await s.backend.next(positionals, name, timeoutSec, (p) => io.writeErr(`slack: ${p}`), statusTts(status));
   if (r.code === 64) return 64;
   if (r.line !== undefined) {
     if (status !== undefined) await settleStatus(deliverStatus(status, r.line, name), io);
@@ -825,6 +836,7 @@ async function slackCmdListen(argv: string[], io: Io): Promise<number> {
         io.write(JSON.stringify(d));
       },
       (p) => io.writeErr(`slack: ${p}`),
+      statusTts(status),
     );
   } finally {
     stopTicker?.();
@@ -887,11 +899,12 @@ async function messageCheckSlack(flags: Map<string, string>, io: Io): Promise<nu
   }
   const started = readSlackCursor(io, name);
   const next = { ...started };
+  const tts = statusTts(status);
   for (const channel of Object.keys(cfg.channels).sort()) {
     const cursor = started[channel];
     // `oldest` is inclusive in Slack, so re-filter to strictly-newer lines: the
     // cursor line itself must not re-drain on a repeat `message check`.
-    const r = await s.backend.history(channel, cursor === undefined ? undefined : cursor);
+    const r = await s.backend.history(channel, cursor === undefined ? undefined : cursor, tts);
     for (const p of r.problems) io.writeErr(`slack: ${p}`);
     if (r.code !== 0) {
       io.writeErr(`read failed: ${r.error}`);
