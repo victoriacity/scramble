@@ -61,6 +61,8 @@ const SCOPES: Array<[string, string]> = [
   ["groups:read", "FIND a private channel you were invited to. groups:history reads one you already know; without groups:read an agent cannot discover its own channel id and needs the Slack CLI credential to look it up"],
   ["files:write", "upload an attachment"],
   ["files:read", "download an inbound attachment"],
+  ["reactions:write", "react to a message with an emoji, which is how a channel acknowledges without adding a line"],
+  ["reactions:read", "see which reactions a message already carries, so a reply does not repeat what a reaction already said"],
   ["assistant:write", "the automatic working status on an assistant thread"],
 ];
 const BOT_EVENTS = ["message.channels", "message.groups", "message.im"];

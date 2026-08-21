@@ -1222,6 +1222,33 @@ async function cmdMessage(args: string[], io: Io, backend: "local" | "slack"): P
       const body = links.length > 0 ? `${text.trimEnd()}\n${links.join("\n")}` : text;
       return postText(req.channel, body, flags, io, backend, files);
     }
+    case "react": {
+      // `message react --target <channel> --to <ts> --emoji <name>`: a reaction
+      // is an acknowledgement that costs the channel no line.
+      const req = requireTarget(flags, io);
+      if (!req.ok) return 1;
+      const to = flags.get("to");
+      const emoji = flags.get("emoji");
+      if (to === undefined || emoji === undefined) {
+        io.writeErr("message react requires --to <message-ts> and --emoji <name>");
+        return 1;
+      }
+      if (backend !== "slack") {
+        io.writeErr("message react needs the slack backend");
+        return 1;
+      }
+      const s2 = slackBackend(io);
+      if (s2.error !== undefined || s2.backend === undefined) {
+        io.writeErr(s2.error ?? "slack backend unavailable");
+        return 1;
+      }
+      const rr = await s2.backend.react(req.channel, to, emoji, nameFor(flags, io));
+      if (!rr.ok) {
+        io.writeErr(`react failed: ${rr.error}`);
+        return 1;
+      }
+      return 0;
+    }
     case "check":
       return cmdMessageCheck(args, io, backend);
     case "read": {

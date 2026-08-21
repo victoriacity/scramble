@@ -28,6 +28,7 @@ const WITH_METADATA = "include_all_metadata=true";
 const REPLIES_URL = "https://slack.com/api/conversations.replies";
 const USERS_INFO_URL = "https://slack.com/api/users.info";
 const AUTH_TEST_URL = "https://slack.com/api/auth.test";
+const REACT_URL = "https://slack.com/api/reactions.add";
 
 /** Cap on the number of threaded ROOTS expanded per history call — the fan-out
  *  is bounded: one extra conversations.replies request per expanded root, on
@@ -393,6 +394,35 @@ export class SlackBackend {
 
   private appTokenFor(agent: string): string {
     return this.agents[agent]?.appToken ?? this.appToken ?? "";
+  }
+
+  /** React to a message with an emoji. A reaction is how a channel acknowledges
+   *  without spending a line, which is the point: an agent that answers "got it"
+   *  in prose has added noise where a tick would have done.
+   *
+   *  `already_reacted` is reported as success, since the state the caller wanted
+   *  is the state that holds. */
+  async react(
+    channel: string,
+    ts: string,
+    emoji: string,
+    as: string,
+  ): Promise<{ ok: true } | { ok: false; error: string }> {
+    const slackChannel = this.channels[channel];
+    if (!slackChannel) return { ok: false, error: `no Slack channel for channel ${channel}` };
+    const t = this.agentToken(as);
+    if (!t.ok) return { ok: false, error: t.error };
+    const name = emoji.replace(/^:|:$/g, "");
+    const r = await readOk<{ error?: string }>(this.fetch, REACT_URL, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${t.token}` },
+      body: JSON.stringify({ channel: slackChannel, timestamp: ts, name }),
+    });
+    if (!r.ok) {
+      if (r.error.includes("already_reacted")) return { ok: true };
+      return { ok: false, error: r.error };
+    }
+    return { ok: true };
   }
 
   /** Is this agent's app IN the conversation, and what is its handle? An app

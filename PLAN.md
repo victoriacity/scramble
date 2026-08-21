@@ -96,6 +96,7 @@ deviation from this table is a defect in the deviating unit rather than a new co
 | command | flags | behavior | exit |
 |---|---|---|---|
 | `message send` | `--target <channel>`, `--as <name>`, `--thread <id>`, `--attach <path>` (repeatable), `--mime-type <t>`, `--backend <name>` | the message text on STDIN; posts it, prints each crossing as one JSON line. `--thread` replies inside that thread; each `--attach` uploads the file first and the message carries it | 0; 1 on a refused post or upload |
+| `message react` | `--target <channel>`, `--to <message-ts>`, `--emoji <name>`, `--as <name>` | adds one emoji reaction. `already_reacted` counts as success, since the wanted state holds | 0; 1 on a refusal |
 | `message check` | `--as <name>`, `--backend <name>` | drains what has arrived for this agent since its stored cursor, one JSON line each, and advances the cursor. Own messages excluded | 0 |
 | `message read` | `--target <channel>`, `--after <cursor>`, `--as <name>`, `--backend <name>` | prints the conversation, one JSON line each, including your own lines and thread replies | 0; 1 on an unreachable store |
 | `attachment upload` | `--path <file>`, `--target <channel>`, `--mime-type <t>`, `--as <name>` | uploads one file and prints its id | 0; 1 on a refused upload |

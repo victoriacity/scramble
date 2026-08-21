@@ -1466,6 +1466,76 @@ describe("slackCliToken", () => {
   });
 });
 
+describe("message react", () => {
+  // A reaction acknowledges without spending a line, which is why the skill uses
+  // it in place of an "on it" message.
+  function reactIo(cwd: string, router: (u: string) => Promise<Response>) {
+    const errs: string[] = [];
+    const bodies: Array<Record<string, unknown>> = [];
+    const io: Io = {
+      write: () => {},
+      writeErr: (l) => errs.push(l),
+      fetch: async (input, init) => {
+        if (String(input).includes("reactions.add")) bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return router(String(input));
+      },
+      env: () => undefined,
+      cwd: () => cwd,
+      sleep: async () => {},
+      serve: async () => 0,
+      createSocket: () => ({ send: () => {}, close: () => {}, onopen: null, onmessage: null, onclose: null, onerror: null }),
+    };
+    return { io, errs, bodies };
+  }
+  const ok = async () => new Response(JSON.stringify({ ok: true }), { status: 200 });
+
+  test("adds the reaction with the acting agent's token and a bare emoji name", async () => {
+    const cwd = scratchDir("react-ok");
+    writeSlackConfig(cwd, { token: "xoxb-d", channels: { room: "C1" }, agents: { dev: { token: "T_DEV" } } });
+    const { io, bodies } = reactIo(cwd, ok);
+    // The colons a person types around an emoji are stripped: Slack wants the name.
+    const code = await main(["message", "react", "--target", "room", "--to", "9.9", "--emoji", ":tada:", "--as", "dev", "--backend", "slack"], io);
+    expect(code).toBe(0);
+    expect(bodies[0]).toEqual({ channel: "C1", timestamp: "9.9", name: "tada" });
+  });
+
+  test("already_reacted is SUCCESS, since the wanted state holds", async () => {
+    const cwd = scratchDir("react-dup");
+    writeSlackConfig(cwd, { token: "xoxb-d", channels: { room: "C1" }, agents: { dev: { token: "T" } } });
+    const { io } = reactIo(cwd, async () => new Response(JSON.stringify({ ok: false, error: "already_reacted" }), { status: 200 }));
+    expect(await main(["message", "react", "--target", "room", "--to", "9.9", "--emoji", "eyes", "--as", "dev", "--backend", "slack"], io)).toBe(0);
+  });
+
+  test("a real refusal fails and names itself", async () => {
+    const cwd = scratchDir("react-bad");
+    writeSlackConfig(cwd, { token: "xoxb-d", channels: { room: "C1" }, agents: { dev: { token: "T" } } });
+    const { io, errs } = reactIo(cwd, async () => new Response(JSON.stringify({ ok: false, error: "invalid_name" }), { status: 200 }));
+    expect(await main(["message", "react", "--target", "room", "--to", "9.9", "--emoji", "nope", "--as", "dev", "--backend", "slack"], io)).toBe(1);
+    expect(errs.join(" ")).toContain("invalid_name");
+  });
+
+  test("a broken slack config is reported rather than crashing the verb", async () => {
+    const cwd = scratchDir("react-nocfg");
+    const { io, errs } = reactIo(cwd, ok);
+    expect(await main(["message", "react", "--target", "room", "--to", "1.1", "--emoji", "x", "--as", "dev", "--backend", "slack"], io)).toBe(1);
+    expect(errs.join(" ")).toContain("slack.json");
+  });
+
+  test("a missing --to or --emoji, an unmapped channel, and the local backend each report themselves", async () => {
+    const cwd = scratchDir("react-args");
+    writeSlackConfig(cwd, { token: "xoxb-d", channels: { room: "C1" }, agents: { dev: { token: "T" } } });
+    const a1 = reactIo(cwd, ok);
+    expect(await main(["message", "react", "--target", "room", "--emoji", "x", "--as", "dev", "--backend", "slack"], a1.io)).toBe(1);
+    expect(a1.errs.join(" ")).toContain("--to");
+    const a2 = reactIo(cwd, ok);
+    expect(await main(["message", "react", "--target", "ghost", "--to", "1.1", "--emoji", "x", "--as", "dev", "--backend", "slack"], a2.io)).toBe(1);
+    expect(a2.errs.join(" ")).toContain("no Slack channel for channel ghost");
+    const a3 = reactIo(cwd, ok);
+    expect(await main(["message", "react", "--target", "room", "--to", "1.1", "--emoji", "x", "--as", "dev"], a3.io)).toBe(1);
+    expect(a3.errs.join(" ")).toContain("needs the slack backend");
+  });
+});
+
 describe("the automatic status posts as the ACTING agent", () => {
   // It used to post with the config's default token, which belongs to a
   // different app that is usually not in the agent's channel: Slack answered
