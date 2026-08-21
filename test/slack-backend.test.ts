@@ -178,20 +178,22 @@ describe("post", () => {
     expect(r.ok).toBe(false);
     // Both halves matter. The name, so the reader knows which channel; and that
     // the lookup RAN and came back without it, so this is distinguishable from
-    // the case where Slack refused the question — which is what actually
-    // happened on this org, where conversations.list wanted a team_id it was not
-    // given and every name resolved to this same sentence.
+    // the case where Slack refused the question. On this org it was always the
+    // refusal: the listing call wants a team_id it was not being given, answers
+    // missing_argument without one, and every name resolved to the same
+    // not-found sentence a typo produces.
     expect(r.ok ? "" : r.error).toContain("no Slack channel for channel nope");
-    expect(r.ok ? "" : r.error).toContain("conversations.list answered without it");
+    expect(r.ok ? "" : r.error).toContain("this agent is not in a channel by that name");
   });
 
   test("a channel NAME resolves through the WORKSPACE id, never the enterprise id", async () => {
     // The trap this exists for, measured on a real Enterprise Grid org: on an
     // enterprise install auth.test reports team_id = the E… ORG, identical to
-    // its own enterprise_id, and conversations.list answers
-    // team_access_not_granted to that. auth.teams.list is the only method that
-    // names the workspace. Reading the obvious field produced an id that was
-    // wrong in a way whose error named neither the field nor the fix.
+    // its own enterprise_id, and the listing call answers
+    // team_access_not_granted to that (measured against conversations.list,
+    // which this lookup used at the time). auth.teams.list is the only method
+    // that names the workspace. Reading the obvious field produced an id that
+    // was wrong in a way whose error named neither the field nor the fix.
     const seen: string[] = [];
     const h = make({}, async (url) => {
       seen.push(url);
@@ -204,7 +206,7 @@ describe("post", () => {
       if (url.includes("auth.teams.list")) {
         return new Response(JSON.stringify({ ok: true, teams: [{ id: "T0EXAMPLE012", name: "Example" }] }), { status: 200 });
       }
-      if (url.includes("conversations.list")) {
+      if (url.includes("users.conversations")) {
         // Slack's real behaviour: the org id is refused outright.
         if (url.includes("team_id=E0EXAMPLE010")) {
           return new Response(JSON.stringify({ ok: false, error: "team_access_not_granted" }), { status: 200 });
@@ -215,8 +217,8 @@ describe("post", () => {
     });
     const r = await h.backend.post("invited", "hi", "bob");
     expect(r).toEqual({ ok: true });
-    expect(seen.some((u) => u.includes("conversations.list") && u.includes("team_id=T0EXAMPLE012"))).toBe(true);
-    expect(seen.some((u) => u.includes("conversations.list") && u.includes("team_id=E0EXAMPLE010"))).toBe(false);
+    expect(seen.some((u) => u.includes("users.conversations") && u.includes("team_id=T0EXAMPLE012"))).toBe(true);
+    expect(seen.some((u) => u.includes("users.conversations") && u.includes("team_id=E0EXAMPLE010"))).toBe(false);
   });
 
   test("a login covering several workspaces names none of them rather than guessing", async () => {
@@ -226,7 +228,7 @@ describe("post", () => {
       if (url.includes("auth.teams.list")) {
         return new Response(JSON.stringify({ ok: true, teams: [{ id: "T1" }, { id: "T2" }] }), { status: 200 });
       }
-      if (url.includes("conversations.list")) {
+      if (url.includes("users.conversations")) {
         return new Response(JSON.stringify({ ok: true, channels: [{ id: "C9", name: "invited" }] }), { status: 200 });
       }
       return new Response(JSON.stringify({ ok: true }), { status: 200 });
@@ -234,7 +236,7 @@ describe("post", () => {
     expect(await h.backend.post("invited", "hi", "bob")).toEqual({ ok: true });
     // No team_id at all: with two workspaces there is no single right answer, so
     // Slack decides and its refusal (if any) is what gets reported.
-    expect(seen.some((u) => u.includes("conversations.list") && u.includes("team_id="))).toBe(false);
+    expect(seen.some((u) => u.includes("users.conversations") && u.includes("team_id="))).toBe(false);
   });
 
   test("a RAW channel id is the answer, without asking Slack to name a channel after it", async () => {
@@ -244,12 +246,12 @@ describe("post", () => {
       return new Response(JSON.stringify({ ok: true }), { status: 200 });
     });
     expect(await h.backend.post("C0EXAMPLE007", "hi", "bob")).toEqual({ ok: true });
-    expect(seen.some((u) => u.includes("conversations.list"))).toBe(false);
+    expect(seen.some((u) => u.includes("users.conversations"))).toBe(false);
   });
 
   test("a REFUSED lookup is not reported as a missing channel", async () => {
     const h = make({}, async (url) =>
-      url.includes("conversations.list")
+      url.includes("users.conversations")
         ? new Response(JSON.stringify({ ok: false, error: "missing_argument" }), { status: 200 })
         : new Response(JSON.stringify({ ok: true }), { status: 200 }),
     );

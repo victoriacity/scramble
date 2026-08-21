@@ -31,7 +31,7 @@ const AUTH_TEST_URL = "https://slack.com/api/auth.test";
 const AUTH_TEAMS_LIST_URL = "https://slack.com/api/auth.teams.list";
 const REACT_URL = "https://slack.com/api/reactions.add";
 const CONV_INFO_URL = "https://slack.com/api/conversations.info";
-const CONV_LIST_URL = "https://slack.com/api/conversations.list";
+const USERS_CONVERSATIONS_URL = "https://slack.com/api/users.conversations";
 
 /** Cap on the number of threaded ROOTS expanded per history call — the fan-out
  *  is bounded: one extra conversations.replies request per expanded root, on
@@ -476,19 +476,35 @@ export class SlackBackend {
     if (cached !== undefined && cached !== "") return { id: cached };
     const team = await this.teamIdFor(token);
     let cursor = "";
+    // THE AGENT'S OWN CONVERSATIONS, not the workspace's. users.conversations
+    // returns exactly the channels this token is a member of, which is exactly
+    // the set it can act on: a bot cannot post to, read or react in a channel it
+    // was never invited to, so a name matching some other channel resolves to an
+    // id that then fails with `not_in_channel` — a worse answer than saying the
+    // agent is not in it.
+    //
+    // conversations.list was the wrong instrument twice over. It answers with
+    // the whole workspace, measured here at 203 channels against the 2 this
+    // agent is in, so the walk was a hundred times the size of the question; and
+    // it was capped at ten pages, which on a workspace past 2000 channels stops
+    // and reports the same "no Slack channel" a typo produces. Raised by the
+    // model-failure-research agent, which could not resolve a private channel it
+    // was in — I could not reproduce that part (paged with a team_id,
+    // conversations.list did list every private channel each agent belongs to),
+    // and the change is right for the reasons above rather than that one.
     for (let page = 0; page < 10; page++) {
       const q =
-        `${CONV_LIST_URL}?types=public_channel,private_channel&exclude_archived=true&limit=200` +
+        `${USERS_CONVERSATIONS_URL}?types=public_channel,private_channel&exclude_archived=true&limit=200` +
         (team === "" ? "" : `&team_id=${encodeURIComponent(team)}`) +
         (cursor === "" ? "" : `&cursor=${encodeURIComponent(cursor)}`);
       const r = await readOk<{
-        channels?: Array<{ id?: string; name?: string; is_member?: boolean }>;
+        channels?: Array<{ id?: string; name?: string }>;
         response_metadata?: { next_cursor?: string };
       }>(this.fetch, q, { headers: { authorization: `Bearer ${token}` } });
       if (!r.ok) {
         return {
           error:
-            `looking up the Slack channel for "${name}" failed: conversations.list answered ` +
+            `looking up the Slack channel for "${name}" failed: users.conversations answered ` +
             `${r.error}. This is NOT "no such channel" — Slack refused the question.`,
         };
       }
@@ -504,8 +520,8 @@ export class SlackBackend {
     this.channelIdCache.set(name, "");
     return {
       error:
-        `no Slack channel for channel ${name}. conversations.list answered without it, so this ` +
-        `agent is either not in that channel or the name is wrong.`,
+        `no Slack channel for channel ${name}: this agent is not in a channel by that name. ` +
+        `An app cannot add itself to a Slack conversation, so a member has to invite it.`,
     };
   }
 
