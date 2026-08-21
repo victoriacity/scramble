@@ -36,6 +36,11 @@ export interface Io {
    *  so tests inject a fake run and need no raft binary, no network, and no
    *  credential. */
   run?(cmd: string, args: string[], stdin: string): Promise<{ exit: number; stdout: string; stderr: string }>;
+  /** this process's id, for the bridge's single-instance lock. */
+  pid?(): number;
+  /** is that pid still running? injected so the lock is testable without a
+   *  real process. */
+  alive?(pid: number): boolean;
 }
 
 /** The CLI owns --bind string parsing. The one interpretation site: it turns a
@@ -418,13 +423,25 @@ async function cmdServe(argv: string[], io: Io): Promise<number> {
   return io.serve(store, opts);
 }
 
-/** Load the bridge master config from <workspace>/.scramble/slack.json. The
- *  config governs which rooms map to which channels, each agent's identity
- *  tier, the DM mirror, and the app-level/bot tokens. Returns null when the
- *  file is absent or malformed (the caller reports it). */
+/** Path the bridge config is read from. SCRAMBLE_SLACK_CONFIG wins, else
+ *  ~/.config/scramble/slack.json, else the workspace copy. The config holds
+ *  BOT TOKENS, so the default is deliberately OUTSIDE the repo: this repo is
+ *  public-bound, and a credential in a commit is readable in every clone. */
+export function slackConfigPath(io: Io): string {
+  const explicit = io.env("SCRAMBLE_SLACK_CONFIG");
+  if (explicit !== undefined && explicit.length > 0) return explicit;
+  const home = io.env("HOME");
+  if (home !== undefined && home.length > 0) return join(home, ".config", "scramble", "slack.json");
+  return join(io.cwd(), ".scramble", "slack.json");
+}
+
+/** Load the bridge master config. The config governs which rooms map to which
+ *  channels, each agent's identity tier, the DM mirror, and the app-level/bot
+ *  tokens. Returns null when the file is absent or malformed (the caller
+ *  reports it, naming the path it tried). */
 export function loadSlackConfig(io: Io): Omit<SlackConfig, "postToRoom"> | null {
   try {
-    const raw = readFileSync(join(io.cwd(), ".scramble", "slack.json"), "utf8");
+    const raw = readFileSync(slackConfigPath(io), "utf8");
     const j = JSON.parse(raw) as Record<string, unknown>;
     const channels = j.channels as Record<string, string> | undefined;
     const agents = j.agents as Record<string, { token?: string; icon?: string }> | undefined;
@@ -498,18 +515,48 @@ async function feedFirehose(
   }
 }
 
+/** The bridge's single-instance lock. Two bridges on one config each subscribe
+ *  to the firehose, so EVERY room message reaches Slack twice (observed
+ *  2026-08-21: one line delivered at ts …024 and again at …035). The lock is a
+ *  pidfile beside the config; a second bridge refuses to start while the first
+ *  is alive, and a stale pidfile from a crashed bridge is reclaimed. */
+export function bridgeLockPath(io: Io): string {
+  return `${slackConfigPath(io)}.bridge.pid`;
+}
+
+export function acquireBridgeLock(io: Io): { ok: true; path: string } | { ok: false; holder: number } {
+  const path = bridgeLockPath(io);
+  const alive = io.alive ?? (() => false);
+  try {
+    const held = Number(readFileSync(path, "utf8").trim());
+    if (Number.isInteger(held) && held > 0 && alive(held)) return { ok: false, holder: held };
+  } catch {
+    /* absent or unreadable pidfile: nothing holds the lock */
+  }
+  writeFileSync(path, `${io.pid ? io.pid() : 0}\n`);
+  return { ok: true, path };
+}
+
 async function cmdSlack(argv: string[], io: Io): Promise<number> {
   const { flags } = parseArgs(argv);
   const dryRun = flags.has("dry-run");
   const cfg = loadSlackConfig(io);
   if (cfg === null) {
-    io.writeErr(".scramble/slack.json is missing or malformed");
+    io.writeErr(`${slackConfigPath(io)} is missing or malformed`);
     return 1;
   }
   const tokenErr = slackTokenError(cfg);
   if (tokenErr !== null) {
     io.writeErr(tokenErr);
     return 1;
+  }
+  if (!dryRun) {
+    const lock = acquireBridgeLock(io);
+    if (!lock.ok) {
+      io.writeErr(`a slack bridge is already running for this config (pid ${lock.holder})`);
+      io.writeErr(`every room message would reach Slack twice; stop that bridge or remove ${bridgeLockPath(io)} if it is stale`);
+      return 1;
+    }
   }
   const { url, token } = resolveConfig(flags, io);
   // Inbound Slack text lands in the room through the daemon's POST path.

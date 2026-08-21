@@ -72,6 +72,17 @@ const io = {
   sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
   },
+  pid(): number {
+    return process.pid;
+  },
+  alive(pid: number): boolean {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  },
   serve(store: RoomStore, opts: ServeOptions): Promise<number> {
     const srv = serve(store, opts);
     return new Promise(() => {});

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import type { RoomStore } from "../src/store";
 import { createStore } from "../src/store";
 import { createHandler } from "../src/server";
-import { main, parseBind, loadSlackConfig, type Io } from "../src/cli";
+import { main, parseBind, loadSlackConfig, slackConfigPath, acquireBridgeLock, bridgeLockPath, type Io } from "../src/cli";
 
 function scratchDir(name: string): string {
   const d = join(tmpdir(), `zz-${name}-${process.pid}-${Math.random().toString(36).slice(2)}`);
@@ -843,6 +843,94 @@ describe("scramble slack", () => {
   });
 });
 
+describe("bridge single-instance lock", () => {
+  // Two bridges on one config each subscribe to the firehose, so every room
+  // message reaches Slack twice. Observed live on 2026-08-21.
+  function lockIo(dir: string, over?: Partial<Io>): Io {
+    return {
+      write: () => {},
+      writeErr: () => {},
+      fetch: async () => new Response("{}", { status: 200 }),
+      env: (n: string) => (n === "SCRAMBLE_SLACK_CONFIG" ? join(dir, "slack.json") : undefined),
+      cwd: () => dir,
+      sleep: async () => {},
+      serve: async () => 0,
+      createTransport: () => ({ connect: () => {}, postMessage: async () => {} }),
+      pid: () => 4242,
+      alive: () => true,
+      ...over,
+    };
+  }
+
+  test("the first bridge takes the lock and records its pid", () => {
+    const dir = scratchDir("lock-first");
+    const got = acquireBridgeLock(lockIo(dir));
+    expect(got.ok).toBe(true);
+    expect(readFileSync(bridgeLockPath(lockIo(dir)), "utf8").trim()).toBe("4242");
+  });
+
+  test("a second bridge is refused while the holder is alive", () => {
+    const dir = scratchDir("lock-second");
+    expect(acquireBridgeLock(lockIo(dir)).ok).toBe(true);
+    const second = acquireBridgeLock(lockIo(dir, { pid: () => 99, alive: (p: number) => p === 4242 }));
+    expect(second).toEqual({ ok: false, holder: 4242 });
+  });
+
+  test("a stale pidfile from a dead bridge is reclaimed", () => {
+    const dir = scratchDir("lock-stale");
+    expect(acquireBridgeLock(lockIo(dir)).ok).toBe(true);
+    const after = acquireBridgeLock(lockIo(dir, { pid: () => 77, alive: () => false }));
+    expect(after.ok).toBe(true);
+    expect(readFileSync(bridgeLockPath(lockIo(dir)), "utf8").trim()).toBe("77");
+  });
+
+  test("a garbage pidfile does not block a bridge", () => {
+    const dir = scratchDir("lock-garbage");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(bridgeLockPath(lockIo(dir)), "not-a-pid\n");
+    expect(acquireBridgeLock(lockIo(dir)).ok).toBe(true);
+  });
+
+  test("without an alive seam an existing pidfile is not treated as held", () => {
+    const dir = scratchDir("lock-noalive");
+    const io = lockIo(dir, { alive: undefined, pid: undefined });
+    mkdirSync(dir, { recursive: true });
+    // a plausible live pid on disk: with no way to ask whether it runs, the
+    // lock must fall through rather than block the bridge forever.
+    writeFileSync(bridgeLockPath(io), "4242\n");
+    expect(acquireBridgeLock(io).ok).toBe(true);
+    expect(readFileSync(bridgeLockPath(io), "utf8").trim()).toBe("0");
+  });
+
+  test("the slack verb refuses to start a second bridge", async () => {
+    const dir = scratchDir("lock-verb");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "slack.json"), JSON.stringify({
+      channels: { dm: "D1" }, agents: { akari: { token: "t" } }, token: "xoxb-1", appToken: "xapp-1",
+    }));
+    const errs: string[] = [];
+    const base = lockIo(dir, { writeErr: (l: string) => errs.push(l) });
+    expect(acquireBridgeLock(base).ok).toBe(true);
+    const io = lockIo(dir, { writeErr: (l: string) => errs.push(l), pid: () => 5, alive: (p: number) => p === 4242 });
+    const code = await main(["slack"], io);
+    expect(code).toBe(1);
+    expect(errs.join(" ")).toContain("already running");
+    expect(errs.join(" ")).toContain("twice");
+  });
+
+  test("a dry run needs no lock", async () => {
+    const dir = scratchDir("lock-dry");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "slack.json"), JSON.stringify({
+      channels: { dm: "D1" }, agents: { akari: { token: "t" } }, token: "xoxb-1", appToken: "xapp-1",
+    }));
+    const base = lockIo(dir);
+    expect(acquireBridgeLock(base).ok).toBe(true);
+    const io = lockIo(dir, { pid: () => 5, alive: (p: number) => p === 4242 });
+    expect(await main(["slack", "--dry-run"], io)).toBe(0);
+  });
+});
+
 describe("loadSlackConfig", () => {
   function sluckIo(cwd: string): Io {
     return {
@@ -883,5 +971,34 @@ describe("loadSlackConfig", () => {
     const cwd = scratchDir("slackcfg-badag");
     writeSlackConfig(cwd, { channels: {}, agents: 42 });
     expect(loadSlackConfig(sluckIo(cwd))).toBeNull();
+  });
+
+  // The config holds BOT TOKENS, so its default home is outside the repo: this
+  // repo is public-bound and a credential in a commit is readable in every clone.
+  test("SCRAMBLE_SLACK_CONFIG names the file, beating both defaults", () => {
+    const dir = scratchDir("slackcfg-explicit");
+    const file = join(dir, "elsewhere.json");
+    writeFileSync(file, JSON.stringify({ channels: { ops: "C9" }, agents: { akari: { token: "t" } } }));
+    const io = { ...sluckIo("/nonexistent-cwd"), env: (n: string) => (n === "SCRAMBLE_SLACK_CONFIG" ? file : undefined) };
+    expect(slackConfigPath(io)).toBe(file);
+    const cfg = loadSlackConfig(io);
+    expect(cfg?.channels.ops).toBe("C9");
+  });
+
+  test("without the env var the path is ~/.config/scramble/slack.json", () => {
+    const home = scratchDir("slackcfg-home");
+    mkdirSync(join(home, ".config", "scramble"), { recursive: true });
+    writeFileSync(join(home, ".config", "scramble", "slack.json"),
+      JSON.stringify({ channels: { dm: "D1" }, agents: {} }));
+    const io = { ...sluckIo("/nonexistent-cwd"), env: (n: string) => (n === "HOME" ? home : undefined) };
+    expect(slackConfigPath(io)).toBe(join(home, ".config", "scramble", "slack.json"));
+    expect(loadSlackConfig(io)?.channels.dm).toBe("D1");
+  });
+
+  test("with neither env var it falls back to the workspace copy", () => {
+    const cwd = scratchDir("slackcfg-cwdfall");
+    writeSlackConfig(cwd, { channels: { w: "C0" }, agents: {} });
+    expect(slackConfigPath(sluckIo(cwd))).toBe(join(cwd, ".scramble", "slack.json"));
+    expect(loadSlackConfig(sluckIo(cwd))?.channels.w).toBe("C0");
   });
 });
