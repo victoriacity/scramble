@@ -298,7 +298,7 @@ async function postText(
   files?: Attachment[],
 ): Promise<number> {
   const thread = flags.get("thread") ?? undefined;
-  const status = statusTracker(io, backend);
+  const status = statusTracker(io, backend, nameFor(flags, io));
   await settleStatus(status?.clearExpired(), io);
   if (backend === "slack") {
     const from = nameFor(flags, io);
@@ -516,7 +516,7 @@ async function historyRead(
     // This caller (src/cli.ts) builds BOTH the status manager (which reads the
     // ledger) and the slack backend, so the living-status ts is read here and
     // handed in, rather than letting the backend know where the ledger lives.
-    const r = await s.backend.history(channel, since > 0 ? String(since) : undefined, statusTts(statusTracker(io, "slack")), nameFor(flags, io));
+    const r = await s.backend.history(channel, since > 0 ? String(since) : undefined, statusTts(statusTracker(io, "slack", nameFor(flags, io))), nameFor(flags, io));
     for (const p of r.problems) io.writeErr(`slack: ${p}`);
     if (r.code !== 0) {
       // ONE channel was asked for by name here, so its refusal IS the answer.
@@ -727,7 +727,7 @@ function statusNow(): number {
  *  status locally so a reader (or a test) sees it. A missing or broken slack
  *  config yields a local-style record, because a status can never fail the verb
  *  it brackets. */
-function statusTracker(io: Io, backend: "local" | "slack"): StatusManager | undefined {
+function statusTracker(io: Io, backend: "local" | "slack", agent?: string): StatusManager | undefined {
   if (io.env("SCRAMBLE_STATUS") === "off") return undefined;
   const raw = Number(io.env("SCRAMBLE_STATUS_TTL"));
   const ttlMs = Number.isFinite(raw) && raw > 0 ? raw * 1000 : 120_000;
@@ -738,7 +738,13 @@ function statusTracker(io: Io, backend: "local" | "slack"): StatusManager | unde
     const cfg = loadSlackConfig(io);
     if (cfg !== null) {
       channels = cfg.channels;
-      token = cfg.token;
+      // THE ACTING AGENT'S token, not the config default. The status is posted
+      // into the agent's OWN channel, and the default app is a different app
+      // that is usually not in it: Slack answers channel_not_found, a failed
+      // status never fails the work it brackets, and the whole feature is
+      // silently dead for every agent that is not the default. That is what
+      // "assistant statuses do not work at all" was (operator, 2026-08-21).
+      token = (agent !== undefined ? cfg.agents[agent]?.token : undefined) ?? cfg.token;
     }
   }
   return new StatusManager({
@@ -852,7 +858,7 @@ async function slackCmdNext(argv: string[], io: Io): Promise<number> {
   const { flags, positionals } = parseArgs(argv);
   const name = nameFor(flags, io);
   const timeoutSec = intFlag(flags, "timeout", 300);
-  const status = statusTracker(io, "slack");
+  const status = statusTracker(io, "slack", name);
   await settleStatus(status?.clearExpired(), io);
   const s = slackBackend(io);
   if (s.error !== undefined || s.backend === undefined) {
@@ -889,7 +895,7 @@ async function slackCmdListen(argv: string[], io: Io): Promise<number> {
     io.writeErr(s.error ?? "slack unavailable");
     return 1;
   }
-  const status = statusTracker(io, "slack");
+  const status = statusTracker(io, "slack", name);
   const stopTicker = status ? status.startExpiryTicker(2000, io.sleep) : undefined;
   try {
     return await s.backend.listen(
@@ -957,7 +963,7 @@ async function messageCheckSlack(flags: Map<string, string>, io: Io): Promise<nu
   }
 
   const name = nameFor(flags, io);
-  const status = statusTracker(io, "slack");
+  const status = statusTracker(io, "slack", name);
   await settleStatus(status?.clearExpired(), io);
   const cfg = loadSlackConfig(io);
   if (cfg === null) {
@@ -1541,7 +1547,7 @@ export async function main(argv: string[], io: Io): Promise<number> {
   // whatever verb it is. Awaited (not fire-and-forget) so a short-lived verb
   // finishes the expiry sweep's ledger write before the process exits.
   // SCRAMBLE_STATUS=off makes this a no-op.
-  await settleStatus(statusTracker(io, backend)?.clearExpired(), io);
+  await settleStatus(statusTracker(io, backend, nameFor(parseArgs(argv.slice(1)).flags, io))?.clearExpired(), io);
   switch (argv[0]) {
     case "post":
       return cmdPost(argv.slice(1), io);

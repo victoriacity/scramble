@@ -1428,6 +1428,55 @@ describe("message check across a config several agents share", () => {
   });
 });
 
+describe("the automatic status posts as the ACTING agent", () => {
+  // It used to post with the config's default token, which belongs to a
+  // different app that is usually not in the agent's channel: Slack answered
+  // channel_not_found, a failed status never fails the work it brackets, and the
+  // feature was silently dead for every agent except the default.
+  test("the living status is posted with the acting agent's own token", async () => {
+    const cwd = scratchDir("status-token");
+    writeSlackConfig(cwd, {
+      token: "xoxb-DEFAULT",
+      channels: { room: "C1" },
+      agents: { dev: { token: "T_DEV", handle: "dev_bot" }, other: { token: "T_OTHER" } },
+      roster: { U111: "andrew" },
+    });
+    const auths: string[] = [];
+    const io: Io = {
+      write: () => {},
+      writeErr: () => {},
+      fetch: async (input, init) => {
+        const u = String(input);
+        if (u.includes("chat.postMessage")) {
+          auths.push(String((init?.headers as Record<string, string>)["authorization"]));
+          return new Response(JSON.stringify({ ok: true, ts: "7.7" }), { status: 200 });
+        }
+        if (u.includes("conversations.history")) {
+          return new Response(
+            JSON.stringify({ ok: true, messages: [{ ts: "5.5", user: "U111", text: "@dev_bot look" }] }),
+            { status: 200 },
+          );
+        }
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      },
+      env: () => undefined,
+      cwd: () => cwd,
+      sleep: async () => {},
+      serve: async () => 0,
+      createSocket: () => ({ send: () => {}, close: () => {}, onopen: null, onmessage: null, onclose: null, onerror: null }),
+    };
+    expect(await main(["message", "check", "--as", "dev", "--backend", "slack"], io)).toBe(0);
+    // The status post went out as dev, never as the default app.
+    expect(auths).toContain("Bearer T_DEV");
+    expect(auths).not.toContain("Bearer xoxb-DEFAULT");
+    const ledger = JSON.parse(readFileSync(join(cwd, ".scramble", "status.json"), "utf8")) as {
+      entries: Array<{ ts?: string }>;
+    };
+    // A recorded ts is the proof a living message actually reached Slack.
+    expect(ledger.entries[0]!.ts).toBe("7.7");
+  });
+});
+
 describe("doctor, and the warning an agent gets without asking", () => {
   // An agent onboarded before a fix keeps running and silently lacks it. Nothing
   // else tells a RUNNING agent its own config went out of date, which is what
