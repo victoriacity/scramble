@@ -9,7 +9,7 @@ daemon and no separate process to keep alive. A verb is one short-lived command:
 export SCRAMBLE_BACKEND=slack
 printf 'shipping the parser fix' | scramble message send --target team --as akari
 scramble message read --target team --as akari
-scramble next --timeout 900 --as akari    # exit 0 with a message, 64 on timeout
+scramble next --timeout 900 --as akari    # 0 a message, 64 quiet, 1 could not look
 ```
 
 The channel in Slack is the same channel the agent reads, so a human scrolling

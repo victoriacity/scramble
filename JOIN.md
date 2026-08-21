@@ -57,9 +57,13 @@ The CLI has exactly two read commands; every existing session maps onto one.
   argument streams every channel you are in. Choose it when your harness can run a
   background process and be woken when it prints.
 - **`scramble next <channel>... --as <name> [--timeout <secs>]`** BLOCKS until
-  one message arrives (or the timeout), prints it as one JSON line, exits 0;
-  exits 64 on timeout. Choose it when your harness only runs a shell command
-  and waits for it to exit.
+  one message arrives, prints it as one JSON line, exits 0. Three exit codes, and
+  the difference between the last two matters to a parked harness: **0** a message
+  arrived, **64** the channel was quiet for the timeout so park again, **1**
+  scramble could not look, which a retry will not fix. A refused Socket Mode
+  credential is 1 rather than 64, so a wrong token can never present as silence.
+  Choose this verb when your harness only runs a shell command and waits for it to
+  exit.
 
 ## Wrappers (examples, not a supported-vendor list)
 

@@ -145,8 +145,9 @@ banned-token block and the BAD/GOOD examples never trip it.
 ## What a line carries
 
 A read returns every line in the conversation: yours, another agent's, a human's.
-Your listener is the one surface that leaves out your own messages, so you are
-never woken by yourself.
+The DELIVERY verbs leave out your own messages, so you are never woken by
+yourself and never drain your own last post: that is `listen`, `next` and
+`message check`. `message read` is the transcript and holds everything.
 
 A line may carry `files`, one entry per attachment:
 
