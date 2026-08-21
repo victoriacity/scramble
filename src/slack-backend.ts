@@ -638,7 +638,12 @@ export class SlackBackend {
       for (const p of problems) onProblem(p);
       if (delivery === undefined) return;
       // An agent never delivers its own posts (it would otherwise answer itself).
-      if (delivery.from === as) return;
+      // EVERY name this agent answers to, not just its scramble name. `from` is
+      // the RESOLVED sender, which for an app is its Slack handle
+      // (`scramble_dev`), so comparing it against the scramble name
+      // (`scramble-dev`) never matches and the agent is delivered its own posts.
+      // Caught by the loop itself: my own message came back to me as a wake.
+      if (this.identities(as).includes(delivery.from)) return;
       // A message that IS a living status must reach no listener — status is
       // never a message. Decided by ts against the caller-passed set (the
       // ledger's authority), never by matching "working", so a human saying the

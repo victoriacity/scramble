@@ -1686,3 +1686,25 @@ describe("denormalize: an outgoing @name becomes a real Slack mention", () => {
     expect(sent).toBe("<@U1> look at this");
   });
 });
+
+describe("an agent is never delivered its own post", () => {
+  // `from` is the RESOLVED sender, which for an app is its Slack HANDLE, while
+  // `as` is the scramble name. Comparing the two never matched, so the agent
+  // woke on its own messages: caught when my own reply came back as a wake.
+  test("a post from this agent's handle is filtered out", async () => {
+    const h = make({
+      agents: { "scramble-dev": { token: "T", handle: "scramble_dev" } },
+      roster: { U9: "scramble_dev", U1: "andrew" },
+    });
+    const lines: Delivery[] = [];
+    const p = h.backend.listen(["general"], "scramble-dev", (d) => lines.push(d), () => {});
+    await pump();
+    emit(h, msg({ user: "U9", bot_id: "B9", text: "my own words", ts: "4.1" }));
+    await pump(10);
+    emit(h, msg({ user: "U1", text: "a real peer", ts: "4.2" }));
+    await pump(10);
+    void p;
+    expect(lines).toHaveLength(1);
+    expect(lines[0]!.text).toBe("a real peer");
+  });
+});
