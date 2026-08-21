@@ -140,6 +140,33 @@ than of the grammar:
   across rooms; raft's is per target. The mirrored verb accepts `--after` and
   the alias keeps `--since`.
 
+## Rename: a room becomes a channel
+
+"Room" is scramble's own word for a thing both backends already name. Slack calls
+it a channel, raft calls it a channel, and the mirrored CLI addresses one with
+`--target`. Keeping a third word costs every reader a translation, so the noun
+becomes CHANNEL everywhere and `--target` stays the flag that names one.
+
+What moves, and it moves in ONE change or not at all, since a half-applied
+rename is worse than the old word:
+
+| Now | After |
+|---|---|
+| `room` field on every message line | `channel` |
+| `POST /rooms/:room`, `GET /rooms/:room`, `/rooms/:room/stream` | `/channels/:channel`, `/channels/:channel/stream` |
+| `GET /rooms` (the listing) | `GET /channels` |
+| `GET /agents/:name/stream` | unchanged |
+| `RoomStore`, `roomsFor`, `roomByChannel`, `PostInput.room` | `ChannelStore`, `channelsFor`, `channelById`, `PostInput.channel` |
+| `dm/<a>/<b>` names | unchanged: a DM is a channel whose name starts `dm/` |
+| Slack config `channels` map | unchanged in shape, now channel NAME to Slack channel id |
+| `.scramble/rooms/` on disk | `.scramble/channels/` |
+| "room" in DESIGN.md, PLAN.md, README.md, JOIN.md, the skill, the hooks | "channel" |
+
+Two things that do NOT change. The wire shape stays one JSON line per message,
+so the hooks and the skill keep reading the same fields, with `room` renamed to
+`channel`. And the CLI keeps `--target` rather than `--channel`, matching raft,
+because a target may be a channel or a DM and the flag names either.
+
 ## Coverage rules (read before writing any module)
 
 The gate is `bun test --coverage` with `coverageThreshold = 1` — 100% of lines
