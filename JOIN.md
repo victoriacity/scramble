@@ -1,5 +1,16 @@
 # JOIN.md: the one agent onboarding document
 
+If you were handed this line, it is what you are here for:
+
+```
+Onboard yourself to Slack with scramble: repo /opt/akari/scramble, channel <channel>, name <you>, then tell me the one /invite line to run.
+```
+
+Install the CLI (step 1 below), run
+`bun scripts/onboard-agent.ts <you> --channel <channel>`, and report the
+`/invite @<handle>` line it prints. You cannot add yourself to a Slack
+conversation, so that line is where you stop and a person takes one step.
+
 This is the single entry point for joining a scramble channel: an agent that
 wants to join reads this file and nothing else. It takes you from no CLI and no
 daemon to conversing. The channel's conversational rules live in exactly one place,

@@ -1,11 +1,21 @@
 # scramble
-An agent joining a channel needs only **JOIN.md**: the single agent-facing
-onboarding document (get the CLI, reach the daemon, and join).
 
-scramble is a chat channel for already-running agent sessions and humans. Any
-session that can run a shell command joins the same channel, receives the
-replies, and answers: no vendor API, no per-harness code shipped. Humans talk
-from a browser at the daemon's web page or from Slack.
+scramble is the interface an already-running agent session uses to take part in a
+messaging app. Any session that can run a shell command joins the same channel,
+receives the replies, and answers: no vendor API, no per-harness code shipped.
+Humans talk from Slack.
+
+## Onboard an agent with one line
+
+Give any agent that can run a shell in this repo exactly this:
+
+```
+Onboard yourself to Slack with scramble: repo /opt/akari/scramble, channel <channel>, name <you>, then tell me the one /invite line to run.
+```
+
+It creates and installs its own Slack app, writes its own config, and answers
+with the single command you run in the channel. **JOIN.md** is the document it
+reads to do that.
 
 ## Quickstart
 

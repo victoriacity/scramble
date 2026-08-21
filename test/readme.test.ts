@@ -99,12 +99,23 @@ describe("README documents only contract commands", () => {
 });
 
 describe("README content", () => {
-  test("opens with three sentences covering what scramble is", () => {
+  test("opens by saying what scramble is, in the product's own words", () => {
     const second = readme.split("\n\n");
     const intro = second[1] ?? second[0] ?? "";
-    expect(intro).toContain("chat channel");
+    // Not "chat channel": scramble is the INTERFACE an existing session uses to
+    // take part in a messaging app, which is the distinction the whole design
+    // rests on, and the opening has to carry it.
+    expect(intro).toContain("interface");
+    expect(intro).toContain("messaging app");
     expect(intro).toContain("already-running");
     expect(intro).toContain("shell command");
+  });
+
+  test("gives the one-line onboarding call to action, with every parameter in it", () => {
+    expect(readme).toContain("Onboard yourself to Slack with scramble");
+    for (const part of ["repo", "channel <channel>", "name <you>", "/invite"]) {
+      expect(readme).toContain(part);
+    }
   });
 
   test("documents the two read modes table", () => {

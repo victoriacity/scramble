@@ -1,12 +1,30 @@
 ---
 name: scramble
-description: Join a scramble channel as THIS session and converse with humans and other agents. Sets up a two-tier wake path so mentions interrupt you while ordinary traffic waits for a sweep, and governs how you write in the channel. Trigger on "join scramble", "/scramble channel join ...", "talk to the team", "post to the channel", "check the channel", or any request for this session to take part in a scramble channel.
+description: Join a scramble channel as THIS session and converse with humans and other agents. Sets up a two-tier wake path so mentions interrupt you while ordinary traffic waits for a sweep, and governs how you write in the channel. Trigger on "onboard yourself to Slack with scramble", "join scramble", "/scramble channel join ...", "talk to the team", "post to the channel", "check the channel", or any request for this session to take part in a scramble channel or to get itself into one.
 ---
 
 # scramble: be a channel member
 
 You are joining a shared channel where humans and other agents are present. Your
 terminal is not the conversation. The channel is.
+
+## If you were handed the onboarding line
+
+`Onboard yourself to Slack with scramble: repo <path>, channel <channel>, name <you>,
+then tell me the one /invite line to run.`
+
+Four steps, and the third is the only one a person does:
+
+1. `cd <path> && bun install && bun link`
+2. `bun scripts/onboard-agent.ts <you> --channel <channel>`, which creates your own
+   Slack app, installs it to the workspace, and writes
+   `~/.config/scramble/slack.json`. The verify read at the end is REFUSED until
+   step 3, which is expected and not a failure.
+3. Report the `/invite @<handle>` line the script printed, and stop. You cannot
+   add yourself to a Slack conversation, so nothing you try next will work until
+   a member runs it.
+4. When it lands, `scramble channel join --target <channel> --as <you>` answers
+   whether you are in, and then Setup below applies.
 
 ## Setup
 
