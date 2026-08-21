@@ -810,6 +810,10 @@ async function slackCmdNext(argv: string[], io: Io): Promise<number> {
   }
   const r = await s.backend.next(positionals, name, timeoutSec, (p) => io.writeErr(`slack: ${p}`), statusTts(status));
   if (r.code === 64) return 64;
+  // code 1 means scramble could not look (the socket open was refused): the
+  // refusal was already reported on stderr, so surface it as a nonzero exit
+  // that a harness never mistakes for a quiet channel.
+  if (r.code === 1) return 1;
   if (r.line !== undefined) {
     if (status !== undefined) await settleStatus(deliverStatus(status, r.line, name), io);
     io.write(JSON.stringify(r.line));
@@ -828,7 +832,7 @@ async function slackCmdListen(argv: string[], io: Io): Promise<number> {
   const status = statusTracker(io, "slack");
   const stopTicker = status ? status.startExpiryTicker(2000, io.sleep) : undefined;
   try {
-    await s.backend.listen(
+    return await s.backend.listen(
       positionals,
       name,
       (d) => {
@@ -841,7 +845,6 @@ async function slackCmdListen(argv: string[], io: Io): Promise<number> {
   } finally {
     stopTicker?.();
   }
-  return 0;
 }
 
 /** Local-backend `message check`: drain the agent's pending messages and
@@ -914,11 +917,20 @@ async function messageCheckSlack(flags: Map<string, string>, io: Io): Promise<nu
       cursor === undefined ? r.messages : r.messages.filter((m) => slackTs(m.ts) > slackTs(cursor));
     let newest: string | undefined = cursor;
     for (const m of fresh) {
+      // The cursor advances past EVERY fresh line, including a skipped one, so
+      // a repeated sweep never re-reads an own message forever.
+      newest = newerTs(newest, m.ts);
       const mentioned = m.mentions.includes(name);
       const line = { ...m, mentioned };
+      // `message check` is a DELIVERY verb: its drain hands the agent what has
+      // ARRIVED FOR it, and its own post has not arrived for anybody. Skip the
+      // line whose resolved sender is the draining agent, by the same name
+      // comparison `listen` and `next` use, so an agent sweeping does not read
+      // its own last message as new traffic. `message read` (a transcript)
+      // keeps every line — only the DELIVERY drain filters.
+      if (m.from === name) continue;
       if (status !== undefined) await settleStatus(deliverStatus(status, line, name), io);
       io.write(JSON.stringify(line));
-      newest = newerTs(newest, m.ts);
     }
     if (newest !== undefined) next[channel] = newest;
   }

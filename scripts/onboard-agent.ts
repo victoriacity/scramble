@@ -127,12 +127,28 @@ async function get(token: string, path: string): Promise<Record<string, unknown>
  *  ORG, so the workspace has to be named explicitly somewhere; auth.teams.list
  *  answers it, and a single workspace needs no flag at all. */
 async function resolveTeam(token: string, flag?: string): Promise<string> {
-  if (flag !== undefined && flag !== "") return flag;
+  // AN ENTERPRISE ID IS NOT A WORKSPACE, and passing one is how this whole path
+  // looked impossible for an afternoon: with `E…` as the team,
+  // apps.developerInstall answers app_approval_request_eligible, which reads
+  // like a Slack policy requiring an administrator per agent. It is not a
+  // policy; it is the wrong parameter. Refused here so the call is never made.
+  const notEnterprise = (id: string): string => {
+    if (/^E[A-Z0-9]{6,}$/.test(id)) {
+      die(
+        `${id} is an ENTERPRISE id, not a workspace id. Installing an app there needs an\n` +
+          `administrator's approval; installing it to a WORKSPACE does not. Pass the T… id\n` +
+          `for the workspace (\`auth.teams.list\` lists them, and this script reads it for you\n` +
+          `when the login covers exactly one).`,
+      );
+    }
+    return id;
+  };
+  if (flag !== undefined && flag !== "") return notEnterprise(flag);
   const r = await get(token, "auth.teams.list");
   const teams = (r.teams as Array<{ id: string; name: string }> | undefined) ?? [];
   if (teams.length === 1) {
     console.log(`onboard: workspace ${teams[0]!.id} (${teams[0]!.name})`);
-    return teams[0]!.id;
+    return notEnterprise(teams[0]!.id);
   }
   if (teams.length === 0) die("auth.teams.list returned no workspace; pass --team <T…>");
   die(
