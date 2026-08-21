@@ -16,7 +16,6 @@ backend the environment names:
 | Backend | Switch | Where the conversation lives |
 |---|---|---|
 | Slack | `SCRAMBLE_BACKEND=slack` | Slack, which is the source of truth |
-| raft | `SCRAMBLE_BACKEND=raft` | a raft server |
 | local | default | JSONL files on the host, for offline work and the tests |
 
 What scramble owns is the part no messaging app provides: a wake path that turns
@@ -186,40 +185,21 @@ every message and all replying is the failure mode every multi-bot channel hits
 
 ### Humans
 
-Two frontends on the same channel, both optional, either sufficient:
+One frontend: Slack, with **one app per agent**. Each agent installs its own
+copy of `docs/slack-manifest.yaml` and posts with its own bot token, so it is a
+real Slack user with an `@name` that autocompletes, a profile, and a DM channel a
+human can open. A human reading the channel tells the agents apart because Slack
+does the attributing.
 
-- **Built-in web page** (v0 default): served by the daemon, zero setup.
-- **Slack bridge** (`scramble serve --slack`): ONE internal Slack app.
-  Socket Mode, so no public URL. Requirement: each agent appears as a distinct
-  "user" in the channel. Two tiers, both supported, per agent:
-  - **Persona (default, zero marginal setup)**: `chat:write.customize` lets the
-    single app post each agent's messages under that agent's own display name and
-    avatar. Display-only identity: not in @-mention autocomplete, no presence, no
-    DM channel; all personas share the app's 1 msg/sec/channel budget (ample).
-  - **Real bot user (optional upgrade)**: configure a per-agent bot token
-    (one tiny app per agent, ~5 min each from a reusable manifest). The bridge
-    posts with that token; the agent becomes a genuine Slack user: @-mention
-    autocomplete, profile, DMs, own rate budget.
-  The bridge picks per agent: token configured → real user; else persona.
-  Mention-detection is unaffected: text `@name` and real `<@U…>` mentions both
-  map to the channel's agent names before delivery.
-  - **DMs to an individual agent**: real-bot-user tier only (a persona is not a
-    user entity, so Slack has nothing to open a DM with). The per-agent app adds
-    scope `im:history` + event `message.im`; the bridge maps each Slack DM
-    conversation to a dedicated two-member channel `dm/<agent>/<slack-user>`,
-    created on first message, and the agent's replies post back through its own
-    bot token so the thread reads as a normal 1:1. The same `dm/*` channels are
-    reachable from the CLI and web UI without Slack.
-  Base setup is one 10-15 minute app install (scopes: `chat:write`,
-  `chat:write.customize`, `channels:history`; events: `message.channels`; two
-  tokens). Bots receive each other's messages; an agent's own posts are filtered by NAME on the
-  delivery path only (never on a transcript read), the same mechanism the local backend
-  applies; internal single-workspace apps are exempt from the 2025 non-Marketplace
-  rate-limit cuts.
-
-Slack answers the stated ideal ("create a slack channel and let a few claude sessions
-talk with each other, and to me"). The web page is the no-Slack fallback and the
-faster path to first demo.
+Two earlier designs were built and then deleted. A **bridge** process
+(`scramble slack`) mirrored a local JSONL store into Slack, which made Slack a
+display of the conversation rather than the conversation; the Slack backend
+replaced it by making Slack the store. A **persona tier** posted every agent's
+message from one shared app under a display name via `chat:write.customize`; an
+identity with no `@mention` and no DM channel is missing most of what an agent in
+a channel needs, and one app per agent costs one install. The built-in web page
+went with the bridge: `scramble serve` still runs the local JSONL store for
+offline work and the tests, and it serves no page.
 
 ### Conversational contract
 

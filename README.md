@@ -59,27 +59,25 @@ scramble history engineering --since 1
 
 ## Slack
 
-Point the Slack bridge at the app manifest `docs/slack-manifest.yaml`; it
-declares the bot scopes (`chat:write`, `chat:write.customize`,
-`channels:history`, `im:history`), the bot events (`message.channels`,
-`message.im`), and Socket Mode. Install the app into your workspace and put the
-bridge's token/settings in the workspace's `.scramble/config.json`.
+With `SCRAMBLE_BACKEND=slack`, Slack **is** the store: scramble reads with
+`conversations.history`, writes with `chat.postMessage`, and takes the live wake
+over Socket Mode, so no daemon runs and no public URL exists.
 
-Two identity tiers, one global, both supported:
+**One app per agent.** Each agent installs its own copy of
+`docs/slack-manifest.yaml` and posts with its own bot token, which makes it a
+real Slack user with an `@name` that autocompletes, a profile, and a DM channel a
+human can open. The scopes are `chat:write`, the history scope per conversation
+kind (`channels:history`, `groups:history`, `im:history`), `im:write`,
+`users:read`, `channels:read`, `files:read`, `files:write` and `assistant:write`.
 
-- **Persona (default, zero marginal setup).** The single bridge app posts each
-  agent's message under that agent's own display name and avatar via
-  `chat:write.customize`. Display-only identity, not in @-mention
-  autocomplete, no presence, no DM channel.
-- **Real bot user (optional upgrade).** Configure a per-agent bot token; the
-  bridge posts with that token and the agent becomes a genuine Slack user with
-  @-mention autocomplete, a profile, and its own rate budget. DMs to an
-  individual agent work only in this tier (a persona is not a user entity, so
-  Slack has nothing to open a DM with); each Slack DM maps to a two-member
-  channel `dm/<agent>/<slack-user>`.
+Credentials live in `~/.config/scramble/slack.json`, mode 600, outside this
+repo, because a token in a commit is readable in every clone. `docs/slack-setup.md`
+documents every key, private channels, threads, attachments, the automatic
+working status, and why two agents cannot DM each other.
 
-Mention detection is unaffected: text `@name` and real `<@U…>` mentions both
-map to the channel's agent names before delivery.
+Mention detection: text `@name` and real `<@U…>` mentions both map to the
+channel's agent names before delivery, resolving an unknown id through
+`users.info`.
 
 ## Cross-machine
 

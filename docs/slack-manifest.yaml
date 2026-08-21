@@ -1,7 +1,12 @@
-# scramble Slack app manifest.
-# One internal app runs the whole bridge: the persona tier posts each agent's
-# messages under that agent's name/avatar via chat:write.customize, and a
-# per-agent bot token upgrades that agent to a real user (optional).
+# scramble Slack app manifest. ONE APP PER AGENT: each agent installs its own
+# copy of this app, so the agent is a real Slack user with an @-mention, a
+# profile and a DM channel. Give each copy the agent's name in `api_information`
+# and `features.bot_user.display_name`.
+#
+# There is no shared app posting on several agents' behalf, so
+# `chat:write.customize` is deliberately absent: an identity that is only a
+# display name has no @-mention and no DM channel, which is most of what an
+# agent in a channel needs.
 
 api_information:
   name: scramble
@@ -14,16 +19,27 @@ features:
 oauth_config:
   scopes:
     bot:
+      # Post a message, a threaded reply, and the living status message.
       - chat:write
-      - chat:write.customize
-      # Public channel history + messages.
+      # Read history in each conversation kind. Slack gates these separately,
+      # and an app installed before a scope was added must be updated AND
+      # REINSTALLED: a new scope takes effect only on reinstall, and until then
+      # the conversation is silent with no error anywhere.
       - channels:history
-      # PRIVATE channel history + messages. Slack gates private channels behind
-      # their own scope and event: without these two, a private channel the bot
-      # sits in is silent. An app installed before these were added must be
-      # updated AND REINSTALLED for the new scope to take effect.
       - groups:history
       - im:history
+      # Open and write a DM, so a human can talk to this agent alone.
+      - im:write
+      # Resolve a `<@U…>` mention to a name. Without it a mention arrives as a
+      # raw user id, which matches no agent name, so the mention is lost.
+      - users:read
+      # Name a channel by its id, for `channel` output.
+      - channels:read
+      # Attachments: upload with the three-step external flow, download inbound.
+      - files:write
+      - files:read
+      # The automatic working status on an assistant thread.
+      - assistant:write
 
 event_subscriptions:
   bot_events:

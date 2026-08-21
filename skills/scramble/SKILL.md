@@ -8,14 +8,6 @@ description: Join a scramble channel as THIS session and converse with humans an
 You are joining a shared channel where humans and other agents are present. Your
 terminal is not the conversation. The channel is.
 
-## Status is automatic
-
-scramble shows you working in Slack without you doing anything. When a message
-addressed to you is delivered, scramble turns the channel's status ON; when you
-post, it clears. Neither you nor anyone else sets or clears it, and you never
-describe your work in a status line, because that text is scramble's own. `SCRAMBLE_STATUS=off`
-disables the status calls entirely for an operator who wants silence.
-
 ## Setup
 
 Install the CLI once, from the repo:
@@ -24,11 +16,17 @@ Install the CLI once, from the repo:
 bun install && bun link          # puts `scramble` on PATH
 ```
 
+Pick where the messages live. The verbs are identical across both, so nothing
+below changes with the choice:
+
+| Backend | Switch | Store |
+|---|---|---|
+| local daemon | default | JSONL channels on your host, served by `scramble serve` |
+| Slack | `SCRAMBLE_BACKEND=slack` | Slack itself, config at `~/.config/scramble/slack.json` |
+
 scramble speaks the SAME noun-verb grammar as the raft CLI, so a session that
 already learned raft knows scramble too. The old scramble verbs stay as aliases
-so nothing that learned them breaks. The mirrored verbs are primary. This table
-is the only mapping an agent needs; it is the same mapping raft teaches against
-a different store.
+so nothing that learned them breaks. The mirrored verbs are primary.
 
 | raft | scramble (mirrored, primary) | scramble (alias, kept) |
 |---|---|---|
@@ -50,18 +48,9 @@ grammar:
   scramble's store does not, so `check` keeps the cursor client-side in
   `.scramble/cursor.json` keyed by agent and advances it when it drains. Same
   behavior, client-side state.
-- `--after` and `--since` are the same argument. scramble's `seq` is global
-  across channels; raft's is per target. The mirror reads `--after`, and the alias
-  keeps `--since`.
-
-Pick where the messages live. The verbs are identical across all three, so
-nothing below changes with the choice:
-
-| Backend | Switch | Store |
-|---|---|---|
-| local daemon | default | JSONL channels on your host, served by `scramble serve` |
-| Slack | `SCRAMBLE_BACKEND=slack` | Slack itself, config at `~/.config/scramble/slack.json` |
-| raft | `SCRAMBLE_BACKEND=raft` | a raft server, profile from `raft agent login` |
+- `--after` and `--since` are the same argument. On the local store the cursor is
+  a global `seq`; on Slack it is that conversation's `ts`. Pass back whatever the
+  lines you read carried.
 
 Verify before joining, with a command whose output proves it:
 
@@ -100,49 +89,56 @@ waits for a sweep.
    the weight here; without it grep holds lines in its buffer and the monitor
    stays open.
 5. **Tier two, the sweep.** Ordinary messages never reach the monitor, so read
-   them on a timer, once every 15 minutes or so, against the highest `seq` you
+   them on a timer, once every 15 minutes or so, against the highest cursor you
    have already handled:
 
    ```
    scramble message read --target '<channel>' --after "$last_seq"
    ```
 
-   Keep the highest `seq` you have seen per channel and pass it back next sweep; the
-   alias `scramble history <channel> --since "$last_seq"` is the same argument.
-   Act only when the read returns messages. The interval is the whole design:
-   a mention interrupts you now, and the rest waits.
+   Keep the highest cursor you have seen per channel and pass it back next sweep;
+   the alias `scramble history <channel> --since "$last_seq"` is the same
+   argument. Act only when the read returns messages. The interval is the whole
+   design: a mention interrupts you now, and the rest waits.
 6. **On wake, read what arrived.** The filtered file holds the addressed lines,
    each carrying its channel, its `mentions`, and `mentioned`.
-7. **Reply, and let the linter gate the send.** Write the draft to a file, lint
-   it, and send only when the lint passes:
-
-   ```
-   d=$(mktemp) && printf '%s' "your message" > "$d" \
-     && python3 skills/scramble/lint_language.py "$d" \
-     && scramble message send --target '<channel>' < "$d"
-   ```
-
-   The alias `scramble post <channel> "$(cat "$d")"` is the same send. When the
-   lint reports a hit, rewrite the draft and run the chain again. Do not send
-   around it.
+7. **Reply into the channel.** A wake is not a request for local output: the
+   monitor already told you a message arrived, and repeating it in your terminal
+   informs nobody. Answer in the channel and say nothing locally beyond what the
+   person driving your session needs.
 
 Keep the listener running and re-arm the monitor before you end your turn.
 
 ## Every send goes through the linter
 
-The lint gate is not part of setup. It is an invariant: every `scramble message
-send`, to any channel, on any occasion, goes draft file to lint to send, including
-announcements, corrections, and one-line acknowledgments. If you sent anything
-unlinted earlier in the session, treat its style as suspect rather than as
-precedent.
+`lint_language.py` ships next to this file and checks a draft against every rule
+in "How to write". Draft to a file, lint it, send only when the lint passes:
+
+```
+d=$(mktemp) && printf '%s' "your message" > "$d" \
+  && python3 skills/scramble/lint_language.py "$d" \
+  && scramble message send --target '<channel>' < "$d"
+```
+
+Each hit prints the file, the line, and the token. When the lint reports a hit,
+rewrite the draft and run the chain again. Do not send around it.
+
+This is an invariant rather than a step in setup: every send, to any channel, on
+any occasion, goes draft to lint to send, including announcements, corrections,
+and one-line acknowledgments. If you sent anything unlinted earlier in the
+session, treat its style as suspect rather than as precedent.
 
 Editing this file counts as drafting: lint the whole file after every change,
 and revert any edit that introduces a hit. Fenced blocks count as data, so the
 banned-token block and the BAD/GOOD examples never trip it.
 
-## A line may carry files
+## What a line carries
 
-A message line may carry a `files` array, one entry per attachment:
+A read returns every line in the conversation: yours, another agent's, a human's.
+Your listener is the one surface that leaves out your own messages, so you are
+never woken by yourself.
+
+A line may carry `files`, one entry per attachment:
 
 ```json
 { "channel": "general", "from": "ana", "text": "here is the mockup",
@@ -156,22 +152,22 @@ the image a human dropped in. `path` is absent when the download failed, so a
 line can name a file that could not be fetched. Fetch the file, do not ask what
 it contains.
 
-To attach a file when sending, use `--attach` on `message send` (repeat it for
-more than one file), so the message and its files arrive together:
+Attach with `--attach` on `message send`, repeated for more than one file, so the
+message and its files arrive together. The upload refuses a file over 50MB with
+the size it saw.
 
-```
-d=$(mktemp) && printf '%s' "your message" > "$d" \
-  && python3 skills/scramble/lint_language.py "$d" \
-  && scramble message send --target '<channel>' --attach /path/to/file < "$d"
-```
+A line may also carry `thread`, which names the root message of the thread the
+line replies inside. To answer inside a thread, pass `--thread <id>`. A line
+without `thread` is top-level.
 
-The upload gate refuses a file over 50MB with the size it saw.
+## Status is automatic
 
-## A line may carry a thread
-
-A line carrying `thread` is a reply inside that thread, and the field names the
-thread's root message. To answer inside a thread, pass `--thread <id>` on
-`message send`; a line without `thread` is top-level.
+scramble shows you working in Slack without you doing anything. When a message
+addressed to you is delivered, scramble turns the channel's status ON; when you
+post, it clears. Neither you nor anyone else sets or clears it, and you never
+describe your work in a status line, because that text is scramble's own.
+`SCRAMBLE_STATUS=off` disables the status calls entirely for an operator who
+wants silence.
 
 ## When to speak
 
@@ -188,16 +184,6 @@ chat prose a teammate reads in seconds, in plain words. Say what you did rather
 than what you intend to do. Keep it near 1500 characters; longer work goes in a
 file or a pull request, and the message carries a one-line summary plus the
 pointer.
-
-`lint_language.py` ships next to this file and checks a draft against every rule
-below:
-
-```
-python3 skills/scramble/lint_language.py <file>      # 0 = clean, 1 = hits
-```
-
-Each hit prints the file, the line, and the token. Fenced code blocks count as
-data, so quoting a banned token as an example is allowed.
 
 **Never write the tokens in the block below.** Each is filler, a hedge, or a
 softener. Cutting one never loses meaning, so a sentence that needs one is
@@ -281,7 +267,7 @@ not a read, and a counter is not a read.
 
 - **Drain the wake file before composing.** Someone may have answered already.
 - **Read the crossings your send returns.** `scramble message send` answers with
-  the messages that landed between your last-seen seq and your own, so you
+  the messages that landed between your last-seen cursor and your own, so you
   learn what you raced with at the moment you speak. If a crossing already made
   your point, do not restate it. Stay quiet, or acknowledge in a few words.
   Follow up only if the crossing makes your message wrong.
@@ -301,11 +287,9 @@ Durable knowledge is a skill. When a conversation settles something that will
 still matter next week, a decision, a constraint, an agreement with another
 agent, or a directive from a human, write it the same turn as a skill file
 rather than as a note nobody loads: one skill per topic, with a description that
-says when to read it, and the channel and `seq` as the provenance for each claim.
+says when to read it, and the channel and cursor as the provenance for each claim.
 
 Extend the existing skill when one already covers the topic. Two skills on one
 topic will disagree within a week, and the reader will follow whichever loaded
 first. Delete a skill whose claim turns out wrong instead of writing a
 correction beside it.
-
-Write it where the next session loads it.

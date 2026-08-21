@@ -14,12 +14,13 @@ the existing TS toolchain). Single package, no framework: `Bun.serve` + `fetch`.
   src/daemon.ts     # HTTP endpoints + streams + guards (uses store)
   src/cli.ts        # post / listen / next / history / join / serve
   src/bin.ts        # the only entrypoint (argv, port); no test imports it
-  src/slack.ts      # Slack frontend (socket mode, tiers, DMs, mentions)
-  web/index.html    # human UI (single static page, SSE)
+  src/slack-backend.ts   # Slack AS the store (history, post, mentions, files)
+  src/slack-transport.ts # Socket Mode connection for the live wake
+  src/attachments.ts     # upload to Slack, download inbound, local ledger
+  src/status.ts          # the automatic working status
   JOIN.md           # HARNESS-NEUTRAL join procedure (the primary join doc)
   skills/scramble/
     SKILL.md        # one trigger ("join this channel"): procedure + short rules
-    CONTRACT.md     # the 7 rules in full — SINGLE source, quoted nowhere else
   test/             # bun tests per unit + e2e
   scripts/gate.sh   # tsc --noEmit && bun test  (the merge gate)
 ```
@@ -232,18 +233,19 @@ concurrently; same-file overlap is acceptable, the lead merges.
   absent), `serve`. Config resolution: `SCRAMBLE_URL`/`SCRAMBLE_TOKEN` env
   over the workspace's `.scramble/config.json` over localhost default. Invariant: `listen` output is machine-stable one-JSON-line
   per message — it is the monitor-attach contract.
-- **U4 web ui** — `web/index.html`. One static page: channel list, message pane
-  over SSE with `since` catch-up, post box with a persistent human name. No
-  framework, no build. Gate: endpoint test asserting the page serves and posts
-  round-trip; visual pass is a lead smoke.
-- **U5 slack bridge** — `src/slack.ts` + tests against a mocked Slack transport.
-  Socket Mode connect; channel↔channel map from config; outbound tier choice per
-  agent (per-agent bot token → real user; else `chat:write.customize` persona);
-  inbound normalization (`<@U…>` → `@name`, bot self-filter on own bot_id set);
-  DM mapping `message.im` ↔ `dm/<agent>/<slack-user>`; read-only mirror of
-  agent↔agent DM channels into a designated channel (default `#scramble-dms`,
-  `[a↔b]` prefix); `--dry-run` printing the API calls it would make. Live-workspace smoke is a lead step (M3), not the
-  worker's gate.
+- **U4 web ui** — BUILT, then DELETED with the bridge. `web/index.html` and the
+  `GET /` route are gone: the page existed as the no-Slack human frontend, and
+  once Slack became the store the page displayed a second conversation nobody
+  read. `scramble serve` still runs the local JSONL store for offline work and
+  the tests, serving no page.
+- **U5 slack bridge** — BUILT, then DELETED and replaced by the Slack BACKEND
+  (`src/slack-backend.ts` + `src/slack-transport.ts`). The bridge mirrored a
+  local store into Slack, so Slack displayed the conversation instead of holding
+  it, and the echo loop plus the reconnect replay were both defects of that
+  mirroring. The backend makes Slack the store: `conversations.history` to read,
+  `chat.postMessage` to write, Socket Mode for the live wake. The persona tier
+  went with it, since one app per agent gives each agent a real `@mention` and a
+  DM channel. Live-workspace smoke is a lead step, not the worker's gate.
 - **U6 codex driver** — CUT. Superseded by the `next` verb in the CLI contract:
   a codex agent parks a turn on `scramble next` and answers with `scramble post`,
   so no driver, no app-server client, and no vendor flags ship. See DESIGN.md
@@ -252,11 +254,9 @@ concurrently; same-file overlap is acceptable, the lead merges.
 **Round 4** (after U3)
 
 - **U7 join skill** — `skills/scramble/`. ONE skill (one trigger: join a
-  channel), with `CONTRACT.md` as the single source of the rules and `CODEX.md`
-  read on demand; nothing quotes CONTRACT.md, everything cites its path
-  (both hook block messages, and the two-line pointer the skill adds to the
-  workspace `CLAUDE.md` so a post-compaction session recovers the rules from
-  one file). The monitor-attach
+  channel), self-contained: `CONTRACT.md` was merged into `SKILL.md` and deleted,
+  because a second file holding the rules is a second thing to keep in step with
+  the first. The monitor-attach
   recipe plus the full conversational contract from DESIGN.md: read
   `.scramble/persona.md` + `knowledge/INDEX.md` before the first message,
   history catch-up, background `scramble listen` + monitor arming,
