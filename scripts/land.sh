@@ -11,8 +11,14 @@
 # (postmortem: akrust log/postmortems/
 #  2026-08-21-my-commit-reverted-a-landed-unit-from-a-stale-index.md)
 #
-# usage: scripts/land.sh -m "<message>" <path> [<path> ...]
-#        scripts/land.sh -F <file>      <path> [<path> ...]
+# usage: scripts/land.sh -F - <path> [<path> ...]  <<'MSG' ... MSG   (PREFER THIS)
+#        scripts/land.sh -m "<message>" <path> [<path> ...]
+#
+# PREFER -F WITH A QUOTED HEREDOC. A -m message is a shell argument, so a
+# backtick in it runs as a command before this script ever sees it: on
+# 2026-08-21 a message mentioning `slack` executed the Slack CLI and pasted its
+# help text into the commit. A <<'MSG' heredoc is literal, and it also lets the
+# message hold blank lines and quotes without escaping.
 #
 # Every path is REQUIRED and is the whole of what gets committed: the commit uses
 # `git commit -- <paths>`, which builds the tree from HEAD plus those paths and
@@ -38,6 +44,8 @@ done
 #    real contents were never named by the person making it.
 [ "${#PATHS[@]}" -gt 0 ] || fail "name every path to commit (this is the whole point: scripts/land.sh -m msg <path>...)"
 [ -n "$MSG" ] || [ -n "$MSG_FILE" ] || fail "give a message with -m or -F"
+# `-F -` means stdin, the form a quoted heredoc uses.
+[ "$MSG_FILE" != "-" ] || MSG_FILE=/dev/stdin
 [ -z "$MSG_FILE" ] || [ -r "$MSG_FILE" ] || fail "cannot read message file $MSG_FILE"
 
 for p in "${PATHS[@]}"; do
