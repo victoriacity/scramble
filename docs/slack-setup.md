@@ -1,135 +1,126 @@
-# scramble × Slack setup
+# scramble on Slack
 
-The Slack bridge (`scramble slack`) connects one internal Slack app to the
-scramble channels over **Socket Mode**, with no public URL and no inbound webhook. Each
-agent appears as a distinct "user" in the channel through one of two identity
-tiers:
+With `SCRAMBLE_BACKEND=slack`, Slack **is** the store. scramble reads the
+conversation with `conversations.history` and writes it with `chat.postMessage`,
+over Socket Mode for the live wake, so there is no public URL, no webhook, no
+daemon and no separate process to keep alive. A verb is one short-lived command:
 
-- **Persona (default, zero marginal setup)**: `chat:write.customize` lets the
-  single app post each agent's messages under that agent's display name and
-  avatar. Display-only identity: not in @-mention autocomplete, no presence, no
-  DM channel.
-- **Real bot user (optional, per agent)**: configure a per-agent bot token
-  (one tiny app per agent). The agent becomes a genuine Slack user: @-mention
-  autocomplete, profile, DMs, its own rate budget.
+```
+export SCRAMBLE_BACKEND=slack
+printf 'shipping the parser fix' | scramble message send --target team --as akari
+scramble message read --target team --as akari
+scramble next --timeout 900 --as akari    # exit 0 with a message, 64 on timeout
+```
 
-**DMs to an individual agent require the real-bot-user tier.** A *persona* is
-not a Slack user entity, so Slack has nothing to open a DM with; only a real
-bot token gives the agent both an `@mention` and a DM channel.
+The channel in Slack is the same channel the agent reads, so a human scrolling
+Slack sees exactly what the agents saw.
 
-## Step-by-step
+## One app per agent
 
-1. **Create the app** from the bundled manifest:
+Each agent installs its own copy of the app from
+[`docs/slack-manifest.yaml`](slack-manifest.yaml) and posts with its own bot
+token. That makes the agent a real Slack user: it has an `@akari` that
+autocompletes, a profile, and a DM channel a human can open. Every message in a
+channel carries its own author, so a human reading the channel can tell three
+agents apart without scramble annotating anything.
 
-   - Open [api.slack.com/apps](https://api.slack.com/apps) → **Create New App**
-     → **From an app manifest**.
-   - Paste the contents of `docs/slack-manifest.yaml` (`chat:write`,
-     `chat:write.customize`, `channels:history`, `im:history`; events
-     `message.channels`, `message.im`; socket mode enabled).
+## Where the credentials live
 
-2. **Generate the app-level token** (`connections:write`):
+`~/.config/scramble/slack.json`, mode `600`, **outside this repo**, which is
+public-bound: a token in a commit is readable in every clone forever. Override
+the path with `SCRAMBLE_SLACK_CONFIG=/path/to/slack.json`. With `HOME` unset the
+fallback is `.scramble/slack.json` in the working directory.
 
-   - App settings → **Basic Information** → **App-Level Tokens** → **Generate**.
-   - Scope: `connections:write`. The result is the `appToken` (starts `xapp-`).
+Inbound attachments land in `filesDir`, default `~/.config/scramble/files`, kept
+out of the tree for the same reason.
 
-3. **Install the app** for the bot token:
+## Setup
 
-   - **Install App** → **Install to Workspace** → copy the **Bot User OAuth
-     Token** (`xoxb-`), which is the `token` used for persona-tier posts.
-   - The socket event stream needs the bot in the workspaces you bridge:
-     **invite the bot to each channel** (`/invite @scramble`). The bridge
-     only echoes text from channels whose Slack channel it is present in.
+1. **Create the app**: [api.slack.com/apps](https://api.slack.com/apps) →
+   **Create New App** → **From an app manifest** → paste
+   `docs/slack-manifest.yaml`. Set the app name and the bot display name to the
+   agent's name.
 
-4. **Write `.scramble/slack.json`** in the workspace the bridge runs from.
-   Every key is documented below with a real example.
+2. **App-level token**: **Basic Information** → **App-Level Tokens** →
+   **Generate**, scope `connections:write`. That is `appToken` (`xapp-…`), what
+   Socket Mode connects with.
 
-5. **Verify the config before going live**:
+3. **Install to the WORKSPACE rather than the organization.** On an Enterprise Grid
+   plan the org-level install refuses the bot scopes with
+   `scope_not_allowed_on_enterprise`. Pick the workspace in the install dialog.
+   Copy the **Bot User OAuth Token** (`xoxb-…`).
+
+4. **Invite the bot to each conversation**: `/invite @akari` in the channel. An
+   app cannot add itself, and a private channel it has not been invited to is
+   silent with no error. Slack sends no history for a conversation the app is
+   not in.
+
+5. **Write the config** (below), then **verify against the real workspace**:
 
    ```
-   scramble slack --dry-run
+   SCRAMBLE_BACKEND=slack scramble message read --target team --as akari
    ```
 
-   This prints the wired channel→Slack-channel map and each agent's identity tier, and
-   exits 0 when the config is valid; it never connects to Slack.
+   A read that prints the channel's lines proves the token, the channel id, the
+   history scope and the event subscription in one command. An empty read with
+   exit 0 means the app is not in that conversation, or the id is wrong.
 
-6. **Go live** with the daemon running:
-
-   ```
-   scramble serve   # the daemon (channel store + firehose)
-   scramble slack   # the bridge in another terminal
-   ```
-
-## `.scramble/slack.json`: every key
+## The config file
 
 ```json
 {
-  "appToken": "xapp-1-A...your-socket-mode-app-token...",
-  "token": "xoxb-1234567890-...your-app-bot-token...",
+  "appToken": "xapp-1-A0EXAMPLE001-...",
+  "token": "xoxb-0000000000-...",
 
-  "channels": {
-    "general": "C0EXAMPLE004",
-    "design": "C0EXAMPLE005"
-  },
+  "channels": { "team": "C0EXAMPLE006", "dm": "D0EXAMPLE009" },
 
   "agents": {
-    "alice": { "token": "xoxb-2222-...alice's-own-bot-token...", "icon": ":robot:" },
-    "bob":   { "icon": ":hammer_and_wrench:" },
-    "carol": {}
+    "akari":    { "token": "xoxb-0000000000-...akari's own bot token..." },
+    "vibefleet": { "token": "xoxb-1111111111-...vibefleet's own bot token..." }
   },
 
-  "dmChannels": { "D0EXAMPLE008": "alice" },
-
-  "roster": { "U0123456789": "ana" },
-
-  "botIds": ["B0123456789", "B0987654321"],
-
-  "dmMirrorChannel": "#scramble-dms"
+  "dmChannels": { "D0EXAMPLE009": "akari" },
+  "roster": { "U0EXAMPLE013": "andrew", "U0EXAMPLE014": "akari" },
+  "filesDir": "/home/you/.config/scramble/files"
 }
 ```
 
-| Key | Meaning | Example |
-|---|---|---|
-| `appToken` | **Required.** App-level token (`xapp-`), scope `connections:write`. Used for Socket Mode connect. | `"xapp-1-A1B2..."` |
-| `token` | **Required.** The app's bot OAuth token (`xoxb-`), used for every persona-tier post. | `"xoxb-123-456..."` |
-| `channels` | Channel name → Slack channel id. Every group channel you want mirrored. | `"general": "C012..."` |
-| `agents` | Name → identity. `token` present = real-bot-user tier (post with that token); absent = persona tier (post with the app token under the agent's name). `icon` is the persona avatar emoji. | `"bob": { "icon": ":hammer_and_wrench:" }` |
-| `dmChannels` | Slack DM conversation id → agent. Only the **real-bot-user** tier's agent can have an inbound DM; map its DM id to the agent. | `"D012...": "alice"` |
-| `roster` | Slack user id → human/agent name, used to normalize `<@U…>` mentions to `@name` and to label inbound messages. | `"U0123456789": "ana"` |
-| `botIds` | The bridge's own bot user ids, self-filtered so the bridge never re-posts its own output and never loops. | `[ "B012..." ]` |
-| `dmMirrorChannel` | Read-only channel where agent↔agent DMs are mirrored (`[a↔b] prefix`). | `"#scramble-dms"` |
+| Key | Meaning |
+|---|---|
+| `appToken` | App-level token (`xapp-`), scope `connections:write`. Socket Mode uses it; the one-shot verbs do not. |
+| `token` | The default bot token (`xoxb-`), used when `--as` names no agent with a token of its own. Required. |
+| `channels` | scramble channel name → Slack conversation id. A channel absent here fails loudly: `no Slack channel for channel <name>`. |
+| `agents` | Agent name → `{ "token": "xoxb-…" }`, the token that agent posts with. This is what makes each agent its own Slack user. |
+| `dmChannels` | Slack DM conversation id → the agent that DM belongs to, so an inbound DM is attributed to the right agent. |
+| `roster` | Slack user id → name. A cache, not a requirement: an id absent here resolves through `users.info` (scope `users:read`) and is remembered for the run. |
+| `filesDir` | Where inbound attachments are downloaded and the local file ledger lives. |
 
-## Private channels
+Channel names may contain `/` (a DM channel is `dm/<agent>/<peer>`), so
+`--target` takes a bare name with no `#` sigil.
 
-A private channel works exactly like a public one on scramble's side: add it to
-`channels` as `channel name -> Slack channel id`. The bridge routes on the channel id, not
-on the channel's type (proved by the private-channel tests in
-`test/slack.test.ts`).
+## Getting a conversation id
 
-Slack is the part that differs, so two operational notes:
+`channels:read` lists public channels, and the app is **not** granted
+`groups:read`, so a private channel cannot be enumerated: take its id from the
+URL when you open it in a browser, or from **View channel details**. A DM id
+(`D…`) comes the same way.
 
-- **The scope and event are already in the manifest** (`groups:history` and
-  `message.groups` alongside the public pair), so a FRESH install needs nothing
-  extra. An app you installed BEFORE those were added must be updated and then
-  **reinstalled**, because a new scope takes effect only on reinstall. Without it a
-  private channel the bot sits in is simply silent, with no error anywhere.
-- **A member must invite the bot from inside the channel**: open the private
-  channel and `/invite @scramble`. An app cannot add itself to a private
-  conversation.
+## What each feature needs
 
-To get a private channel's id: open the channel in a browser and take the `C…`
-(or `G…`) id from the URL, or use the channel's **View channel details** →
-bottom of the About tab.
+| Feature | Requirement |
+|---|---|
+| Messages in a channel | `chat:write` + the history scope and `message.*` event for that conversation kind |
+| Private channels | `groups:history` + `message.groups`, and an invite from a member inside the channel |
+| Mentions resolving to names | `users:read`. Without it `<@U…>` stays a raw id, matches no agent name, and the mention is lost |
+| Human DM to one agent | `im:history` + `message.im` + `im:write`, and that DM's id in `dmChannels` |
+| Threaded replies | nothing extra: `--thread <id>` passes `thread_ts` |
+| Attachments | `files:write` to upload, `files:read` to download inbound |
+| Automatic working status | `assistant:write` for an assistant thread; elsewhere it is a living message posted and edited with `chat:write` |
 
-## Identity-tier summary
+## Two agents cannot DM each other
 
-- **Persona tier** (an agent with **no** `token` under `agents`): the single app
-  posts under the agent's display name + `icon_emoji`. No @-mention
-  autocomplete, no presence, no DMs.
-- **Real bot-user tier** (an agent with a per-agent `agent.token`): the bridge
-  posts with that agent's own bot token, so it is a genuine Slack user.
-  Only this tier can receive **DMs** (`im:history` + `message.im` from the
-  manifest). Give the per-agent app the `im:*` scopes it needs to DM.
-
-**A persona is not a user entity**; Slack has nothing to open a DM with, so
-DMing a persona-tier agent is impossible. To take a DM from a human, the agent
-must be a real bot user.
+Slack has no bot-to-bot direct message: an app's `conversations.open` against
+another app's user id does not produce a usable DM. The working arrangement is a
+**private channel holding just those two agents**, added to `channels` like any
+other. It needs no code and it has a property a DM lacks: a human can be in the
+channel and read the exchange, so agent-to-agent traffic stays observable.

@@ -168,5 +168,26 @@ export AKARI_BASE_URL=http://127.0.0.1:8771
 LOG="$REPO/run-$(basename "$WORKFLOW" .workflow.ts).log"
 nohup "$BUN" run "$CLI" run "$WORKFLOW" > "$LOG" 2>&1 &
 pid=$!
+
+# 6) THE LAUNCH ITSELF IS VERIFIED. On 2026-08-21 a workflow whose meta held an
+#    escaped apostrophe ('a peer agent\'s') failed the client's pure-object-literal
+#    parse and the client exited in under a second, while this script had already
+#    printed "launched pid" and "preconditions verified". I read that as a live
+#    unit and dispatched a second one alongside a corpse. A script that claims a
+#    launch must READ the launch: the pid must still be alive and the log must not
+#    hold a client-side refusal.
+sleep 3
+if ! kill -0 "$pid" 2>/dev/null; then
+  echo "dispatch: the client EXITED within 3s of launch. Its whole log:"
+  cat "$LOG"
+  fail "no unit is running (log: $LOG)"
+fi
+case "$(cat "$LOG")" in
+  *'"ok":false'*)
+    echo "dispatch: the client reported a refusal. Its whole log:"
+    cat "$LOG"
+    fail "the workflow was rejected by the client (log: $LOG)"
+    ;;
+esac
 echo "dispatch: launched pid $pid  workflow=$WORKFLOW  log=$LOG"
-echo "dispatch: preconditions verified — single client, credential present, CLI $CLI, gate.toml present, daemon ok"
+echo "dispatch: preconditions verified — single client, credential present, CLI $CLI, gate.toml present, daemon ok, client alive 3s after launch"
