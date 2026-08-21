@@ -29,6 +29,13 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
  *  agent's. */
 export const STATUS_TEXT = "working";
 
+/** Slack message metadata marking a line as a scramble status. It rides on the
+ *  message itself, so ANY agent can recognise ANY agent's status: the ts ledger
+ *  only ever knew about its own, which let a peer's `working` line arrive in
+ *  this agent's transcript as if someone had said it. Metadata rather than the
+ *  text, because a human, or an agent, is allowed to say "working". */
+export const STATUS_METADATA_TYPE = "scramble_status";
+
 const POST_URL = "https://slack.com/api/chat.postMessage";
 const UPDATE_URL = "https://slack.com/api/chat.update";
 const DELETE_URL = "https://slack.com/api/chat.delete";
@@ -156,7 +163,11 @@ export class StatusManager {
    *  update/delete/expire paths can address it. Returns the ts, or undefined on
    *  a failure (reported, never escalated). */
   private async postLiving(channelId: string): Promise<string | undefined> {
-    const r = await this.call(POST_URL, { channel: channelId, text: STATUS_TEXT });
+    const r = await this.call(POST_URL, {
+      channel: channelId,
+      text: STATUS_TEXT,
+      metadata: { event_type: STATUS_METADATA_TYPE, event_payload: {} },
+    });
     if (!r.ok) {
       this.report(r.error ?? "post failed");
       return undefined;
@@ -166,7 +177,12 @@ export class StatusManager {
 
   /** Update the remembered living message. A failure is reported only. */
   private async updateLiving(channelId: string, ts: string): Promise<void> {
-    const r = await this.call(UPDATE_URL, { channel: channelId, ts, text: STATUS_TEXT });
+    const r = await this.call(UPDATE_URL, {
+      channel: channelId,
+      ts,
+      text: STATUS_TEXT,
+      metadata: { event_type: STATUS_METADATA_TYPE, event_payload: {} },
+    });
     if (!r.ok) this.report(r.error ?? "update failed");
   }
 

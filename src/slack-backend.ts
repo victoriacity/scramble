@@ -14,6 +14,7 @@
 import type { Delivery, Message, Attachment } from "./types";
 import { DM_PREFIX } from "./types";
 import type { SlackSocket } from "./slack-transport";
+import { STATUS_METADATA_TYPE } from "./status";
 import { downloadFile, type SlackFileMeta } from "./attachments";
 
 // --- slack endpoint URLs ------------------------------------------------
@@ -21,6 +22,9 @@ import { downloadFile, type SlackFileMeta } from "./attachments";
 const SOCKET_OPEN_URL = "https://slack.com/api/apps.connections.open";
 const POST_URL = "https://slack.com/api/chat.postMessage";
 const HISTORY_URL = "https://slack.com/api/conversations.history";
+/** Slack omits message metadata from a read unless it is asked for, and the
+ *  status marker lives there, so every read this backend makes asks for it. */
+const WITH_METADATA = "include_all_metadata=true";
 const REPLIES_URL = "https://slack.com/api/conversations.replies";
 const USERS_INFO_URL = "https://slack.com/api/users.info";
 const AUTH_TEST_URL = "https://slack.com/api/auth.test";
@@ -51,6 +55,8 @@ export function isThreadRoot(m: SlackHistoryMessage): boolean {
  *  mapped to our line shape are read, deliberately. */
 export interface SlackInboundEvent {
   type?: string;
+  /** Slack message metadata; a scramble status carries STATUS_METADATA_TYPE. */
+  metadata?: { event_type?: string };
   subtype?: string;
   text?: string;
   channel?: string;
@@ -151,6 +157,8 @@ async function readOk<T = Record<string, unknown>>(
 /** A line (message) read from conversations.history. */
 export interface SlackHistoryMessage {
   ts?: string;
+  /** Slack message metadata; a scramble status carries STATUS_METADATA_TYPE. */
+  metadata?: { event_type?: string };
   thread_ts?: string;
   /** Slack's count of replies under this message when it is a threaded root
    *  (reply_count above zero with thread_ts equal to its own ts marks the
@@ -161,6 +169,14 @@ export interface SlackHistoryMessage {
   text?: string;
   bot_id?: string;
   files?: SlackFileMeta[];
+}
+
+/** Is this line a scramble status rather than something someone said? Keyed on
+ *  the metadata the status manager stamps, so ANY agent recognises ANY agent's
+ *  status, and never on the text, because a human is allowed to say "working".
+ *  The ts ledger cannot answer this: it only ever knew this agent's own. */
+export function isStatusLine(m: { metadata?: { event_type?: string } }): boolean {
+  return m.metadata?.event_type === STATUS_METADATA_TYPE;
 }
 
 /** Turn `@name` into Slack's `<@U…>` entity on the way OUT, the mirror of what
@@ -521,6 +537,8 @@ export class SlackBackend {
     wantThreadWake = false,
   ): Promise<{ delivery: Delivery | undefined; problems: string[] }> {
     if (ev.type !== "message" || !ev.text || ev.text === "") return { delivery: undefined, problems: [] };
+    // A status is never a message, and that holds for a PEER's status too.
+    if (isStatusLine(ev)) return { delivery: undefined, problems: [] };
     const channel = ev.channel;
     if (channel === undefined) return { delivery: undefined, problems: [] };
     // Normalize <@U…> mentions to @name, resolving unseen ids via users.info
@@ -671,6 +689,7 @@ export class SlackBackend {
     as = "",
     forDelivery = false,
   ): Promise<number> {
+    if (isStatusLine(m)) return seq;
     const { delivery, problems: dlProblems } = await this.toDelivery(
       { type: "message", channel: slackChannel, user: m.user, username: m.user, ts: m.ts, thread_ts: m.thread_ts, text: m.text, bot_id: m.bot_id, files: m.files },
       as,
@@ -733,7 +752,7 @@ export class SlackBackend {
     const qs = since !== undefined ? `&oldest=${encodeURIComponent(since)}` : "";
     const r = await readOk<{ messages?: SlackHistoryMessage[] }>(
       this.fetch,
-      `${HISTORY_URL}?channel=${encodeURIComponent(slackChannel)}${qs}`,
+      `${HISTORY_URL}?channel=${encodeURIComponent(slackChannel)}&${WITH_METADATA}${qs}`,
       { headers: { authorization: `Bearer ${token}` } },
     );
     if (!r.ok) return { code: 1, error: r.error, messages: [], problems: [] };

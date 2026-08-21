@@ -7,6 +7,7 @@ import {
   SlackBackend,
   computeMentions,
   denormalize,
+  isStatusLine,
   THREAD_EXPANSION_CAP,
   type SlackBackendConfig,
   type SlackInboundEvent,
@@ -1706,5 +1707,62 @@ describe("an agent is never delivered its own post", () => {
     void p;
     expect(lines).toHaveLength(1);
     expect(lines[0]!.text).toBe("a real peer");
+  });
+});
+
+describe("a peer's status is not a message either", () => {
+  // The ts ledger only ever knew this agent's OWN status, so another agent's
+  // `working` line arrived in this transcript as if someone had said it. The
+  // marker rides on the message, so any agent recognises any agent's status.
+  test("a line carrying the status marker is dropped from delivery", async () => {
+    const h = make({ roster: { U1: "peer" } });
+    const lines: Delivery[] = [];
+    const p = h.backend.listen(["general"], "alice", (d) => lines.push(d), () => {});
+    await pump();
+    emit(h, msg({ user: "U1", text: "working", ts: "8.1", metadata: { event_type: "scramble_status" } }));
+    await pump(8);
+    emit(h, msg({ user: "U1", text: "working", ts: "8.2" }));
+    await pump(8);
+    void p;
+    // The unmarked one is a HUMAN (or agent) saying the word, and it is delivered:
+    // the decision is never made on the text.
+    expect(lines).toHaveLength(1);
+    expect(lines[0]!.ts).toBe("8.2");
+  });
+
+  test("a marked line is absent from history too", async () => {
+    const h = make({ roster: { U1: "peer" } }, (url) => {
+      if (url.includes("conversations.history")) {
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            messages: [
+              { ts: "9.1", user: "U1", text: "working", metadata: { event_type: "scramble_status" } },
+              { ts: "9.2", user: "U1", text: "a real line" },
+            ],
+          }),
+          { status: 200 },
+        );
+      }
+      return okRouter(url);
+    });
+    const r = await h.backend.history("general");
+    expect(r.messages.map((m) => m.ts)).toEqual(["9.2"]);
+  });
+
+  test("every history read asks Slack for metadata, or the marker is invisible", async () => {
+    let asked = "";
+    const h = make({}, (url) => {
+      if (url.includes("conversations.history")) asked = url;
+      return okRouter(url);
+    });
+    await h.backend.history("general");
+    expect(asked).toContain("include_all_metadata=true");
+  });
+
+  test("isStatusLine keys on the marker, never on the text", () => {
+    expect(isStatusLine({ metadata: { event_type: "scramble_status" } })).toBe(true);
+    expect(isStatusLine({ metadata: { event_type: "something_else" } })).toBe(false);
+    expect(isStatusLine({})).toBe(false);
   });
 });
