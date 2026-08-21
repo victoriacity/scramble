@@ -113,7 +113,7 @@ describe("README content", () => {
 
   test("points the Slack setup at the manifest", () => {
     expect(readme).toContain("docs/slack-manifest.yaml");
-    expect(readme).toContain("chat:write.customize");
+    expect(readme).toContain("users:read");
   });
 
   test("documents cross-machine setup of SCRAMBLE_URL and the token", () => {

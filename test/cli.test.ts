@@ -968,7 +968,6 @@ describe("loadSlackConfig", () => {
       expect(cfg.channels.general).toBe("C1");
       expect(cfg.token).toBe("");
       expect(cfg.appToken).toBeUndefined();
-      expect(cfg.botIds).toEqual([]);
       expect(cfg.dmChannels).toEqual({});
       expect(cfg.roster).toEqual({});
     }

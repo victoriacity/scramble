@@ -43,7 +43,6 @@ function baseConfig(over?: Partial<SlackBackendConfig>): SlackBackendConfig {
     agents: { alice: { token: "T_ALICE" }, bob: {} },
     roster: { U111: "ana" },
     dmChannels: { D1: "alice" },
-    botIds: ["B999"],
     filesDir: join(tmpdir(), `scrb-files-${process.pid}-${Math.random().toString(36).slice(2)}`),
     ...over,
   };
@@ -258,13 +257,33 @@ describe("history", () => {
     expect(r.error).toBe("channel_not_found");
   });
 
-  test("a self-filtered or textless history message is skipped", async () => {
+  test("history keeps a bot_id message and drops only textless lines", async () => {
+    // history returns EVERY line: a bot_id message (even the reading agent's own
+    // post) stays, and only a line Slack sent with no text at all is skipped.
     const h = make({}, async () =>
-      new Response(JSON.stringify({ ok: true, messages: [{ ts: "1", bot_id: "B999", text: "x" }, { ts: "2", user: "U1" }] }), { status: 200 }),
+      new Response(JSON.stringify({ ok: true, messages: [
+        { ts: "1", bot_id: "B999", text: "an app post" },
+        { ts: "2", user: "U1" },
+      ] }), { status: 200 }),
     );
     const r = await h.backend.history("general");
     expect(r.code).toBe(0);
-    expect(r.messages).toHaveLength(0);
+    expect(r.messages).toHaveLength(1);
+    expect(r.messages[0]!.text).toBe("an app post");
+  });
+
+  test("history includes BOTH the reading agent's own post and a peer's", async () => {
+    // The read is a transcript: no self-suppression, so the agent's own line and
+    // a peer's line both come back, matching a direct conversations.history read.
+    const h = make({ roster: { U111: "ana", U1000: "alice" } }, async () =>
+      new Response(JSON.stringify({ ok: true, messages: [
+        { ts: "1", bot_id: "B999", user: "U1000", text: "from the agent itself" },
+        { ts: "2", user: "U111", text: "from a peer" },
+      ] }), { status: 200 }),
+    );
+    const r = await h.backend.history("general");
+    expect(r.code).toBe(0);
+    expect(r.messages.map((m) => m.from)).toEqual(["alice", "ana"]);
   });
 
   test("history round-trips a threaded reply's thread id and leaves a parent unmarked", async () => {
@@ -303,13 +322,31 @@ describe("listen", () => {
     expect(d.mentioned).toBe(true);
   });
 
-  test("self-filter drops our own bot posts", async () => {
+  test("a message from a DIFFERENT agent (own bot_id) IS delivered and mentions the reader", async () => {
+    // A peer app's post is NOT the reading agent's own post, so it must be
+    // delivered; when it names the reading agent, `mentioned` is true.
     const h = make();
-    const lines: unknown[] = [];
+    const lines: Delivery[] = [];
     const p = h.backend.listen(["general"], "alice", (d) => lines.push(d), () => {});
     await pump();
-    emit(h, msg({ bot_id: "B999", text: "hi" }), 0);
-    await pump(5);
+    emit(h, msg({ bot_id: "B222", text: "@alice hello from another app" })); // U111 -> ana resolves, so from = ana
+    await pump(8);
+    h.sockets[0]?.close();
+    await p;
+    expect(lines).toHaveLength(1);
+    expect(lines[0]!.from).toBe("ana");
+    expect(lines[0]!.mentioned).toBe(true);
+  });
+
+  test("the reading agent's OWN identity is NOT delivered to that listener", async () => {
+    // When the resolved sender name equals the consuming agent, the message is
+    // suppressed (an agent must not answer itself), by NAME not by bot list.
+    const h = make({ roster: { U1000: "alice" } });
+    const lines: Delivery[] = [];
+    const p = h.backend.listen(["general"], "alice", (d) => lines.push(d), () => {});
+    await pump();
+    emit(h, msg({ user: "U1000", bot_id: "B999", text: "my own post" })); // from == alice == as
+    await pump(8);
     h.sockets[0]?.close();
     await p;
     expect(lines).toHaveLength(0);
@@ -602,7 +639,6 @@ describe("slack commands through main", () => {
         agents: { alice: { token: "T_ALICE" }, bob: {} },
         roster: { U111: "ana" },
         dmChannels: {},
-        botIds: [],
       }),
     );
     const writes: string[] = [];

@@ -47,9 +47,11 @@ interface Frame {
 }
 
 /** The config the backend reads, a SUBSET of the bridge config (src/slack.ts):
- *  tokens, the channel->Slack channel map, per-agent identities, the mention roster and
- *  the self-filter bot ids. `postToChannel` is deliberately absent — the backend
- *  POSTS STRAIGHT TO SLACK, not into a stitched local channel. */
+ * tokens, the channel->Slack channel map, per-agent identities and the mention roster.
+ * `postToChannel` is deliberately absent — the backend POSTS STRAIGHT TO SLACK, not
+ * into a stitched local channel. There is NO self-filter list here: an agent's own
+ * posts are suppressed by NAME on the delivery path only (a resolved sender name
+ * equals the consuming agent), the same mechanism the local backend uses. */
 export interface SlackBackendConfig {
   /** main bot token (xoxb-) used as the fallback for every post. */
   token: string;
@@ -63,8 +65,6 @@ export interface SlackBackendConfig {
   roster: Record<string, string>;
   /** DM channel id -> agent whose bot that DM belongs to. */
   dmChannels: Record<string, string>;
-  /** own bot ids the backend never delivers (the self-filter). */
-  botIds: string[];
   /** directory downloadable Slack attachments are written to. Default
    *  `~/.config/scramble/files` (resolved by the caller, which sees HOME). */
   filesDir: string;
@@ -156,7 +156,6 @@ export class SlackBackend {
   private readonly now: () => number;
   private readonly token: string;
   private readonly appToken?: string;
-  private readonly botIds: string[];
   private readonly dmChannels: Record<string, string>;
   private readonly channelById: Record<string, string>;
   private readonly channels: Record<string, string>;
@@ -175,7 +174,6 @@ export class SlackBackend {
     this.appToken = cfg.appToken;
     this.agents = cfg.agents;
     this.roster = cfg.roster;
-    this.botIds = cfg.botIds;
     this.filesDir = cfg.filesDir;
     this.dmChannels = cfg.dmChannels;
     this.channelById = Object.fromEntries(Object.entries(cfg.channels).map(([r, c]) => [c, r]));
@@ -273,17 +271,16 @@ export class SlackBackend {
   }
 
   /** Turn one inbound event into an outbound Delivery, or undefined when it
-   *  should be dropped (a self-post, an uninteresting event, an unknown
-   *  channel). Also downloads any `files` the event carries and reports a
-   *  download failure that still leaves the message deliverable. */
+   *  should be dropped (no text, an uninteresting event, an unknown channel).
+   *  PURE: no self-suppression here — every line is returned, and the DELIVERY
+   *  path (next/listen) decides who to suppress by NAME. Also downloads any
+   *  `files` the event carries and reports a download failure that still leaves
+   *  the message deliverable. */
   private async toDelivery(
     ev: SlackInboundEvent,
     as: string,
   ): Promise<{ delivery: Delivery | undefined; problems: string[] }> {
     if (ev.type !== "message" || !ev.text || ev.text === "") return { delivery: undefined, problems: [] };
-    // Self-filter: never deliver our OWN posts (a bot_id in the config list),
-    // which is what keeps an agent from answering itself.
-    if (ev.bot_id !== undefined && this.botIds.includes(ev.bot_id)) return { delivery: undefined, problems: [] };
     const channel = ev.channel;
     if (channel === undefined) return { delivery: undefined, problems: [] };
     // Normalize <@U…> mentions to @name, resolving unseen ids via users.info.
@@ -355,7 +352,12 @@ export class SlackBackend {
 
   /** Route an inbound event through the channel filter and deliver. A download
    *  problem is reported via onProblem BEFORE the line is delivered, so the
-   *  agent learns a file failed but still gets the message. */
+   *  agent learns a file failed but still gets the message. The DELIVERY-only
+   *  self-filter lives HERE: an agent's own post (resolved sender name equals
+   *  the consuming agent's name) is never delivered, so an agent does not
+   *  answer itself — the same name mechanism the local backend applies to its
+   *  stream. history never passes through here, so a transcript read keeps
+   *  every line. */
   private deliver(
     ev: SlackInboundEvent,
     channels: string[],
@@ -366,7 +368,10 @@ export class SlackBackend {
   ): void {
     void this.toDelivery(ev, as).then(({ delivery, problems }) => {
       for (const p of problems) onProblem(p);
-      if (delivery !== undefined && (wantsAll || channels.includes(delivery.channel))) {
+      if (delivery === undefined) return;
+      // An agent never delivers its own posts (it would otherwise answer itself).
+      if (delivery.from === as) return;
+      if (wantsAll || channels.includes(delivery.channel)) {
         onLine(delivery);
       }
     });

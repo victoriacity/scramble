@@ -42,7 +42,6 @@ function writeSlackCfg(cwd: string, filesDir: string): void {
     agents: { alice: { token: "T_A" }, bob: {} },
     roster: {},
     dmChannels: {},
-    botIds: [],
     filesDir,
   }));
 }
