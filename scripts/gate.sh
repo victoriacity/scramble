@@ -68,6 +68,39 @@ if [ "$self_rc" -eq 0 ]; then
 fi
 echo "self-test ok: partial coverage exits $self_rc under this repo's bunfig"
 
+# NO MACHINE PATH IN A TRACKED FILE. This repo is bound for GitHub, and on
+# 2026-08-21 it carried six: my home directory inside this very script, two akari
+# paths in dispatch.sh, and my checkout's path inside the onboarding call to
+# action in the README. A path from one machine is wrong in every clone of the
+# repo, and prose review kept missing them.
+# (postmortem: akrust log/postmortems/2026-08-21-shipped-my-own-machine-paths-in-a-public-repo.md)
+echo "== no machine paths in tracked files =="
+python3 - <<'PATHEOF'
+import re, subprocess, sys
+# A home or install directory belongs to a machine. A doc that must show one
+# writes a placeholder (<your-home>, <path-to-scramble>) or $HOME.
+FORBIDDEN = re.compile(r"(/home/|/Users/|/opt/|/storage/|/root/)[A-Za-z0-9._-]+")
+files = [f for f in subprocess.run(["git", "ls-files", "-z"], capture_output=True, text=True).stdout.split("\0") if f]
+bad = []
+for f in files:
+    try:
+        text = open(f, encoding="utf-8").read()
+    except (UnicodeDecodeError, IsADirectoryError, FileNotFoundError):
+        continue
+    for n, line in enumerate(text.splitlines(), 1):
+        for m in FORBIDDEN.finditer(line):
+            bad.append((f, n, m.group(0), line.strip()[:90]))
+if bad:
+    print("GATE FAIL: a tracked file carries a machine path:")
+    for f, n, hit, line in bad:
+        print(f"  {f}:{n}: {hit}   in: {line}")
+    print("Use a placeholder or $HOME. A path from one machine is wrong in every clone.")
+    sys.exit(1)
+print("no machine paths in tracked files")
+sys.exit(0)
+PATHEOF
+paths_rc=$?
+
 echo "== tsc --noEmit =="
 "$BUN" x tsc --noEmit
 tsc_rc=$?
@@ -77,8 +110,8 @@ echo "== bun test --coverage =="
 test_rc=$?
 
 echo "== gate summary =="
-echo "self_test_rc=$self_rc (nonzero required) tsc_rc=$tsc_rc test_rc=$test_rc"
-if [ "$tsc_rc" -ne 0 ] || [ "$test_rc" -ne 0 ]; then
+echo "self_test_rc=$self_rc (nonzero required) paths_rc=$paths_rc tsc_rc=$tsc_rc test_rc=$test_rc"
+if [ "$paths_rc" -ne 0 ] || [ "$tsc_rc" -ne 0 ] || [ "$test_rc" -ne 0 ]; then
   echo "GATE RED"
   exit 1
 fi
