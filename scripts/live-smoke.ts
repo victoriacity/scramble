@@ -7,8 +7,12 @@
 // nothing without checking, and a working status that never cleared on reply.
 // Coverage proves the tests ran the lines. Only this proves the product works.
 //
-//   bun scripts/live-smoke.ts                 # every stage
-//   bun scripts/live-smoke.ts thread status   # named stages only
+//   bun scripts/live-smoke.ts                 # read, thread, attach, wake, check
+//   bun scripts/live-smoke.ts thread inbound  # named stages only
+//
+// `inbound` is not in the default run: it checks whether an inbound file's bytes
+// reach local disk, which this workspace refuses to serve to a bot token, so it
+// would stand red forever and hide a real regression behind a known one.
 //
 // Requirements: ~/.config/scramble/slack.json (or SCRAMBLE_SLACK_CONFIG) with a
 // `team` channel and TWO agents, so one agent can be the peer that the other
@@ -232,16 +236,45 @@ async function stageCheck(): Promise<void> {
   );
 }
 
+/** Inbound file BYTES, which this workspace refuses to serve to a bot token.
+ *  Kept OUT of the default run so the default stays a regression detector
+ *  rather than a permanent red, and kept here so the day the app's install
+ *  changes, `bun scripts/live-smoke.ts inbound` answers whether it worked.
+ *  Slack's three refusals, all recorded: a sign-in page when the auth header is
+ *  dropped across the redirect, `Error serving file.` when it is kept, and a 404
+ *  with the token in the query. */
+async function stageInbound(): Promise<void> {
+  const r = await scramble(["message", "read", "--target", CHANNEL, "--as", SELF]);
+  const withFiles = r.out
+    .split("\n")
+    .filter((l) => l.startsWith("{"))
+    .map((l) => JSON.parse(l) as { files?: Array<{ id: string; path?: string }> })
+    .filter((m) => (m.files?.length ?? 0) > 0);
+  if (!check("inbound/present", withFiles.length > 0, `${withFiles.length} line(s) carry files`)) return;
+  const downloaded = withFiles.flatMap((m) => m.files ?? []).filter((f) => f.path !== undefined);
+  check(
+    "inbound/downloaded",
+    downloaded.length > 0,
+    downloaded.length > 0
+      ? `${downloaded.length} file(s) on disk, first at ${downloaded[0]!.path}`
+      : `no file has a local path. What scramble reported: ${r.err.split("\n")[0] ?? "(nothing on stderr)"}`,
+  );
+}
+
 const STAGES: Record<string, () => Promise<void>> = {
   read: stageRead,
   thread: stageThread,
   attach: stageAttach,
   wake: stageWakeAndStatus,
   check: stageCheck,
+  inbound: stageInbound,
 };
 
+/** The default run. `inbound` is excluded and must be asked for by name. */
+const DEFAULT_STAGES = ["read", "thread", "attach", "wake", "check"];
+
 const asked = process.argv.slice(2).filter((a) => !a.startsWith("-"));
-const run = asked.length ? asked : Object.keys(STAGES);
+const run = asked.length ? asked : DEFAULT_STAGES;
 console.log(`live-smoke: channel=${CHANNEL} self=${SELF} peer=${PEER} stamp=${stamp}`);
 for (const name of run) {
   const fn = STAGES[name];
