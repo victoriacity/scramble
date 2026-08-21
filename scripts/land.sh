@@ -69,37 +69,36 @@ STAGED="$(git diff HEAD --stat -- "${PATHS[@]}")"
 echo "land: committing exactly these:"
 echo "$STAGED" | sed 's/^/  /'
 
-# 3) A NET DELETION IN A PATH IS ANNOUNCED, because that is the signature this
-#    script exists for: the reverting commit deleted 297 lines and added 17.
-python3 - "$@" <<'PYEOF' || fail "see the deletion summary above"
+# 3) TWO WARNINGS, and the second one is the one that keeps saving me.
+#    (a) A net deletion in a NAMED path, the signature of the reverting commit
+#        that deleted 297 lines and added 17.
+#    (b) A path NOT named that differs from HEAD, which is how a lane merge
+#        landing under this checkout announces itself: the worktree copy is
+#        older than main, and committing it later would revert the merge. This
+#        fired on 2026-08-21 with src/cli.ts at +3 -15 and caught exactly that,
+#        minutes after the same class had already cost a restore.
+# The PATHS array, not "$@": the arg loop above shifted "$@" empty, and passing
+# it meant this block diffed the whole tree while believing it diffed the named
+# paths. It warned correctly by accident, which is not a mechanism.
+python3 - "${PATHS[@]}" <<'PYEOF' || fail "see the deletion summary above"
 import subprocess, sys
-paths = [a for a in sys.argv[1:] if not a.startswith("-")]
-# argv still holds the message and flags; recover the paths the same way the
-# shell did, by dropping flag values.
-args = sys.argv[1:]
-paths, skip = [], False
-for i, a in enumerate(args):
-    if skip:
-        skip = False
-        continue
-    if a in ("-m", "-F"):
-        skip = True
-        continue
-    if a.startswith("-"):
-        continue
-    paths.append(a)
-out = subprocess.run(["git", "diff", "HEAD", "--numstat", "--", *paths],
-                     capture_output=True, text=True).stdout
-heavy = []
-for line in out.splitlines():
-    parts = line.split("\t")
-    if len(parts) != 3:
-        continue
-    add, rem, path = parts
-    if add == "-" or rem == "-":
-        continue
-    if int(rem) > int(add):
-        heavy.append((path, int(add), int(rem)))
+paths = list(sys.argv[1:])
+if not paths:
+    print("land: internal error, the path list reached the checker empty")
+    sys.exit(1)
+def numstat(args):
+    out = subprocess.run(["git", "diff", "HEAD", "--numstat", *args],
+                         capture_output=True, text=True).stdout
+    rows = []
+    for line in out.splitlines():
+        parts = line.split("\t")
+        if len(parts) != 3 or parts[0] == "-" or parts[1] == "-":
+            continue
+        rows.append((parts[2], int(parts[0]), int(parts[1])))
+    return rows
+
+named = numstat(["--", *paths])
+heavy = [(p, a, r) for p, a, r in named if r > a]
 if heavy:
     print("land: this commit REMOVES more than it adds in:")
     for path, add, rem in heavy:
@@ -107,6 +106,17 @@ if heavy:
     print("land: that is the shape of a stale-index revert. If the deletion is")
     print("land: intended, this is only a notice; if it is not, run")
     print("land: `git diff HEAD -- <path>` and look before committing again.")
+
+# The unnamed paths. A worktree copy that is BEHIND HEAD means a lane merge
+# landed under this checkout, and committing that copy later reverts the merge.
+others = [(p, a, r) for p, a, r in numstat([]) if p not in paths and r > a]
+if others:
+    print("land: WARNING, these paths are not in this commit and your worktree copy")
+    print("land: is BEHIND HEAD, which is what a lane merge landing here looks like:")
+    for path, add, rem in others[:12]:
+        print(f"  {path}: +{add} -{rem} versus HEAD")
+    print("land: refresh them before you touch them, or a later commit reverts the")
+    print("land: merge: git checkout HEAD -- <path>")
 sys.exit(0)
 PYEOF
 
