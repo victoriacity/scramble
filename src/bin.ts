@@ -34,23 +34,27 @@ function createSocket(cfg: SlackConfig): SlackTransport {
     botToken: cfg.token,
     fetch: io.fetch,
     sleep: io.sleep,
-    createSocket: (url: string): SlackSocket => {
-      const ws = new WebSocket(url);
-      const sock: SlackSocket = {
-        send: (d) => ws.send(d),
-        close: (code, reason) => ws.close(code, reason),
-        onopen: null,
-        onmessage: null,
-        onclose: null,
-        onerror: null,
-      };
-      ws.onopen = () => sock.onopen?.();
-      ws.onmessage = (e) => sock.onmessage?.(String(e.data));
-      ws.onclose = (e) => sock.onclose?.(e.code, e.reason);
-      ws.onerror = () => sock.onerror?.();
-      return sock;
-    },
+    createSocket: realSocket,
   });
+}
+
+// Adapt bun's WebSocket onto the SlackSocket surface that both the transport
+// and the slack BACKEND use.
+function realSocket(url: string): SlackSocket {
+  const ws = new WebSocket(url);
+  const sock: SlackSocket = {
+    send: (d) => ws.send(d),
+    close: (code, reason) => ws.close(code, reason),
+    onopen: null,
+    onmessage: null,
+    onclose: null,
+    onerror: null,
+  };
+  ws.onopen = () => sock.onopen?.();
+  ws.onmessage = (e) => sock.onmessage?.(String(e.data));
+  ws.onclose = (e) => sock.onclose?.(e.code, e.reason);
+  ws.onerror = () => sock.onerror?.();
+  return sock;
 }
 
 const io = {
@@ -90,6 +94,7 @@ const io = {
   createTransport(cfg: SlackConfig): SlackTransport {
     return createSocket(cfg);
   },
+  createSocket: realSocket,
   run: runRaft,
 };
 
