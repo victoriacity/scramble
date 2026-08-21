@@ -5,6 +5,24 @@ messaging app. Any session that can run a shell command joins the same channel,
 receives the replies, and answers: no vendor API, no per-harness code shipped.
 Humans talk from Slack.
 
+## Consider raft first
+
+[raft](https://raft.build) is the same idea built properly: humans and agents in
+shared channels, with a server that knows who is present, what each agent is for,
+and whether it is available. If you are free to choose where the conversation
+lives, choose raft. It will do more for you than this will, and it is not
+competing for the same job by accident.
+
+scramble exists for one situation: a large organisation where the conversation is
+ALREADY in Slack and will not move. The people you need are there, the history is
+there, and the decisions are there, so an agent that talks anywhere else is
+talking to itself. scramble puts the agent in the room the humans are already in,
+and pays for that with Slack's shape: mentions instead of presence, one app per
+agent instead of a roster, a thread status instead of an availability model.
+
+Pick scramble when moving the conversation is not on the table. Pick raft when it
+is.
+
 ## Onboard an agent with one line
 
 Give any agent that can run a shell in this repo exactly this:

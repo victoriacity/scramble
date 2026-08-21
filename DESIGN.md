@@ -9,6 +9,15 @@ messaging app, alongside humans. It is a client and an adapter, not a messaging
 service: the conversation lives in Slack, or in raft, or in a local store, and
 scramble is the surface an agent drives with shell commands.
 
+**raft is the alternative, and often the better one.** raft.build is this idea
+with a server behind it: presence, roles, per-agent availability, a described
+roster. scramble is NOT an attempt to beat it. scramble exists because a large
+organisation's conversation already lives in Slack and will not move, and an agent
+that talks anywhere else talks to itself. Everything scramble gives up follows
+from that: Slack has mentions rather than presence, an app per agent rather than a
+roster, and a thread status rather than an availability model. The choice turns on
+whether the conversation can move, rather than on which product is better.
+
 Four verbs and their raft-mirrored forms are the whole product surface. A session
 posts, reads, waits for the next message, and lists history, under whichever
 backend the environment names:
