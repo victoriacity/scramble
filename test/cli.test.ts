@@ -890,12 +890,15 @@ describe("channel join (mirror of join)", () => {
 });
 
 describe("message check under the slack backend", () => {
+  /** Build the slack check io with a config that maps one channel and an empty
+   *  history. `over` can swap the fetch to answer the drain. */
   function slackCheckIo(cwd: string, over?: Partial<Io>): Io {
     writeSlackConfig(cwd, { appToken: "xapp-1", token: "xoxb-1", channels: { general: "C1" }, agents: {} });
     const base: Io = {
       write: () => {},
       writeErr: () => {},
-      fetch: async () => new Response("{}", { status: 200 }),
+      fetch: async () =>
+        new Response(JSON.stringify({ ok: true, messages: [] }), { status: 200 }),
       env: () => undefined,
       cwd: () => cwd,
       sleep: async () => {},
@@ -913,7 +916,7 @@ describe("message check under the slack backend", () => {
     return { ...base, ...over };
   }
 
-  test("a valid slack config reports nothing pending and exits 0", async () => {
+  test("a valid slack config with an empty channel history reports nothing and exits 0", async () => {
     const io = slackCheckIo(scratchDir("mslack-ok"));
     const code = await main(["message", "check", "--as", "dev", "--backend", "slack"], io);
     expect(code).toBe(0);
@@ -937,6 +940,201 @@ describe("message check under the slack backend", () => {
     const code = await main(["message", "check", "--as", "dev", "--backend", "slack"], io);
     expect(code).toBe(1);
     expect(errs[0]).toContain("slack");
+  });
+
+  test("message check drains a waiting message, prints it, and advances the per-channel ts cursor", async () => {
+    const cwd = scratchDir("mslack-drain");
+    const writes: string[] = [];
+    const historySeen: string[] = [];
+    const io = slackCheckIo(cwd, {
+      write: (l) => writes.push(l),
+      fetch: async (input) => {
+        const u = String(input);
+        if (u.includes("conversations.history")) {
+          historySeen.push(new URL(u).searchParams.get("oldest") ?? "(none)");
+          return new Response(
+            JSON.stringify({
+              ok: true,
+              messages: [
+                { type: "message", channel: "C1", user: "bob", username: "bob", text: "@dev check me", ts: "5.5" },
+              ],
+            }),
+            { status: 200 },
+          );
+        }
+        // the status postMessage answered (this line addressed "dev")
+        return new Response(JSON.stringify({ ok: true, ts: "9.9" }), { status: 200 });
+      },
+    });
+    const code = await main(["message", "check", "--as", "dev", "--backend", "slack"], io);
+    expect(code).toBe(0);
+    // no prior cursor: history asked without an `oldest`
+    expect(historySeen).toEqual(["(none)"]);
+    // one JSON line, the waiting mention, in the listen shape (mentioned stamped)
+    expect(writes).toHaveLength(1);
+    const line = JSON.parse(writes[0]!) as { text: string; channel: string; mentioned: boolean };
+    expect(line.text).toBe("@dev check me");
+    expect(line.channel).toBe("general");
+    expect(line.mentioned).toBe(true);
+    // the per-channel cursor moved: the stored slack cursor is a map, not an integer
+    const cursor = JSON.parse(readFileSync(join(cwd, ".scramble", "cursor.json"), "utf8"));
+    expect(cursor["slack:dev"]).toEqual({ general: "5.5" });
+  });
+
+  test("a second check right after prints nothing: the per-channel cursor moved", async () => {
+    const cwd = scratchDir("mslack-drain2");
+    const fetch = async (): Promise<Response> =>
+      new Response(
+        JSON.stringify({
+          ok: true,
+          messages: [
+            { type: "message", channel: "C1", user: "bob", username: "bob", text: "@dev again", ts: "6.6" },
+          ],
+        }),
+        { status: 200 },
+      );
+    const first = slackCheckIo(cwd, { fetch, write: () => {} });
+    const code1 = await main(["message", "check", "--as", "dev", "--backend", "slack"], first);
+    expect(code1).toBe(0);
+    // second check: same history, but the cursor ("6.6") excludes the line
+    const writes: string[] = [];
+    const second = slackCheckIo(cwd, { fetch, write: (l) => writes.push(l) });
+    const code2 = await main(["message", "check", "--as", "dev", "--backend", "slack"], second);
+    expect(code2).toBe(0);
+    expect(writes).toHaveLength(0);
+  });
+
+  test("a pending message sets the reading agent's status, an unaddressed one sets nothing", async () => {
+    const addressed = scratchDir("mslack-status-on");
+    const writes: string[] = [];
+    const postCount: string[] = [];
+    // history in channel general returns ONE message mentioning "dev"; the
+    // status post is chat.postMessage -> ok:true so setOn writes the ledger.
+    const ioA = slackCheckIo(addressed, {
+      write: (l) => writes.push(l),
+      fetch: async (input) => {
+        const u = String(input);
+        if (u.includes("conversations.history"))
+          return new Response(
+            JSON.stringify({
+              ok: true,
+              messages: [
+                { type: "message", channel: "C1", user: "bob", username: "bob", text: "@dev you're up", ts: "7.7" },
+              ],
+            }),
+            { status: 200 },
+          );
+        postCount.push(u);
+        return new Response(JSON.stringify({ ok: true, ts: "1.1" }), { status: 200 });
+      },
+    });
+    const c1 = await main(["message", "check", "--as", "dev", "--backend", "slack"], ioA);
+    expect(c1).toBe(0);
+    // the reading agent was addressed: a status was set in the ledger
+    expect(existsSync(join(addressed, ".scramble", "status.json"))).toBe(true);
+    const ledger = JSON.parse(readFileSync(join(addressed, ".scramble", "status.json"), "utf8"));
+    const entry = (ledger.entries as Array<{ channel: string; agent: string }>).find((e) => e.channel === "general");
+    expect(entry).toMatchObject({ channel: "general", agent: "dev" });
+
+    // now a message NOT addressed: nothing to set, no new status entry
+    const unaddressed = scratchDir("mslack-status-off");
+    const writes2: string[] = [];
+    const ioB = slackCheckIo(unaddressed, {
+      write: (l) => writes2.push(l),
+      fetch: async (input) => {
+        const u = String(input);
+        if (u.includes("conversations.history"))
+          return new Response(
+            JSON.stringify({
+              ok: true,
+              messages: [
+                { type: "message", channel: "C1", user: "bob", username: "bob", text: "general hello", ts: "8.8" },
+              ],
+            }),
+            { status: 200 },
+          );
+        return new Response(JSON.stringify({ ok: true, ts: "2.2" }), { status: 200 });
+      },
+    });
+    const c2 = await main(["message", "check", "--as", "dev", "--backend", "slack"], ioB);
+    expect(c2).toBe(0);
+    // message 8.8 is printed but not addressed: it must not have set a status
+    expect(writes2).toHaveLength(1);
+    expect(existsSync(join(unaddressed, ".scramble", "status.json"))).toBe(false);
+  });
+
+  test("the cursor advances to the NEWEST line when history returns several newest-first", async () => {
+    const cwd = scratchDir("mslack-newest");
+    const writes: string[] = [];
+    const io = slackCheckIo(cwd, {
+      write: (l) => writes.push(l),
+      fetch: async (input) => {
+        if (String(input).includes("conversations.history"))
+          return new Response(
+            JSON.stringify({
+              ok: true,
+              messages: [
+                // Slack returns newest-first; the drain cursor must keep the newest.
+                { type: "message", channel: "C1", user: "bob", username: "bob", text: "no mention", ts: "9.5" },
+                { type: "message", channel: "C1", user: "bob", username: "bob", text: "older still fresh", ts: "9.4" },
+              ],
+            }),
+            { status: 200 },
+          );
+        return new Response(JSON.stringify({ ok: true, ts: "1.1" }), { status: 200 });
+      },
+    });
+    const code = await main(["message", "check", "--as", "dev", "--backend", "slack"], io);
+    expect(code).toBe(0);
+    expect(writes).toHaveLength(2);
+    // cursor holds the newest ts for the channel, not the last-seen.
+    const cursor = JSON.parse(readFileSync(join(cwd, ".scramble", "cursor.json"), "utf8"));
+    expect(cursor["slack:dev"]).toEqual({ general: "9.5" });
+  });
+
+  test("a Slack history read failure is reported and exits nonzero", async () => {
+    const cwd = scratchDir("mslack-readfail");
+    const errs: string[] = [];
+    const io = slackCheckIo(cwd, {
+      writeErr: (l) => errs.push(l),
+      fetch: async (input) => {
+        if (String(input).includes("conversations.history"))
+          return new Response(JSON.stringify({ ok: false, error: "invalid_auth" }), { status: 200 });
+        return new Response(JSON.stringify({ ok: true, ts: "1.1" }), { status: 200 });
+      },
+    });
+    const code = await main(["message", "check", "--as", "dev", "--backend", "slack"], io);
+    expect(code).toBe(1);
+    expect(errs.join(" ")).toContain("invalid_auth");
+  });
+
+  test("a valid config without a bot token is REPORTED, never a silent nothing", async () => {
+    const cwd = scratchDir("mslack-notoken");
+    // config parses (channels+agents valid) but carries no bot token: the
+    // slack backend refuses to open, and `message check` must say so.
+    writeSlackConfig(cwd, { appToken: "xapp-1", channels: { general: "C1" }, agents: {} });
+    const errs: string[] = [];
+    const io: Io = {
+      write: () => {},
+      writeErr: (l) => errs.push(l),
+      fetch: async () => new Response(JSON.stringify({ ok: true, messages: [] }), { status: 200 }),
+      env: () => undefined,
+      cwd: () => cwd,
+      sleep: async () => {},
+      serve: async () => 0,
+      createSocket: () =>
+        ({
+          send: () => {},
+          close: () => {},
+          onopen: null,
+          onmessage: null,
+          onclose: null,
+          onerror: null,
+        }),
+    };
+    const code = await main(["message", "check", "--as", "dev", "--backend", "slack"], io);
+    expect(code).toBe(1);
+    expect(errs.join(" ")).toContain("token");
   });
 });
 

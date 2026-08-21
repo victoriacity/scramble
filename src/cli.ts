@@ -299,7 +299,7 @@ async function postText(
 ): Promise<number> {
   const thread = flags.get("thread") ?? undefined;
   const status = statusTracker(io, backend);
-  void status?.clearExpired();
+  await settleStatus(status?.clearExpired(), io);
   if (backend === "slack") {
     const from = nameFor(flags, io);
     const s = slackBackend(io);
@@ -312,11 +312,12 @@ async function postText(
       io.writeErr(`post failed: ${r.error}`);
       return 1;
     }
-    if (status !== undefined) replyStatus(status, channel, from);
+    if (status !== undefined) await settleStatus(replyStatus(status, channel, from), io);
     return 0;
   }
   const code = await postLocalCore(channel, text, flags, io, files, thread);
-  if (code === 0 && status !== undefined) replyStatus(status, channel, nameFor(flags, io));
+  if (code === 0 && status !== undefined)
+    await settleStatus(replyStatus(status, channel, nameFor(flags, io)), io);
   return code;
 }
 
@@ -380,7 +381,7 @@ async function cmdListen(argv: string[], io: Io): Promise<number> {
         name,
         token,
         (m) => {
-          if (status !== undefined) deliverStatus(status, m, name);
+          if (status !== undefined) void deliverStatus(status, m, name);
           if (m.seq > lastSeq) lastSeq = m.seq;
           io.write(JSON.stringify(m));
         },
@@ -407,7 +408,7 @@ async function cmdNext(argv: string[], io: Io): Promise<number> {
   const deadline = Date.now() + timeoutSec * 1000;
   const urls = streamUrls(url, name, channels, 0);
   const status = statusTracker(io, "local");
-  void status?.clearExpired();
+  await settleStatus(status?.clearExpired(), io);
   const responses: Response[] = [];
   const states = await Promise.all(
     urls.map(async (u) => {
@@ -451,7 +452,7 @@ async function cmdNext(argv: string[], io: Io): Promise<number> {
       await io.sleep(Math.min(remain, 100));
       const found = states.find((s) => s?.done && s.line);
       if (found?.line !== undefined) {
-        if (status !== undefined) deliverStatus(status, found.line, name);
+        if (status !== undefined) await settleStatus(deliverStatus(status, found.line, name), io);
         io.write(JSON.stringify(found.line));
         exitCode = 0;
         resolved = true;
@@ -708,21 +709,81 @@ function statusTracker(io: Io, backend: "local" | "slack"): StatusManager | unde
 }
 
 /** A delivery turns status ON for its channel when (and only when) the message
- *  is addressed to this agent. A message a channel that will stay silent must
- *  not show the agent working, so an unaddressed line sets nothing. The status
- *  fire-and-forgets ahead of the stdout write; a failure is reported by the
- *  manager, never escalated. Callers guard with a non-null status. */
-function deliverStatus(status: StatusManager, m: { channel?: unknown; mentioned?: unknown }, agent: string): void {
-  if (m.mentioned !== true) return;
-  if (typeof m.channel !== "string") return;
-  void status.setOn(m.channel, agent);
+ *  is addressed to this agent. A message on a channel that will stay silent must
+ *  not show the agent busy, so an unaddressed line sets nothing. The status is
+ *  potentially awaited by a SHORT-LIVED verb (which would otherwise exit with the
+ *  ledger write in flight); a failure is swallowed by the awaiting caller.
+ *  Callers guard with a non-null status. */
+function deliverStatus(status: StatusManager, m: { channel?: unknown; mentioned?: unknown }, agent: string): Promise<void> {
+  if (m.mentioned !== true) return Promise.resolve();
+  if (typeof m.channel !== "string") return Promise.resolve();
+  return status.setOn(m.channel, agent);
 }
 
 /** A reply by the agent clears the channel's active status as part of the same
- *  call. Fire-and-forget like the delivery hook: a failure never fails the post.
- *  Callers guard with a non-null status. */
-function replyStatus(status: StatusManager, channel: string, agent: string): void {
-  void status.clearOn(channel, agent);
+ *  call. Returned so a short-lived verb can AWAIT the ledger write (the delete
+ *  goes out, THEN status.json drops the record) before its process exits. */
+function replyStatus(status: StatusManager, channel: string, agent: string): Promise<void> {
+  return status.clearOn(channel, agent);
+}
+
+/** Await a status call, swallowing a failure so it can never fail the work that
+ *  brackets it. The StatusManager already reports its own Slack failures on
+ *  stderr; this catches an unexpected throw on top. A short-lived verb awaits
+ *  every status call it fired, so ledger writes (delivery set / reply clear /
+ *  expiry sweep) finish before the process exits. */
+async function settleStatus(p: Promise<unknown> | undefined, io: Io): Promise<void> {
+  if (p === undefined) return;
+  try {
+    await p;
+  } catch (e) {
+    io.writeErr(`status: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
+/** A slack-backend `message check` cursor is a PER-CHANNEL map (channel name ->
+ *  newest Slack ts), stored under a namespaced key in the same cursor.json so it
+ *  never collides with the local backend's agent-keyed integer cursor. Slack has
+ *  no global sequence, so the honest resume point is a conversation ts per
+ *  channel, kept client-side like the local cursor. */
+const SLACK_CURSOR_PREFIX = "slack:";
+
+function readSlackCursor(io: Io, name: string): Record<string, string> {
+  try {
+    const j = JSON.parse(readFileSync(cursorPath(io), "utf8")) as Record<string, unknown>;
+    const v = j[`${SLACK_CURSOR_PREFIX}${name}`];
+    if (typeof v === "object" && v !== null && !Array.isArray(v))
+      return v as Record<string, string>;
+  } catch {
+    /* absent or corrupt cursor: a fresh per-channel ledger, drain from the start */
+  }
+  return {};
+}
+
+function writeSlackCursor(io: Io, name: string, perChannel: Record<string, string>): void {
+  const p = cursorPath(io);
+  let j: Record<string, unknown> = {};
+  try {
+    j = JSON.parse(readFileSync(p, "utf8")) as Record<string, unknown>;
+  } catch {
+    /* absent cursor file is a fresh ledger */
+  }
+  j[`${SLACK_CURSOR_PREFIX}${name}`] = perChannel;
+  mkdirSync(join(io.cwd(), ".scramble"), { recursive: true });
+  writeFileSync(p, JSON.stringify(j));
+}
+
+/** A Slack ts (`seconds.microseconds`) as a comparable number; -1 when it does
+ *  not parse so it can never win a "newest" comparison. */
+function slackTs(ts: string): number {
+  const n = Number.parseFloat(ts);
+  return Number.isFinite(n) ? n : -1;
+}
+
+/** The newer of two ts values; an undefined cursor counts as the oldest. */
+function newerTs(a: string | undefined, b: string): string {
+  if (a === undefined || slackTs(b) > slackTs(a)) return b;
+  return a;
 }
 
 async function slackCmdNext(argv: string[], io: Io): Promise<number> {
@@ -730,7 +791,7 @@ async function slackCmdNext(argv: string[], io: Io): Promise<number> {
   const name = nameFor(flags, io);
   const timeoutSec = intFlag(flags, "timeout", 300);
   const status = statusTracker(io, "slack");
-  void status?.clearExpired();
+  await settleStatus(status?.clearExpired(), io);
   const s = slackBackend(io);
   if (s.error !== undefined || s.backend === undefined) {
     io.writeErr(s.error ?? "slack unavailable");
@@ -739,7 +800,7 @@ async function slackCmdNext(argv: string[], io: Io): Promise<number> {
   const r = await s.backend.next(positionals, name, timeoutSec, (p) => io.writeErr(`slack: ${p}`));
   if (r.code === 64) return 64;
   if (r.line !== undefined) {
-    if (status !== undefined) deliverStatus(status, r.line, name);
+    if (status !== undefined) await settleStatus(deliverStatus(status, r.line, name), io);
     io.write(JSON.stringify(r.line));
   }
   return 0;
@@ -760,7 +821,7 @@ async function slackCmdListen(argv: string[], io: Io): Promise<number> {
       positionals,
       name,
       (d) => {
-        if (status !== undefined) deliverStatus(status, d, name);
+        if (status !== undefined) void deliverStatus(status, d, name);
         io.write(JSON.stringify(d));
       },
       (p) => io.writeErr(`slack: ${p}`),
@@ -778,7 +839,7 @@ async function slackCmdListen(argv: string[], io: Io): Promise<number> {
 async function messageCheckLocal(flags: Map<string, string>, io: Io): Promise<number> {
   const name = nameFor(flags, io);
   const status = statusTracker(io, "local");
-  void status?.clearExpired();
+  await settleStatus(status?.clearExpired(), io);
   const cursor = readCursor(io, name);
   const { url, token } = resolveConfig(flags, io);
   const res = await io.fetch(`${url}/agents/${encodeURIComponent(name)}/pending?since=${cursor}`, {
@@ -790,7 +851,7 @@ async function messageCheckLocal(flags: Map<string, string>, io: Io): Promise<nu
   }
   const deliveries = (await res.json()) as Array<{ seq: number; channel?: string; mentioned?: unknown }>;
   for (const d of deliveries) {
-    if (status !== undefined) deliverStatus(status, d, name);
+    if (status !== undefined) await settleStatus(deliverStatus(status, d, name), io);
     io.write(JSON.stringify(d));
   }
   if (deliveries.length) {
@@ -800,16 +861,55 @@ async function messageCheckLocal(flags: Map<string, string>, io: Io): Promise<nu
   return 0;
 }
 
-/** Slack-backend `message check`: Slack is a live stream with no server-held
- *  inbox backlog and no per-agent cursor, so the drain is the quiet case:
- *  the config (token + socket seam) is still validated so a broken slack config
- *  is REPORTED. Nothing is pending, so print nothing and exit 0. */
+/** Slack-backend `message check`: drain every configured channel from the
+ *  agent's per-channel Slack cursor, exactly as the local path drains a pending
+ *  list — the direct mirror of `messageCheckLocal`. Slack has no server-held
+ *  per-agent inbox and no global sequence, so the cursor is the conversation ts
+ *  per channel, kept client-side in `.scramble/cursor.json` under a namespaced
+ *  key. Print one JSON line per drained message in the same shape `listen`
+ *  prints (with a `mentioned` flag for THIS agent), set the working status for
+ *  addressed lines exactly as the local path does, advance the cursor to the
+ *  newest line seen per channel, and exit 0. A broken or missing config is
+ *  REPORTED, never a silent nothing. */
 async function messageCheckSlack(flags: Map<string, string>, io: Io): Promise<number> {
-  const s = slackBackend(io);
-  if (s.error !== undefined || s.backend === undefined) {
-    io.writeErr(s.error ?? "slack unavailable");
+  const name = nameFor(flags, io);
+  const status = statusTracker(io, "slack");
+  await settleStatus(status?.clearExpired(), io);
+  const cfg = loadSlackConfig(io);
+  if (cfg === null) {
+    io.writeErr(`${slackConfigPath(io)} is missing or malformed`);
     return 1;
   }
+  const s = slackBackend(io);
+  if (s.error !== undefined || s.backend === undefined) {
+    io.writeErr(s.error ?? "slack backend unavailable");
+    return 1;
+  }
+  const started = readSlackCursor(io, name);
+  const next = { ...started };
+  for (const channel of Object.keys(cfg.channels).sort()) {
+    const cursor = started[channel];
+    // `oldest` is inclusive in Slack, so re-filter to strictly-newer lines: the
+    // cursor line itself must not re-drain on a repeat `message check`.
+    const r = await s.backend.history(channel, cursor === undefined ? undefined : cursor);
+    for (const p of r.problems) io.writeErr(`slack: ${p}`);
+    if (r.code !== 0) {
+      io.writeErr(`read failed: ${r.error}`);
+      return 1;
+    }
+    const fresh =
+      cursor === undefined ? r.messages : r.messages.filter((m) => slackTs(m.ts) > slackTs(cursor));
+    let newest: string | undefined = cursor;
+    for (const m of fresh) {
+      const mentioned = m.mentions.includes(name);
+      const line = { ...m, mentioned };
+      if (status !== undefined) await settleStatus(deliverStatus(status, line, name), io);
+      io.write(JSON.stringify(line));
+      newest = newerTs(newest, m.ts);
+    }
+    if (newest !== undefined) next[channel] = newest;
+  }
+  writeSlackCursor(io, name, next);
   return 0;
 }
 
@@ -1053,8 +1153,10 @@ export async function main(argv: string[], io: Io): Promise<number> {
   const backend = selectBackend(argv, io);
   if (backend === null) return 1;
   // Every scramble invocation clears whatever has expired before its own work,
-  // whatever verb it is. SCRAMBLE_STATUS=off makes this a no-op.
-  void statusTracker(io, backend)?.clearExpired();
+  // whatever verb it is. Awaited (not fire-and-forget) so a short-lived verb
+  // finishes the expiry sweep's ledger write before the process exits.
+  // SCRAMBLE_STATUS=off makes this a no-op.
+  await settleStatus(statusTracker(io, backend)?.clearExpired(), io);
   switch (argv[0]) {
     case "post":
       return cmdPost(argv.slice(1), io);

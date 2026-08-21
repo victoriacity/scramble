@@ -385,10 +385,68 @@ describe("status through the CLI", () => {
     }, {});
     const code = await main(["post", "general", "hi", "--as", "bob", "--backend", "slack"], io);
     expect(code).toBe(0); // the status failure never fails the post
-    await new Promise((r) => setTimeout(r, 5)); // let the fire-and-forget status clear settle
+    // NO settle timer: the short-lived verb AWAITs the status clear, so the
+    // ledger is already written (the cleared reply) when main() returns.
     expect(errs.some((e) => e.includes("cannot_delete"))).toBe(true);
     expect(messagePosts).toBe(1); // the actual postMessage carried the message
     expect(recorded(dir)).toEqual([]); // the status was still dropped locally
+  });
+
+  test("a short-lived slack reply clears the ledger before the call returns", async () => {
+    const dir = scratch("cli-slack-awaited-clear");
+    mkdirSync(join(dir, ".scramble"), { recursive: true });
+    writeFileSync(
+      join(dir, ".scramble", "slack.json"),
+      JSON.stringify({
+        token: "xoxb-app",
+        appToken: "xapp-1",
+        channels: { general: "C1" },
+        agents: { bob: {} },
+        roster: {},
+        dmChannels: {},
+      }),
+    );
+    // an active status backs the reply: the reply must write the CLEARED ledger.
+    writeStatus(statusPath(dir), [{ channel: "general", agent: "bob", ts: "ts.9", expiresAt: Date.now() + 60_000 }]);
+    const { io } = await mainIo(dir, async (url, init) => {
+      const u = String(url);
+      if (u.includes("chat.delete")) return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }, {});
+    const code = await main(["post", "general", "hi", "--as", "bob", "--backend", "slack"], io);
+    expect(code).toBe(0);
+    // NO settle/timer and NO promise inspection: the verb AWAITED clearOn, so
+    // the ledger is already empty the moment main() returned.
+    expect(recorded(dir)).toEqual([]);
+  });
+
+  test("a failed slack post earns exit 1 while a status ok:false is still reported", async () => {
+    const dir = scratch("cli-slack-fail");
+    mkdirSync(join(dir, ".scramble"), { recursive: true });
+    writeFileSync(
+      join(dir, ".scramble", "slack.json"),
+      JSON.stringify({
+        token: "xoxb-app",
+        appToken: "xapp-1",
+        channels: { general: "C1" },
+        agents: { bob: {} },
+        roster: {},
+        dmChannels: {},
+      }),
+    );
+    // an active status the failed reply must still attempt to clear (and report).
+    writeStatus(statusPath(dir), [{ channel: "general", agent: "bob", ts: "ts.7", expiresAt: Date.now() + 60_000 }]);
+    const { io, errs } = await mainIo(dir, async (url, init) => {
+      const u = String(url);
+      // the POST to general fails: the underlying post earns exit 1.
+      if (u.includes("chat.postMessage")) return new Response(JSON.stringify({ ok: false, error: "not_in_channel" }), { status: 200 });
+      if (u.includes("chat.delete")) return new Response(JSON.stringify({ ok: false, error: "cannot_delete" }), { status: 200 });
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }, {});
+    const code = await main(["post", "general", "hi", "--as", "bob", "--backend", "slack"], io);
+    // the failing status never changes the exit: the verb earns 1 from the post.
+    expect(code).toBe(1);
+    expect(errs.join(" ")).toContain("not_in_channel");
   });
 
   test("SCRAMBLE_STATUS=off performs no status and leaves no ledger", async () => {
@@ -419,5 +477,20 @@ describe("status through the CLI", () => {
     expect(lines).toHaveLength(1);
     expect(lines[0]).toMatchObject({ from: "bob", text: "@ana howdy" });
     expect(lines.some((l) => l.channel === "general" && (l.text ?? "").includes(STATUS_TEXT))).toBe(false);
+  });
+
+  test("a status write failure is caught, reported on stderr, and the verb still exits 0", async () => {
+    const dir = scratch("status-throws");
+    const store = createStore(scratch("status-throws-store"));
+    store.join("ana", "goal", "general");
+    store.post({ channel: "general", from: "bob", text: "@ana hi", id: "1" });
+    const handler = createHandler(store);
+    // status.json as a DIRECTORY makes the ledger write reject: the awaited
+    // status call throws, settleStatus catches it, and the check still exits 0.
+    mkdirSync(join(dir, ".scramble", "status.json"), { recursive: true });
+    const { io, errs } = await mainIo(dir, (u, init) => handler(new Request(u, init)), {});
+    const code = await main(["message", "check", "--as", "ana"], io);
+    expect(code).toBe(0); // a failing status never fails the verb
+    expect(errs.some((e) => e.startsWith("status:"))).toBe(true);
   });
 });
