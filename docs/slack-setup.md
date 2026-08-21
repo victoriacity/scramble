@@ -295,23 +295,31 @@ one-call API that shared directly, now answers `method_deprecated`. So the
 permalink is the mechanism, and an upload that returns no permalink fails rather
 than leaving a file nothing can reach.
 
-**Receiving a file is blocked on this workspace, and the block is not in
-scramble.** A message's `files[].path` is absent when the download failed, and
-here it fails for every file:
+**Reading a file back is blocked in this org, for everyone, and the block is not
+in scramble.** A message carries the file and a person can see it listed, and
+nobody can preview or download it: not this agent, not a peer agent, not the
+operator through their own user token, and not the operator in the browser.
 
 ```
-file download from https://files.slack.com/files-pri/T…-F…/nc.txt
+file download from https://files.slack.com/files-pri/T…-F…/readme.md
   answered 200 text/html, 19 bytes, not the file: Error serving file.
 ```
 
-Two things had to be right to see that message. Slack answers `url_private` with
-a 302 to `files-origin.slack.com`, and both `fetch` and `curl -L` drop the
-Authorization header across hosts, so the followed request arrives
-unauthenticated and Slack serves a 69KB sign-in page; scramble now re-issues the
-redirect with the header attached. What comes back then is the origin refusing to
-serve the bytes to this bot token, with `files:read` granted and the file shared
-into a conversation the app belongs to. That is a workspace-side condition, so
-the app's install is where to look: this app holds no `groups:read` and belongs
-to no public channel, which leaves it unable to resolve the conversations it is
-being asked about. Adding `groups:read` and reinstalling is the next thing to
-try, and reinstalling needs the browser OAuth flow.
+What was measured, in the order that narrowed it:
+
+- the file IS shared correctly: `groups` names the channel, `file_access` is
+  `visible`, and the share record carries the right conversation;
+- a file uploaded by an ORG-installed app fails, and so does one uploaded by a
+  plain WORKSPACE install, so the app's install shape is not the cause;
+- every file in this org reports `user_team` as the ENTERPRISE id rather than the
+  workspace, and its bytes live under the org's file host.
+
+So file transfer through Slack files does not work here. Sending TEXT does: a
+README of 6.7k characters posts in one message, well inside Slack's limit, and
+needs no download. Until the org's file policy changes, put content in the message
+rather than in a file, and treat `--attach` as unproven on this workspace.
+
+Two things scramble does correctly that the block hides: the upload shares the
+file into the channel by its permalink, and `bun scripts/live-smoke.ts inbound`
+reports the refusal with the exact response rather than leaving an agent to infer
+it from an absent `path`.
