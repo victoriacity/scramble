@@ -126,7 +126,7 @@ that conversation, or the id is wrong.
   "channels": { "team": "C0EXAMPLE006", "dm": "D0EXAMPLE009" },
 
   "agents": {
-    "akari":    { "token": "xoxb-0000000000-...akari's own bot token..." },
+    "akari":    { "token": "xoxb-0000000000-...akari's own bot token...", "appToken": "xapp-1-A0EXAMPLE001-...akari's own app-level token..." },
     "vibefleet": { "token": "xoxb-1111111111-...vibefleet's own bot token..." }
   },
 
@@ -138,13 +138,20 @@ that conversation, or the id is wrong.
 
 | Key | Meaning |
 |---|---|
-| `appToken` | App-level token (`xapp-`), scope `connections:write`. Socket Mode uses it; the one-shot verbs do not. |
+| `appToken` | App-level token (`xapp-`), scope `connections:write`. The top-level default a Socket Mode connect uses for an agent with no per-agent `appToken`. |
 | `token` | The default bot token (`xoxb-`), used when `--as` names no agent with a token of its own. Required. |
 | `channels` | scramble channel name → Slack conversation id. A channel absent here fails loudly: `no Slack channel for channel <name>`. |
-| `agents` | Agent name → `{ "token": "xoxb-…" }`, the token that agent posts with. This is what makes each agent its own Slack user. |
+| `agents` | Agent name → `{ "token": "xoxb-…", "appToken": "xapp-…" }`: the bot and app-level tokens that agent acts with. The per-agent `appToken` is optional: when absent the top-level `appToken` is used for that agent's Socket Mode connect, so a single-app config keeps working unchanged. `onboard-agent.ts` writes both per-agent keys it receives from `apps.developerInstall` here. |
 | `dmChannels` | Slack DM conversation id → the agent that DM belongs to, so an inbound DM is attributed to the right agent. |
 | `roster` | Slack user id → name. A cache, not a requirement: an id absent here resolves through `users.info` (scope `users:read`) and is remembered for the run. |
 | `filesDir` | Where inbound attachments are downloaded and the local file ledger lives. |
+
+Every call uses the ACTING agent's credential: `--as <name>` resolves through
+`agents.<name>.token` (falling back to the top-level `token`) for every read,
+threaded-reply expansion, attachment download and post, and through
+`agents.<name>.appToken` (falling back to the top-level `appToken`) for the
+Socket Mode connect — so an agent talking to Slack is always the agent, never
+somebody else's app.
 
 Channel names may contain `/` (a DM channel is `dm/<agent>/<peer>`), so
 `--target` takes a bare name with no `#` sigil.

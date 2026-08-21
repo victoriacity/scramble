@@ -1,0 +1,35 @@
+_metadata:
+  major_version: 1
+  minor_version: 1
+display_information:
+  name: scramble-agent
+  description: A scramble agent's own Slack app (one app per agent).
+  background_color: "#1a1a2e"
+features:
+  bot_user:
+    display_name: scramble-agent
+    always_online: false
+oauth_config:
+  scopes:
+    bot:
+      - chat:write
+      - chat:write.customize
+      - channels:history
+      - groups:history
+      - im:history
+      - im:write
+      - users:read
+      - channels:read
+      - channels:join
+      - files:write
+      - files:read
+      - assistant:write
+settings:
+  event_subscriptions:
+    bot_events:
+      - message.channels
+      - message.groups
+      - message.im
+  socket_mode_enabled: true
+  token_rotation_enabled: false
+  org_deploy_enabled: false

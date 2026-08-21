@@ -516,7 +516,7 @@ async function historyRead(
     // This caller (src/cli.ts) builds BOTH the status manager (which reads the
     // ledger) and the slack backend, so the living-status ts is read here and
     // handed in, rather than letting the backend know where the ledger lives.
-    const r = await s.backend.history(channel, since > 0 ? String(since) : undefined, statusTts(statusTracker(io, "slack")));
+    const r = await s.backend.history(channel, since > 0 ? String(since) : undefined, statusTts(statusTracker(io, "slack")), nameFor(flags, io));
     for (const p of r.problems) io.writeErr(`slack: ${p}`);
     if (r.code !== 0) {
       io.writeErr(`read failed: ${r.error}`);
@@ -621,7 +621,7 @@ export function loadSlackConfig(io: Io): SlackBackendConfig | null {
     const raw = readFileSync(slackConfigPath(io), "utf8");
     const j = JSON.parse(raw) as Record<string, unknown>;
     const channels = j.channels as Record<string, string> | undefined;
-    const agents = j.agents as Record<string, { token?: string; icon?: string }> | undefined;
+    const agents = j.agents as Record<string, { token?: string; icon?: string; appToken?: string }> | undefined;
     if (!channels || typeof channels !== "object" || !agents || typeof agents !== "object") {
       return null;
     }
@@ -904,7 +904,7 @@ async function messageCheckSlack(flags: Map<string, string>, io: Io): Promise<nu
     const cursor = started[channel];
     // `oldest` is inclusive in Slack, so re-filter to strictly-newer lines: the
     // cursor line itself must not re-drain on a repeat `message check`.
-    const r = await s.backend.history(channel, cursor === undefined ? undefined : cursor, tts);
+    const r = await s.backend.history(channel, cursor === undefined ? undefined : cursor, tts, name);
     for (const p of r.problems) io.writeErr(`slack: ${p}`);
     if (r.code !== 0) {
       io.writeErr(`read failed: ${r.error}`);

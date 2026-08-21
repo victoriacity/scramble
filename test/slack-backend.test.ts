@@ -1118,7 +1118,9 @@ describe("inbound file downloads", () => {
     const bytes = new TextEncoder().encode("PNG-SCREENSHOT-BYTES");
     const h = make({ filesDir: dir }, async (url, init) => {
       if (String(url).includes("files.slack.com") && init?.headers) {
-        expect((init.headers as Record<string, string>).authorization).toBe("Bearer xoxb-app");
+        // The inbound download rides the ACTING agent's (alice's) bot token,
+        // because file access follows the app.
+        expect((init.headers as Record<string, string>).authorization).toBe("Bearer T_ALICE");
         return new Response(bytes, { status: 200, headers: { "content-type": "application/octet-stream" } });
       }
       return okRouter(String(url));
@@ -1209,5 +1211,129 @@ describe("inbound file downloads", () => {
     expect(r.messages[0]!.files![0]!.path).toContain("H1-doc.txt");
     expect(Buffer.from(readFileSync(r.messages[0]!.files![0]!.path!)).equals(Buffer.from(bytes))).toBe(true);
     expect(r.problems).toHaveLength(0);
+  });
+});
+
+// --- acting-agent credentials -------------------------------------------
+// THE DEFECT: only `post` honored the acting agent's credential; every other
+// call (read, threaded-reply expansion, attachment download, socket connect)
+// used the config's DEFAULT token as whoever the acting agent was. These tests
+// prove each path now uses the ACTING agent's credential, with the default as
+// the fallback only.
+
+describe("acting-agent credentials", () => {
+  test("a read as agent B (with a token) goes out with B's token", async () => {
+    // alice has her own token T_ALICE; a history read as alice must carry it.
+    const h = make({}, async (url) => {
+      if (String(url).includes(HISTORY)) {
+        return new Response(JSON.stringify({ ok: true, messages: [{ ts: "1", user: "U111", text: "hi" }] }), { status: 200 });
+      }
+      return okRouter(String(url));
+    });
+    const r = await h.backend.history("general", undefined, undefined, "alice");
+    expect(r.code).toBe(0);
+    const call = h.fetches.find((f) => f.url.includes(HISTORY))!;
+    expect((call.init?.headers as Record<string, string>).authorization).toBe("Bearer T_ALICE");
+  });
+
+  test("a read as an agent with no token of its own uses the DEFAULT token", async () => {
+    // bob owns no token in the base config, so his read must use the default.
+    const h = make({}, async (url) => {
+      if (String(url).includes(HISTORY)) {
+        return new Response(JSON.stringify({ ok: true, messages: [{ ts: "1", user: "U111", text: "hi" }] }), { status: 200 });
+      }
+      return okRouter(String(url));
+    });
+    const r = await h.backend.history("general", undefined, undefined, "bob");
+    expect(r.code).toBe(0);
+    const call = h.fetches.find((f) => f.url.includes(HISTORY))!;
+    expect((call.init?.headers as Record<string, string>).authorization).toBe("Bearer xoxb-app");
+  });
+
+  test("a threaded-reply expansion uses the acting agent's token", async () => {
+    // alice's credential must ride the conversations.replies call too.
+    const h = make({}, async (url) => {
+      if (String(url).includes(REPLIES)) {
+        return new Response(JSON.stringify({ ok: true, messages: [
+          { ts: "5.0", thread_ts: "5.0", user: "U111", text: "root dup" },
+          { ts: "5.1", thread_ts: "5.0", user: "U111", text: "reply" },
+        ] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ ok: true, messages: [
+        { ts: "5.0", thread_ts: "5.0", reply_count: 1, user: "U111", text: "root" },
+      ] }), { status: 200 });
+    });
+    const r = await h.backend.history("general", undefined, undefined, "alice");
+    expect(r.code).toBe(0);
+    // the root itself renders with T_ALICE on its history call
+    expect(r.messages.find((m) => m.text === "root")).toBeTruthy();
+    expect(r.messages.find((m) => m.text === "reply")).toBeTruthy();
+    const repl = h.fetches.find((f) => f.url.includes(REPLIES))!;
+    expect((repl.init?.headers as Record<string, string>).authorization).toBe("Bearer T_ALICE");
+  });
+
+  test("the inbound attachment download rides the acting agent's token", async () => {
+    // listen as alice: the download of the message's file carries T_ALICE.
+    const dir = makeTmpDir("scrb-cred");
+    const bytes = new TextEncoder().encode("BYTES");
+    const h = make({ filesDir: dir }, async (url, init) => {
+      if (String(url).includes("files.slack.com") && init?.headers) {
+        expect((init.headers as Record<string, string>).authorization).toBe("Bearer T_ALICE");
+        return new Response(bytes, { status: 200, headers: { "content-type": "application/octet-stream" } });
+      }
+      return okRouter(String(url));
+    });
+    const lines: Delivery[] = [];
+    const p = h.backend.listen(["general"], "alice", (d) => lines.push(d), () => {});
+    await pump();
+    emit(h, msg({ text: "file", files: [{ id: "FC", name: "c.bin", url_private: "https://files.slack.com/fc", mimetype: "application/octet-stream" }] }));
+    await pump(12);
+    h.sockets[0]?.close();
+    await p;
+    expect(lines[0]!.files![0]!.path).toContain("FC-c.bin");
+  });
+
+  test("the socket connect uses the acting agent's appToken when present", async () => {
+    // carol has her own appToken; a listen as carol must open with it.
+    const h = make(
+      { agents: { carol: { token: "T_C", appToken: "xapp-carol" }, bob: {} } },
+      async (url) => {
+        if (String(url).includes(SOCKET_OPEN)) {
+          return new Response(JSON.stringify({ ok: true, url: "wss://s" }), { status: 200 });
+        }
+        return okRouter(String(url));
+      },
+    );
+    const p = h.backend.listen([], "carol", () => {}, () => {});
+    await pump();
+    h.sockets[0]?.close();
+    await p;
+    const open = h.fetches.find((f) => f.url.includes(SOCKET_OPEN))!;
+    expect((open.init?.headers as Record<string, string>).authorization).toBe("Bearer xapp-carol");
+  });
+
+  test("the socket connect falls back to the top-level appToken when an agent has none", async () => {
+    // alice has no per-agent appToken, so her connect must use xapp-1.
+    const h = make({}, async (url) => {
+      if (String(url).includes(SOCKET_OPEN)) {
+        return new Response(JSON.stringify({ ok: true, url: "wss://s" }), { status: 200 });
+      }
+      return okRouter(String(url));
+    });
+    const p = h.backend.listen([], "alice", () => {}, () => {});
+    await pump();
+    h.sockets[0]?.close();
+    await p;
+    const open = h.fetches.find((f) => f.url.includes(SOCKET_OPEN))!;
+    expect((open.init?.headers as Record<string, string>).authorization).toBe("Bearer xapp-1");
+  });
+
+  test("a read with no per-agent token and no default fails naming the agent and the key", async () => {
+    // token:"" (no default) and dave has no token: the read must FAIL loud.
+    const h = make({ token: "", agents: { dave: { appToken: "xapp-dave" } } });
+    const r = await h.backend.history("general", undefined, undefined, "dave");
+    expect(r.code).toBe(1);
+    expect(r.error).toContain("dave");
+    expect(r.error).toContain("token");
   });
 });

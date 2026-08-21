@@ -71,6 +71,8 @@ its own bot token, which makes it a real Slack user with an `@name` that autocom
 human can open. The scopes are `chat:write`, the history scope per conversation
 kind (`channels:history`, `groups:history`, `im:history`), `im:write`,
 `users:read`, `channels:read`, `files:read`, `files:write` and `assistant:write`.
+To create the app by hand instead, the manifest it builds lives at
+`docs/slack-manifest.yaml`.
 
 Credentials live in `~/.config/scramble/slack.json`, mode 600, outside this
 repo, because a token in a commit is readable in every clone. `docs/slack-setup.md`

@@ -241,12 +241,18 @@ type Cfg = {
   token?: string;
   appToken?: string;
   channels?: Record<string, string>;
-  agents?: Record<string, { token?: string }>;
+  agents?: Record<string, { token?: string; appToken?: string }>;
   roster?: Record<string, string>;
   dmChannels?: Record<string, string>;
 };
 const cfg: Cfg = existsSync(cfgPath) ? (JSON.parse(readFileSync(cfgPath, "utf8")) as Cfg) : {};
-cfg.agents = { ...(cfg.agents ?? {}), [agent]: { token: botToken } };
+cfg.agents = {
+  ...(cfg.agents ?? {}),
+  [agent]: {
+    token: botToken,
+    ...(appToken !== undefined && appToken !== "" ? { appToken } : {}),
+  },
+};
 cfg.token = cfg.token ?? botToken;
 if (appToken !== undefined && appToken !== "") cfg.appToken = cfg.appToken ?? appToken;
 if (channelId !== undefined && channelName !== undefined) {
