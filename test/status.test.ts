@@ -1,0 +1,424 @@
+// test/status.test.ts — the AUTOMATIC working-status surface. Status is set by
+// delivery of an addressed message and cleared by a reply, has a TTL, records to
+// .scramble/status.json, and talks to Slack through an injected fetch seam so no
+// token and no network are needed. Status is never a message and SCRAMBLE_STATUS=off
+// silences it entirely.
+import { describe, expect, test } from "bun:test";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { rmSync } from "node:fs";
+import { createStore, type ChannelStore } from "../src/store";
+import { createHandler } from "../src/server";
+import { main, type Io } from "../src/cli";
+import { StatusManager, readRecords, writeStatus, STATUS_TEXT } from "../src/status";
+
+// --- helpers ------------------------------------------------------------
+
+function scratch(name: string): string {
+  const d = join(tmpdir(), `zz-status-${name}-${process.pid}-${Math.random().toString(36).slice(2)}`);
+  rmSync(d, { recursive: true, force: true });
+  mkdirSync(d, { recursive: true });
+  return d;
+}
+
+function statusPath(dir: string): string {
+  return join(dir, ".scramble", "status.json");
+}
+
+function recorded(dir: string): ReturnType<typeof readRecords> {
+  if (!existsSync(statusPath(dir))) return [];
+  return readRecords(statusPath(dir));
+}
+
+/** A local-mode StatusManager plus a controllable clock and its scratch dir. */
+function makeLocal(): { mgr: StatusManager; advance(ms: number): void; setNow(n: number): void; dir: string } {
+  const dir = scratch("local");
+  let now = 0;
+  const mgr = new StatusManager({
+    file: statusPath(dir),
+    backend: "local",
+    now: () => now,
+    ttlMs: 10_000,
+    writeErr: () => {},
+    fetch: async () => new Response(JSON.stringify({ ok: true }), { status: 200 }),
+  });
+  return { mgr, setNow: (n) => (now = n), advance: (ms) => (now += ms), dir };
+}
+
+interface SlackHarness {
+  mgr: StatusManager;
+  calls: Array<{ url: string; body: Record<string, unknown> }>;
+  errs: string[];
+  advance(ms: number): void;
+  setNow(n: number): void;
+}
+
+/** A slack-mode StatusManager whose fetch records every call. `router` decides
+ *  the answer; the default answers ok:true and gives chat.postMessage a ts so the
+ *  living-message path is captured. */
+function makeSlack(opts?: { router?: (url: string, body: Record<string, unknown>) => Response; noToken?: boolean }): SlackHarness {
+  const dir = scratch("slack");
+  let now = 0;
+  const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+  const errs: string[] = [];
+  const token = opts?.noToken ? undefined : "xoxb";
+  const defRouter = (url: string, _body: Record<string, unknown>): Response => {
+    if (url.includes("chat.postMessage"))
+      return new Response(JSON.stringify({ ok: true, ts: "ts.1" }), { status: 200 });
+    return new Response(JSON.stringify({ ok: true }), { status: 200 });
+  };
+  const r: (url: string, body: Record<string, unknown>) => Response = opts?.router ?? defRouter;
+  const mgr = new StatusManager({
+    file: statusPath(dir),
+    backend: "slack",
+    now: () => now,
+    ttlMs: 10_000,
+    channels: { general: "C1" },
+    token,
+    writeErr: (l) => errs.push(l),
+    fetch: async (url, init) => {
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      calls.push({ url: String(url), body });
+      return r(String(url), body);
+    },
+  });
+  return { mgr, setNow: (n) => (now = n), advance: (ms) => (now += ms), calls, errs };
+}
+
+/** Drive the CLI with a fully faked io over a scratch workspace. */
+async function mainIo(
+  dir: string,
+  fetch: Io["fetch"],
+  env: Record<string, string | undefined>,
+): Promise<{ io: Io; writes: string[]; errs: string[] }> {
+  const writes: string[] = [];
+  const errs: string[] = [];
+  const io: Io = {
+    write: (l) => writes.push(l),
+    writeErr: (l) => errs.push(l),
+    fetch: async (u, init) => fetch(u, init),
+    env: (n) => env[n],
+    cwd: () => dir,
+    sleep: async () => {},
+    serve: async () => 0,
+    createSocket: () => ({
+      send: (d) => void d,
+      close: () => {},
+      onopen: null,
+      onmessage: null,
+      onclose: null,
+      onerror: null,
+    }),
+    readStdin: async () => "",
+  };
+  return { io, writes, errs };
+}
+
+/** A store seeded with ana joined into `general`, plus a bob message. Channel
+ *  handler routes CLI requests against it. */
+function seededStore(dir: string, text: string): ChannelStore {
+  const store = createStore(dir);
+  store.join("ana", "goal", "general");
+  const msg = store.post({ channel: "general", from: "bob", text, id: "s1" });
+  void msg;
+  return store;
+}
+
+const POST = "chat.postMessage";
+
+// --- ledger IO ----------------------------------------------------------
+
+describe("status ledger", () => {
+  test("writeStatus round-trips entries; readRecords reads them back", () => {
+    const dir = scratch("ledger");
+    writeStatus(statusPath(dir), [{ channel: "general", agent: "ana", expiresAt: 123 }]);
+    expect(readRecords(statusPath(dir))).toEqual([{ channel: "general", agent: "ana", expiresAt: 123 }]);
+  });
+
+  test("readRecords on a missing or corrupt file returns [] and never throws", () => {
+    const dir = scratch("ledger-missing");
+    expect(readRecords(join(dir, "nope.json"))).toEqual([]);
+    mkdirSync(join(dir, ".scramble"), { recursive: true });
+    writeFileSync(statusPath(dir), "not json{");
+    expect(readRecords(statusPath(dir))).toEqual([]);
+  });
+});
+
+// --- local backend ------------------------------------------------------
+
+describe("status local backend", () => {
+  test("a fresh set records channel+agent+expiry and becomes active", async () => {
+    const { mgr, setNow, advance, dir } = makeLocal();
+    setNow(1000);
+    await mgr.setOn("general", "ana");
+    expect(recorded(dir)).toHaveLength(1);
+    expect(recorded(dir)[0]).toMatchObject({ channel: "general", agent: "ana", expiresAt: 1000 + 10_000 });
+    expect(mgr.isActive("general")).toBe(true);
+    expect(mgr.livingTs("general")).toBeUndefined();
+    expect(STATUS_TEXT).toBe("working");
+    advance(10_001);
+    expect(mgr.isActive("general")).toBe(false);
+  });
+
+  test("a second set on one channel updates the same record, never a second", async () => {
+    const { mgr, dir } = makeLocal();
+    await mgr.setOn("general", "ana");
+    await mgr.setOn("general", "bob");
+    expect(recorded(dir)).toHaveLength(1);
+    expect(recorded(dir)[0]?.agent).toBe("bob");
+  });
+
+  test("clearing a channel with no active status is a no-op", async () => {
+    const { mgr, dir } = makeLocal();
+    await mgr.clearOn("general", "ana");
+    expect(recorded(dir)).toEqual([]);
+  });
+
+  test("clearing an active status removes the record", async () => {
+    const { mgr, dir } = makeLocal();
+    await mgr.setOn("general", "ana");
+    await mgr.clearOn("general", "ana");
+    expect(recorded(dir)).toEqual([]);
+    expect(mgr.isActive("general")).toBe(false);
+  });
+
+  test("an expired entry is cleared by the next invocation", async () => {
+    const { mgr, advance, dir } = makeLocal();
+    await mgr.setOn("general", "ana");
+    await mgr.setOn("team", "bob");
+    advance(10_001);
+    expect(await mgr.clearExpired()).toBe(2);
+    expect(recorded(dir)).toEqual([]);
+  });
+
+  test("clearExpired with nothing expired returns 0 and preserves the ledger", async () => {
+    const { mgr, dir } = makeLocal();
+    await mgr.setOn("general", "ana");
+    expect(await mgr.clearExpired()).toBe(0);
+    expect(recorded(dir)).toHaveLength(1);
+  });
+
+  test("the expiry ticker clears on expiry while running and stops on request", async () => {
+    const { mgr, dir } = makeLocal();
+    writeStatus(statusPath(dir), [{ channel: "manual", agent: "ana", expiresAt: 0 }]); // already expired
+    const stop = mgr.startExpiryTicker(1); // real timer sleep yields the event loop
+    await new Promise((r) => setTimeout(r, 20));
+    stop();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(recorded(dir)).toEqual([]); // the ticker swept the expired entry
+  });
+});
+
+// --- slack backend ------------------------------------------------------
+
+describe("status slack backend", () => {
+  test("a fresh set posts exactly one living message and remembers its ts", async () => {
+    const { mgr, calls, setNow } = makeSlack();
+    setNow(1000);
+    await mgr.setOn("general", "ana");
+    let postCount = 0;
+    for (const c of calls) if (c.url.includes(POST)) postCount++;
+    expect(postCount).toBe(1);
+    const post = calls.find((c) => c.url.includes(POST));
+    expect(post?.body).toMatchObject({ channel: "C1", text: STATUS_TEXT });
+    expect(mgr.livingTs("general")).toBe("ts.1");
+  });
+
+  test("a second status for one channel updates with the remembered ts, no new post", async () => {
+    const { mgr, calls } = makeSlack();
+    await mgr.setOn("general", "ana");
+    await mgr.setOn("general", "bob");
+    const updates = calls.filter((c) => c.url.includes("chat.update"));
+    expect(updates).toHaveLength(1);
+    expect(updates[0]?.body).toMatchObject({ channel: "C1", ts: "ts.1", text: STATUS_TEXT });
+    expect(calls.filter((c) => c.url.includes(POST))).toHaveLength(1);
+  });
+
+  test("a thread target prefers assistant.threads.setStatus then posts a living message", async () => {
+    const { mgr, calls } = makeSlack();
+    await mgr.setOn("general", "ana", "thread.9");
+    expect(calls.filter((c) => c.url.includes("assistant.threads.setStatus"))).toHaveLength(1);
+    expect(calls.find((c) => c.url.includes("assistant.threads.setStatus"))?.body).toMatchObject({
+      channel_id: "C1",
+      thread_ts: "thread.9",
+    });
+    expect(calls.filter((c) => c.url.includes(POST))).toHaveLength(1);
+  });
+
+  test("clearing deletes the living message in the same call", async () => {
+    const { mgr, calls } = makeSlack();
+    await mgr.setOn("general", "ana");
+    await mgr.clearOn("general", "ana");
+    expect(calls.filter((c) => c.url.includes("chat.delete"))).toHaveLength(1);
+    expect(calls.find((c) => c.url.includes("chat.delete"))?.body).toMatchObject({ channel: "C1", ts: "ts.1" });
+  });
+
+  test("a refused delete replaces the living message text instead", async () => {
+    const refusing = (url: string): Response => {
+      if (url.includes("chat.delete")) return new Response(JSON.stringify({ ok: false, error: "cannot_delete" }), { status: 200 });
+      if (url.includes(POST)) return new Response(JSON.stringify({ ok: true, ts: "ts.1" }), { status: 200 });
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    };
+    const { mgr, calls, errs } = makeSlack({ router: refusing });
+    await mgr.setOn("general", "ana");
+    await mgr.clearOn("general", "ana");
+    const updates = calls.filter((c) => c.url.includes("chat.update"));
+    expect(updates).toHaveLength(1);
+    expect(updates[0]?.body).toMatchObject({ channel: "C1", ts: "ts.1", text: "" });
+    expect(errs.join(" ")).toContain("cannot_delete");
+  });
+
+  test("a Slack ok:false on the status post is reported and postMessage carries on", async () => {
+    const failing = (url: string, body: Record<string, unknown>): Response => {
+      if (url.includes(POST) && body.text === STATUS_TEXT)
+        return new Response(JSON.stringify({ ok: false, error: "invalid_auth" }), { status: 200 });
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    };
+    const { mgr, errs } = makeSlack({ router: failing });
+    await mgr.setOn("general", "ana");
+    expect(errs.join(" ")).toContain("invalid_auth");
+    // the status is recorded despite the failed Slack call, so the lifecycle stays.
+    expect(mgr.livingTs("general")).toBeUndefined();
+  });
+
+  test("a network failure and a non-JSON answer are surfaced as failures", async () => {
+    const throwing = (): Response => {
+      throw new Error("network");
+    };
+    const { mgr, errs } = makeSlack({ router: throwing });
+    await mgr.setOn("general", "ana");
+    expect(errs.join(" ")).toContain("status request failed");
+
+    const nonJson = (): Response => new Response("not json", { status: 200 });
+    const { mgr: m2, errs: e2 } = makeSlack({ router: nonJson });
+    await m2.setOn("general", "bob");
+    expect(e2.join(" ")).toContain("non-JSON");
+
+    const scalar = (): Response => new Response("42", { status: 200 });
+    const { mgr: m3, errs: e3 } = makeSlack({ router: scalar });
+    await m3.setOn("general", "carol");
+    expect(e3.join(" ")).toContain("non-object");
+  });
+
+  test("a missing token reports without a call", async () => {
+    const { mgr, calls, errs } = makeSlack({ noToken: true });
+    expect(calls).toEqual([]);
+    await mgr.setOn("general", "ana"); // reports the token error, no fetch
+    expect(calls).toEqual([]);
+    expect(errs.join(" ")).toContain("status needs a Slack token");
+  });
+
+  test("an expired slack entry is deleted on the next invocation", async () => {
+    const { mgr, advance, calls } = makeSlack();
+    await mgr.setOn("general", "ana");
+    advance(10_001);
+    await mgr.clearExpired();
+    expect(calls.filter((c) => c.url.includes("chat.delete"))).toHaveLength(1);
+  });
+});
+
+// --- CLI integration ----------------------------------------------------
+
+describe("status through the CLI", () => {
+  test("a message addressed to this agent sets the status for that channel", async () => {
+    const dir = scratch("cli-deliver");
+    const store = seededStore(dir, "@ana hi");
+    const handler = createHandler(store);
+    const { io } = await mainIo(dir, (u, init) => handler(new Request(u, init)), {});
+    const code = await main(["message", "check", "--as", "ana"], io);
+    expect(code).toBe(0);
+    expect(recorded(dir)).toHaveLength(1);
+    expect(recorded(dir)[0]).toMatchObject({ channel: "general", agent: "ana" });
+  });
+
+  test("a message NOT addressed to this agent sets nothing", async () => {
+    const dir = scratch("cli-unaddressed");
+    const store = createStore(scratch("cli-unaddressed-store"));
+    store.join("ana", "goal", "general");
+    store.join("bob", "goal", "general");
+    store.post({ channel: "general", from: "bob", text: "hello everyone", id: "1" });
+    const handler = createHandler(store);
+    const { io } = await mainIo(dir, (u, init) => handler(new Request(u, init)), {});
+    const code = await main(["message", "check", "--as", "ana"], io);
+    expect(code).toBe(0);
+    expect(recorded(dir)).toEqual([]);
+  });
+
+  test("a reply clears the active status in the same call", async () => {
+    const dir = scratch("cli-reply");
+    const store = seededStore(dir, "@ana hi");
+    const handler = createHandler(store);
+    const { io } = await mainIo(dir, (u, init) => handler(new Request(u, init)), {});
+    await main(["message", "check", "--as", "ana"], io); // delivery sets the status
+    expect(recorded(dir)).toHaveLength(1);
+    const code = await main(["post", "general", "answering now", "--as", "ana"], io);
+    expect(code).toBe(0);
+    expect(recorded(dir)).toEqual([]);
+  });
+
+  test("a Slack ok:false status answer is reported while the post itself still succeeds", async () => {
+    const dir = scratch("cli-slack-okfalse");
+    mkdirSync(join(dir, ".scramble"), { recursive: true });
+    writeFileSync(
+      join(dir, ".scramble", "slack.json"),
+      JSON.stringify({
+        token: "xoxb-app",
+        appToken: "xapp-1",
+        channels: { general: "C1" },
+        agents: { bob: {} },
+        roster: {},
+        dmChannels: {},
+        botIds: [],
+      }),
+    );
+    // an active status with a living message: the reply must clear it.
+    writeStatus(statusPath(dir), [{ channel: "general", agent: "bob", ts: "1.9", expiresAt: Date.now() + 60_000 }]);
+    let messagePosts = 0;
+    const { io, errs } = await mainIo(dir, async (url, init) => {
+      const u = String(url);
+      if (u.includes("chat.postMessage")) {
+        messagePosts++;
+        return new Response(JSON.stringify({ ok: true, ts: "5.5" }), { status: 200 });
+      }
+      if (u.includes("chat.delete")) return new Response(JSON.stringify({ ok: false, error: "cannot_delete" }), { status: 200 });
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }, {});
+    const code = await main(["post", "general", "hi", "--as", "bob", "--backend", "slack"], io);
+    expect(code).toBe(0); // the status failure never fails the post
+    await new Promise((r) => setTimeout(r, 5)); // let the fire-and-forget status clear settle
+    expect(errs.some((e) => e.includes("cannot_delete"))).toBe(true);
+    expect(messagePosts).toBe(1); // the actual postMessage carried the message
+    expect(recorded(dir)).toEqual([]); // the status was still dropped locally
+  });
+
+  test("SCRAMBLE_STATUS=off performs no status and leaves no ledger", async () => {
+    const dir = scratch("cli-off");
+    const store = seededStore(dir, "@ana hi");
+    const handler = createHandler(store);
+    const { io } = await mainIo(dir, (u, init) => handler(new Request(u, init)), { SCRAMBLE_STATUS: "off" });
+    const code = await main(["message", "check", "--as", "ana"], io);
+    expect(code).toBe(0);
+    expect(recorded(dir)).toEqual([]);
+  });
+
+  test("status appears in neither history nor a listener's stdout", async () => {
+    const dir = scratch("cli-hidden");
+    const store = createStore(scratch("cli-hidden-store"));
+    store.join("ana", "goal", "general");
+    store.post({ channel: "general", from: "bob", text: "@ana howdy", id: "1" });
+    const handler = createHandler(store);
+    const { io: ioCheck } = await mainIo(dir, (u, init) => handler(new Request(u, init)), {});
+    await main(["message", "check", "--as", "ana"], ioCheck);
+    expect(recorded(dir)).toHaveLength(1); // a status EXISTS in the ledger
+
+    // history: only the one real message, never a status line.
+    const { io, writes } = await mainIo(dir, (u, init) => handler(new Request(u, init)), { SCRAMBLE_STATUS: "off" });
+    const code = await main(["history", "general"], io);
+    expect(code).toBe(0);
+    const lines = writes.map((l) => JSON.parse(l));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({ from: "bob", text: "@ana howdy" });
+    expect(lines.some((l) => l.channel === "general" && (l.text ?? "").includes(STATUS_TEXT))).toBe(false);
+  });
+});

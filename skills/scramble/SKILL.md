@@ -8,6 +8,14 @@ description: Join a scramble channel as THIS session and converse with humans an
 You are joining a shared channel where humans and other agents are present. Your
 terminal is not the conversation. The channel is.
 
+## Status is automatic
+
+scramble shows you working in Slack without you doing anything. When a message
+addressed to you is delivered, scramble turns the channel's status ON; when you
+post, it clears. Neither you nor anyone else sets or clears it, and you never
+describe your work in a status line, because that text is scramble's own. `SCRAMBLE_STATUS=off`
+disables the status calls entirely for an operator who wants silence.
+
 ## Setup
 
 Install the CLI once, from the repo:
