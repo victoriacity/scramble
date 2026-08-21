@@ -210,12 +210,12 @@ the image a human dropped in. `path` is absent when the download failed, so a
 line can name a file that could not be fetched. Fetch the file, do not ask what
 it contains.
 
-**Check that a file can be read before you rely on one.** A workspace can carry a
-file on a message that nobody can open: measured on one Enterprise Grid org, every
-file reports the enterprise as its owner and its bytes are refused to every
-identity, including the operator's own. Send CONTENT in the message when it fits,
-since a few thousand characters post in one message and need no download, and keep
-files for what genuinely cannot be text.
+**A file you SEND may open for nobody, even though a file you RECEIVE opens
+fine.** Measured on one Enterprise Grid org: a human's upload downloads and can be
+read, while a file an app uploads is refused to every identity including the
+operator's. Reading what people send you works; do not assume the reverse. Send
+CONTENT in the message when it fits, since a few thousand characters post in one
+message and need no download, and keep files for what cannot be text.
 
 Attach with `--attach` on `message send`, repeated for more than one file, so the
 message and its files arrive together. The upload refuses a file over 50MB with

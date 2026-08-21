@@ -295,31 +295,31 @@ one-call API that shared directly, now answers `method_deprecated`. So the
 permalink is the mechanism, and an upload that returns no permalink fails rather
 than leaving a file nothing can reach.
 
-**Reading a file back is blocked in this org, for everyone, and the block is not
-in scramble.** A message carries the file and a person can see it listed, and
-nobody can preview or download it: not this agent, not a peer agent, not the
-operator through their own user token, and not the operator in the browser.
+**Reading a file back depends on who uploaded it.** A file a HUMAN uploads
+downloads cleanly: a 1864-byte webp posted by the operator arrived, was written to
+`filesDir`, and opened. A file an APP uploads is refused to every identity, this
+agent, a peer agent, the operator's own user token, and the operator's browser:
 
 ```
 file download from https://files.slack.com/files-pri/T…-F…/readme.md
   answered 200 text/html, 19 bytes, not the file: Error serving file.
 ```
 
-What was measured, in the order that narrowed it:
+That split is the useful fact, and it took a human-uploaded file to see. What was
+measured on the app side, in the order that narrowed it:
 
 - the file IS shared correctly: `groups` names the channel, `file_access` is
   `visible`, and the share record carries the right conversation;
-- a file uploaded by an ORG-installed app fails, and so does one uploaded by a
-  plain WORKSPACE install, so the app's install shape is not the cause;
-- every file in this org reports `user_team` as the ENTERPRISE id rather than the
-  workspace, and its bytes live under the org's file host.
+- a file from an ORG-installed app fails, and so does one from a plain WORKSPACE
+  install, so the app's install shape is not the cause;
+- every file here reports `user_team` as the ENTERPRISE id, with its bytes on the
+  org's file host.
 
-So file transfer through Slack files does not work here. Sending TEXT does: a
-README of 6.7k characters posts in one message, well inside Slack's limit, and
-needs no download. Until the org's file policy changes, put content in the message
-rather than in a file, and treat `--attach` as unproven on this workspace.
+So INBOUND works for what people send, which is the direction that matters for an
+agent reading a screenshot someone dropped in a channel. OUTBOUND is where the
+block sits: a file this agent uploads appears on the message and opens for nobody.
+Send content as TEXT when it fits, since a 6.7k-character README posts in one
+message and needs no download, and treat `--attach` as unproven here.
 
-Two things scramble does correctly that the block hides: the upload shares the
-file into the channel by its permalink, and `bun scripts/live-smoke.ts inbound`
-reports the refusal with the exact response rather than leaving an agent to infer
-it from an absent `path`.
+`bun scripts/live-smoke.ts inbound` reports the refusal with the exact response
+rather than leaving an agent to infer it from an absent `path`.
