@@ -36,9 +36,10 @@ export const STATUS_TEXT = "working";
  *  text, because a human, or an agent, is allowed to say "working". */
 export const STATUS_METADATA_TYPE = "scramble_status";
 
-const POST_URL = "https://slack.com/api/chat.postMessage";
-const UPDATE_URL = "https://slack.com/api/chat.update";
 const DELETE_URL = "https://slack.com/api/chat.delete";
+/** Used only to blank a living message left by a record written before
+ *  statuses became Slack's own thread status, when the delete is refused. */
+const UPDATE_URL = "https://slack.com/api/chat.update";
 const THREAD_STATUS_URL = "https://slack.com/api/assistant.threads.setStatus";
 
 /** Backend-selection answers the CLI already knows: the local daemon records
@@ -51,8 +52,13 @@ export type StatusBackend = "local" | "slack";
 export interface StatusRecord {
   channel: string;
   agent: string;
-  /** Slack ts of the living message that backs the status, when one exists. */
+  /** Slack ts of the living message that backs the status. Kept for a record
+   *  written before statuses became Slack's own thread status, so an old living
+   *  message is still cleaned up rather than stranded in the channel. */
   ts?: string;
+  /** The thread whose Slack status this agent set, cleared by setting it back
+   *  to empty. */
+  thread?: string;
   /** epoch ms after which the status is stale and must be cleared. */
   expiresAt: number;
 }
@@ -162,33 +168,11 @@ export class StatusManager {
   /** Post the living-message status into a channel. Captures the new ts so the
    *  update/delete/expire paths can address it. Returns the ts, or undefined on
    *  a failure (reported, never escalated). */
-  private async postLiving(channelId: string): Promise<string | undefined> {
-    const r = await this.call(POST_URL, {
-      channel: channelId,
-      text: STATUS_TEXT,
-      metadata: { event_type: STATUS_METADATA_TYPE, event_payload: {} },
-    });
-    if (!r.ok) {
-      this.report(r.error ?? "post failed");
-      return undefined;
-    }
-    return r.ts;
-  }
+  // postLiving and updateLiving are GONE. They posted and edited a `working`
+  // message to stand in for a status, which Slack's own status does properly on
+  // a thread, and keeping both would be two ways to say one thing. clearLiving
+  // stays: a record written before this change still names a message to remove.
 
-  /** Update the remembered living message. A failure is reported only. */
-  private async updateLiving(channelId: string, ts: string): Promise<void> {
-    const r = await this.call(UPDATE_URL, {
-      channel: channelId,
-      ts,
-      text: STATUS_TEXT,
-      metadata: { event_type: STATUS_METADATA_TYPE, event_payload: {} },
-    });
-    if (!r.ok) this.report(r.error ?? "update failed");
-  }
-
-  /** Clear a living message: chat.delete it, and when delete is refused, replace
-   *  its text content instead so the cleared status still lands. Neither a
-   *  refusal nor a failure escalates. */
   private async clearLiving(channelId: string, ts: string): Promise<void> {
     const d = await this.call(DELETE_URL, { channel: channelId, ts });
     if (d.ok) return;
@@ -197,16 +181,30 @@ export class StatusManager {
     if (!u.ok) this.report(u.error ?? "replace failed");
   }
 
-  /** Prefer an assistant-thread status when one is known. A failure is reported
-   *  and the living message still carries the weight, so the work stays live. */
-  private async setThreadStatus(channelId: string, threadTs: string): Promise<void> {
-    const r = await this.call(THREAD_STATUS_URL, { channel_id: channelId, thread_ts: threadTs });
-    if (!r.ok) this.report(r.error ?? "thread status failed");
+  /** Set Slack's own status on a thread. Reports a failure and answers whether
+   *  it took, so the caller records the thread only when Slack accepted it. */
+  private async setThreadStatus(channelId: string, threadTs: string, status: string): Promise<boolean> {
+    const r = await this.call(THREAD_STATUS_URL, { channel_id: channelId, thread_ts: threadTs, status });
+    if (!r.ok) {
+      this.report(r.error ?? "thread status failed");
+      return false;
+    }
+    return true;
   }
 
-  /** Set the status ON for a channel: a fresh status posts one living message
-   *  (and prefers an assistant-thread status when a thread is named); an active
-   *  status is updated in place, never re-posted. */
+  /** Set the status ON: Slack's OWN status where Slack has one, and nothing at
+   *  all where it does not.
+   *
+   *  `assistant.threads.setStatus` works on an ordinary channel thread, which I
+   *  had assumed needed an assistant DM: probed on a real channel thread it
+   *  answers ok:true. That is the whole reason the living message existed, and a
+   *  status is not a message, so posting one into the channel was the wrong
+   *  shape (operator, 2026-08-21: "why did you send a working text to the
+   *  channel? this should be implemented in slack assistant status, not
+   *  message").
+   *
+   *  With no thread there is no native status, and the answer there is silence
+   *  rather than a message pretending to be one. */
   async setOn(channel: string, agent: string, threadTs?: string): Promise<void> {
     const records = this.load();
     const idx = records.findIndex((r) => r.channel === channel);
@@ -214,9 +212,11 @@ export class StatusManager {
       const rec = records[idx]!;
       rec.agent = agent;
       rec.expiresAt = this.cfg.now() + this.cfg.ttlMs;
-      if (this.cfg.backend === "slack" && rec.ts !== undefined) {
+      // Re-assert Slack's own status rather than editing a message: setting it
+      // again on the same thread is how it stays up while the agent works.
+      if (this.cfg.backend === "slack" && rec.thread !== undefined) {
         const cid = this.channelId(channel);
-        if (cid !== undefined && rec.ts !== undefined) await this.updateLiving(cid, rec.ts);
+        if (cid !== undefined) await this.setThreadStatus(cid, rec.thread, STATUS_TEXT);
       }
       this.save(records);
       return;
@@ -228,10 +228,8 @@ export class StatusManager {
     };
     if (this.cfg.backend === "slack") {
       const cid = this.channelId(channel);
-      if (cid !== undefined) {
-        if (threadTs !== undefined) await this.setThreadStatus(cid, threadTs);
-        const ts = await this.postLiving(cid);
-        if (ts !== undefined) rec.ts = ts;
+      if (cid !== undefined && threadTs !== undefined) {
+        rec.thread = (await this.setThreadStatus(cid, threadTs, STATUS_TEXT)) ? threadTs : undefined;
       }
     }
     records.push(rec);
@@ -246,9 +244,13 @@ export class StatusManager {
     const idx = records.findIndex((r) => r.channel === channel);
     if (idx < 0) return;
     const rec = records[idx]!;
-    if (this.cfg.backend === "slack" && rec.ts !== undefined) {
+    if (this.cfg.backend === "slack") {
       const cid = this.channelId(channel);
-      if (cid !== undefined) await this.clearLiving(cid, rec.ts);
+      // An EMPTY status is how Slack is told the agent stopped working.
+      if (cid !== undefined && rec.thread !== undefined) await this.setThreadStatus(cid, rec.thread, "");
+      // A living message from before this changed shape is still removed, so no
+      // old status is stranded in a channel.
+      if (cid !== undefined && rec.ts !== undefined) await this.clearLiving(cid, rec.ts);
     }
     records.splice(idx, 1);
     this.save(records);
@@ -292,9 +294,12 @@ export class StatusManager {
     if (kept.length === records.length) return 0;
     for (const rec of records) {
       if (rec.expiresAt > now) continue;
-      if (this.cfg.backend === "slack" && rec.ts !== undefined) {
+      if (this.cfg.backend === "slack") {
         const cid = this.channelId(rec.channel);
-        if (cid !== undefined) await this.clearLiving(cid, rec.ts);
+        // Slack's own status is what an expiry has to take down; a `ts` only
+        // appears on a record written before this changed shape.
+        if (cid !== undefined && rec.thread !== undefined) await this.setThreadStatus(cid, rec.thread, "");
+        if (cid !== undefined && rec.ts !== undefined) await this.clearLiving(cid, rec.ts);
       }
     }
     this.save(kept);

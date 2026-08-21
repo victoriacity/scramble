@@ -1471,7 +1471,7 @@ describe("the automatic status posts as the ACTING agent", () => {
   // different app that is usually not in the agent's channel: Slack answered
   // channel_not_found, a failed status never fails the work it brackets, and the
   // feature was silently dead for every agent except the default.
-  test("the living status is posted with the acting agent's own token", async () => {
+  test("the status call goes out with the acting agent's own token", async () => {
     const cwd = scratchDir("status-token");
     writeSlackConfig(cwd, {
       token: "xoxb-DEFAULT",
@@ -1485,9 +1485,9 @@ describe("the automatic status posts as the ACTING agent", () => {
       writeErr: () => {},
       fetch: async (input, init) => {
         const u = String(input);
-        if (u.includes("chat.postMessage")) {
+        if (u.includes("assistant.threads.setStatus")) {
           auths.push(String((init?.headers as Record<string, string>)["authorization"]));
-          return new Response(JSON.stringify({ ok: true, ts: "7.7" }), { status: 200 });
+          return new Response(JSON.stringify({ ok: true }), { status: 200 });
         }
         if (u.includes("conversations.history")) {
           return new Response(
@@ -1508,10 +1508,12 @@ describe("the automatic status posts as the ACTING agent", () => {
     expect(auths).toContain("Bearer T_DEV");
     expect(auths).not.toContain("Bearer xoxb-DEFAULT");
     const ledger = JSON.parse(readFileSync(join(cwd, ".scramble", "status.json"), "utf8")) as {
-      entries: Array<{ ts?: string }>;
+      entries: Array<{ thread?: string; ts?: string }>;
     };
-    // A recorded ts is the proof a living message actually reached Slack.
-    expect(ledger.entries[0]!.ts).toBe("7.7");
+    // A recorded THREAD is the proof Slack accepted the status, and no `ts`,
+    // because a status is no longer a message.
+    expect(ledger.entries[0]!.thread).toBe("5.5");
+    expect(ledger.entries[0]!.ts).toBeUndefined();
   });
 });
 

@@ -786,10 +786,20 @@ function statusTracker(io: Io, backend: "local" | "slack", agent?: string): Stat
  *  potentially awaited by a SHORT-LIVED verb (which would otherwise exit with the
  *  ledger write in flight); a failure is swallowed by the awaiting caller.
  *  Callers guard with a non-null status. */
-function deliverStatus(status: StatusManager, m: { channel?: unknown; mentioned?: unknown }, agent: string): Promise<void> {
+function deliverStatus(
+  status: StatusManager,
+  m: { channel?: unknown; mentioned?: unknown; thread?: unknown; ts?: unknown; id?: unknown },
+  agent: string,
+): Promise<void> {
   if (m.mentioned !== true) return Promise.resolve();
   if (typeof m.channel !== "string") return Promise.resolve();
-  return status.setOn(m.channel, agent);
+  // Slack's status hangs off a THREAD, so the thread this message belongs to is
+  // where the agent shows as working: the thread root when the message is a
+  // reply, and the message itself when it is top-level, since answering it
+  // starts that thread.
+  const thread =
+    typeof m.thread === "string" ? m.thread : typeof m.ts === "string" ? m.ts : undefined;
+  return status.setOn(m.channel, agent, thread);
 }
 
 /** A reply by the agent clears the channel's active status as part of the same

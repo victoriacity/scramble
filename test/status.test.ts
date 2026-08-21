@@ -52,6 +52,9 @@ interface SlackHarness {
   errs: string[];
   advance(ms: number): void;
   setNow(n: number): void;
+  /** The scratch workspace, so a test can plant a ledger record written by an
+   *  older version of this code. */
+  dir: string;
 }
 
 /** A slack-mode StatusManager whose fetch records every call. `router` decides
@@ -83,7 +86,7 @@ function makeSlack(opts?: { router?: (url: string, body: Record<string, unknown>
       return r(String(url), body);
     },
   });
-  return { mgr, setNow: (n) => (now = n), advance: (ms) => (now += ms), calls, errs };
+  return { mgr, setNow: (n) => (now = n), advance: (ms) => (now += ms), calls, errs, dir };
 }
 
 /** Drive the CLI with a fully faked io over a scratch workspace. */
@@ -213,70 +216,90 @@ describe("status local backend", () => {
 // --- slack backend ------------------------------------------------------
 
 describe("status slack backend", () => {
-  test("a fresh set posts exactly one living message and remembers its ts", async () => {
-    const { mgr, calls, setNow } = makeSlack();
-    setNow(1000);
-    await mgr.setOn("general", "ana");
-    let postCount = 0;
-    for (const c of calls) if (c.url.includes(POST)) postCount++;
-    expect(postCount).toBe(1);
-    const post = calls.find((c) => c.url.includes(POST));
-    expect(post?.body).toMatchObject({ channel: "C1", text: STATUS_TEXT });
-    expect(mgr.livingTs("general")).toBe("ts.1");
-  });
-
-  test("a second status for one channel updates with the remembered ts, no new post", async () => {
-    const { mgr, calls } = makeSlack();
-    await mgr.setOn("general", "ana");
-    await mgr.setOn("general", "bob");
-    const updates = calls.filter((c) => c.url.includes("chat.update"));
-    expect(updates).toHaveLength(1);
-    expect(updates[0]?.body).toMatchObject({ channel: "C1", ts: "ts.1", text: STATUS_TEXT });
-    expect(calls.filter((c) => c.url.includes(POST))).toHaveLength(1);
-  });
-
-  test("a thread target prefers assistant.threads.setStatus then posts a living message", async () => {
+  // A status is SLACK'S OWN status on a thread, not a message. Posting a
+  // `working` line into the channel was the wrong shape, and setStatus works on
+  // an ordinary channel thread, which is what makes the message unnecessary
+  // (operator, 2026-08-21).
+  test("a status on a thread is Slack's own status, and NO message is posted", async () => {
     const { mgr, calls } = makeSlack();
     await mgr.setOn("general", "ana", "thread.9");
-    expect(calls.filter((c) => c.url.includes("assistant.threads.setStatus"))).toHaveLength(1);
-    expect(calls.find((c) => c.url.includes("assistant.threads.setStatus"))?.body).toMatchObject({
-      channel_id: "C1",
-      thread_ts: "thread.9",
-    });
-    expect(calls.filter((c) => c.url.includes(POST))).toHaveLength(1);
+    const set = calls.filter((c) => c.url.includes("assistant.threads.setStatus"));
+    expect(set).toHaveLength(1);
+    expect(set[0]?.body).toMatchObject({ channel_id: "C1", thread_ts: "thread.9", status: STATUS_TEXT });
+    expect(calls.filter((c) => c.url.includes(POST))).toHaveLength(0);
+    expect(calls.filter((c) => c.url.includes("chat.update"))).toHaveLength(0);
   });
 
-  test("clearing deletes the living message in the same call", async () => {
+  test("with NO thread there is no native status, so nothing is sent at all", async () => {
+    // Silence beats a message pretending to be a status.
     const { mgr, calls } = makeSlack();
     await mgr.setOn("general", "ana");
-    await mgr.clearOn("general", "ana");
-    expect(calls.filter((c) => c.url.includes("chat.delete"))).toHaveLength(1);
-    expect(calls.find((c) => c.url.includes("chat.delete"))?.body).toMatchObject({ channel: "C1", ts: "ts.1" });
+    expect(calls.filter((c) => c.url.includes(POST))).toHaveLength(0);
+    expect(calls.filter((c) => c.url.includes("assistant.threads.setStatus"))).toHaveLength(0);
   });
 
-  test("a refused delete replaces the living message text instead", async () => {
-    const refusing = (url: string): Response => {
-      if (url.includes("chat.delete")) return new Response(JSON.stringify({ ok: false, error: "cannot_delete" }), { status: 200 });
-      if (url.includes(POST)) return new Response(JSON.stringify({ ok: true, ts: "ts.1" }), { status: 200 });
-      return new Response(JSON.stringify({ ok: true }), { status: 200 });
-    };
+  test("a refresh re-asserts the thread status rather than editing a message", async () => {
+    const { mgr, calls } = makeSlack();
+    await mgr.setOn("general", "ana", "thread.9");
+    await mgr.setOn("general", "bob", "thread.9");
+    expect(calls.filter((c) => c.url.includes("assistant.threads.setStatus"))).toHaveLength(2);
+    expect(calls.filter((c) => c.url.includes("chat.update"))).toHaveLength(0);
+  });
+
+  test("clearing sets the thread status back to EMPTY", async () => {
+    const { mgr, calls } = makeSlack();
+    await mgr.setOn("general", "ana", "thread.9");
+    await mgr.clearOn("general", "ana");
+    const set = calls.filter((c) => c.url.includes("assistant.threads.setStatus"));
+    expect(set).toHaveLength(2);
+    expect(set[1]?.body).toMatchObject({ channel_id: "C1", thread_ts: "thread.9", status: "" });
+  });
+
+  test("a REFUSED setStatus records no thread, so a clear does not claim one", async () => {
+    const refusing = (url: string): Response =>
+      url.includes("assistant.threads.setStatus")
+        ? new Response(JSON.stringify({ ok: false, error: "invalid_thread_ts" }), { status: 200 })
+        : new Response(JSON.stringify({ ok: true }), { status: 200 });
     const { mgr, calls, errs } = makeSlack({ router: refusing });
-    await mgr.setOn("general", "ana");
+    await mgr.setOn("general", "ana", "thread.9");
+    await mgr.clearOn("general", "ana");
+    expect(errs.join(" ")).toContain("invalid_thread_ts");
+    // One attempt to set, and no attempt to clear a status that was never set.
+    expect(calls.filter((c) => c.url.includes("assistant.threads.setStatus"))).toHaveLength(1);
+  });
+
+  test("a living message from an OLD record is still cleaned up", async () => {
+    // A record written before this change names a message; leaving it would
+    // strand a `working` line in the channel forever.
+    const { mgr, calls, dir } = makeSlack();
+    writeStatus(statusPath(dir), [{ channel: "general", agent: "ana", ts: "old.1", expiresAt: 9_999_999_999_999 }]);
+    await mgr.clearOn("general", "ana");
+    const del = calls.filter((c) => c.url.includes("chat.delete"));
+    expect(del).toHaveLength(1);
+    expect(del[0]?.body).toMatchObject({ channel: "C1", ts: "old.1" });
+  });
+
+  test("a refused delete of an old living message replaces its text instead", async () => {
+    const refusing = (url: string): Response =>
+      url.includes("chat.delete")
+        ? new Response(JSON.stringify({ ok: false, error: "cannot_delete" }), { status: 200 })
+        : new Response(JSON.stringify({ ok: true }), { status: 200 });
+    const { mgr, calls, errs, dir } = makeSlack({ router: refusing });
+    writeStatus(statusPath(dir), [{ channel: "general", agent: "ana", ts: "old.1", expiresAt: 9_999_999_999_999 }]);
     await mgr.clearOn("general", "ana");
     const updates = calls.filter((c) => c.url.includes("chat.update"));
     expect(updates).toHaveLength(1);
-    expect(updates[0]?.body).toMatchObject({ channel: "C1", ts: "ts.1", text: "" });
+    expect(updates[0]?.body).toMatchObject({ channel: "C1", ts: "old.1", text: "" });
     expect(errs.join(" ")).toContain("cannot_delete");
   });
 
-  test("a Slack ok:false on the status post is reported and postMessage carries on", async () => {
-    const failing = (url: string, body: Record<string, unknown>): Response => {
-      if (url.includes(POST) && body.text === STATUS_TEXT)
-        return new Response(JSON.stringify({ ok: false, error: "invalid_auth" }), { status: 200 });
-      return new Response(JSON.stringify({ ok: true }), { status: 200 });
-    };
+  test("a Slack ok:false on the status call is reported and the work carries on", async () => {
+    const failing = (url: string): Response =>
+      url.includes("assistant.threads.setStatus")
+        ? new Response(JSON.stringify({ ok: false, error: "invalid_auth" }), { status: 200 })
+        : new Response(JSON.stringify({ ok: true }), { status: 200 });
     const { mgr, errs } = makeSlack({ router: failing });
-    await mgr.setOn("general", "ana");
+    await mgr.setOn("general", "ana", "thread.9");
     expect(errs.join(" ")).toContain("invalid_auth");
     // the status is recorded despite the failed Slack call, so the lifecycle stays.
     expect(mgr.livingTs("general")).toBeUndefined();
@@ -287,34 +310,36 @@ describe("status slack backend", () => {
       throw new Error("network");
     };
     const { mgr, errs } = makeSlack({ router: throwing });
-    await mgr.setOn("general", "ana");
+    await mgr.setOn("general", "ana", "thread.9");
     expect(errs.join(" ")).toContain("status request failed");
 
     const nonJson = (): Response => new Response("not json", { status: 200 });
     const { mgr: m2, errs: e2 } = makeSlack({ router: nonJson });
-    await m2.setOn("general", "bob");
+    await m2.setOn("general", "bob", "thread.9");
     expect(e2.join(" ")).toContain("non-JSON");
 
     const scalar = (): Response => new Response("42", { status: 200 });
     const { mgr: m3, errs: e3 } = makeSlack({ router: scalar });
-    await m3.setOn("general", "carol");
+    await m3.setOn("general", "carol", "thread.9");
     expect(e3.join(" ")).toContain("non-object");
   });
 
   test("a missing token reports without a call", async () => {
     const { mgr, calls, errs } = makeSlack({ noToken: true });
     expect(calls).toEqual([]);
-    await mgr.setOn("general", "ana"); // reports the token error, no fetch
+    await mgr.setOn("general", "ana", "thread.9"); // reports the token error, no fetch
     expect(calls).toEqual([]);
     expect(errs.join(" ")).toContain("status needs a Slack token");
   });
 
-  test("an expired slack entry is deleted on the next invocation", async () => {
+  test("an expired entry clears Slack's status, so it never outlives the work", async () => {
     const { mgr, advance, calls } = makeSlack();
-    await mgr.setOn("general", "ana");
+    await mgr.setOn("general", "ana", "thread.9");
     advance(10_001);
     await mgr.clearExpired();
-    expect(calls.filter((c) => c.url.includes("chat.delete"))).toHaveLength(1);
+    const set = calls.filter((c) => c.url.includes("assistant.threads.setStatus"));
+    expect(set).toHaveLength(2);
+    expect(set[1]?.body).toMatchObject({ thread_ts: "thread.9", status: "" });
   });
 });
 
