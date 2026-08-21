@@ -8,6 +8,7 @@ const readme = readFileSync(join(ROOT, "README.md"), "utf8");
 // The onboarding script is the single source for the app manifest: it creates
 // the app from this list and `--print-manifest` prints it for a manual paste.
 const onboard = readFileSync(join(ROOT, "scripts", "onboard-agent.ts"), "utf8");
+const joinDoc = readFileSync(join(ROOT, "JOIN.md"), "utf8");
 
 // The global contract note grants --url / --token to EVERY command regardless of
 // the row it appears in ("Every command accepts --url / --token ...").
@@ -111,11 +112,20 @@ describe("README content", () => {
     expect(intro).toContain("shell command");
   });
 
-  test("gives the one-line onboarding call to action, with every parameter in it", () => {
-    expect(readme).toContain("Onboard yourself to Slack with scramble");
-    for (const part of ["repo", "channel <channel>", "name <you>", "/invite"]) {
-      expect(readme).toContain(part);
-    }
+  test("the onboarding call to action is one sentence pointing at JOIN.md", () => {
+    const cta = "Onboard yourself into our Slack by following JOIN.md in <path-to-scramble>.";
+    expect(readme).toContain(cta);
+    // One sentence, and no machine path: the walkthrough belongs in the document
+    // the line points at, where the agent can ask the person its two questions.
+    expect(cta.split(". ").length).toBe(1);
+    expect(cta).not.toContain("/opt/");
+  });
+
+  test("JOIN.md runs the onboarding as a conversation, asking both names", () => {
+    expect(joinDoc).toContain("Ask what you should be called in the channel");
+    expect(joinDoc).toContain("Ask them to confirm the name Slack will show");
+    expect(joinDoc).toContain("--app-name");
+    expect(joinDoc).toContain("/invite @<handle>");
   });
 
   test("documents the two read modes table", () => {

@@ -1,7 +1,13 @@
 #!/usr/bin/env bun
 // Onboard THIS agent to Slack with no human in the loop.
 //
-//   bun scripts/onboard-agent.ts <agent-name> [--channel <name|id>] [--print-manifest]
+//   bun scripts/onboard-agent.ts <agent-name> [--app-name <name>] [--channel <name|id>]
+//                                 [--team <T…>] [--print-manifest]
+//
+// <agent-name> is what the agent is called in scramble (`--as`). `--app-name` is
+// what SLACK shows: the app's name and its bot display name, which is what
+// appears beside every message and in @-mention autocomplete, so a person should
+// confirm it before it exists. It defaults to the agent name.
 //
 // The only human operation is one-time and machine-wide: install the Slack CLI
 // and run `slack login`. After that an agent creates and installs its OWN Slack
@@ -192,22 +198,37 @@ const flag = (n: string): string | undefined => {
   const i = argv.indexOf(`--${n}`);
   return i >= 0 ? argv[i + 1] : undefined;
 };
-const agent = argv.find((a) => !a.startsWith("--") && argv[argv.indexOf(a) - 1] !== "--channel" && argv[argv.indexOf(a) - 1] !== "--team");
+// A positional that is not some flag's value. Written out rather than clever,
+// because a wrong guess here creates a real Slack app under the wrong name.
+const VALUED_FLAGS = new Set(["--channel", "--team", "--app-name"]);
+const agent = (() => {
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i]!;
+    if (a.startsWith("--")) continue;
+    if (i > 0 && VALUED_FLAGS.has(argv[i - 1]!)) continue;
+    return a;
+  }
+  return undefined;
+})();
+const appName = flag("app-name") ?? agent;
 
 if (argv.includes("--print-manifest")) {
-  console.log(JSON.stringify(manifestFor(agent ?? "scramble-agent"), null, 2));
+  console.log(JSON.stringify(manifestFor(appName ?? agent ?? "scramble-agent"), null, 2));
   process.exit(0);
 }
-if (agent === undefined) {
-  die("usage: bun scripts/onboard-agent.ts <agent-name> [--channel <name|id>] [--team <T…>]");
+if (agent === undefined || appName === undefined) {
+  die(
+    "usage: bun scripts/onboard-agent.ts <agent-name> [--app-name <name>] " +
+      "[--channel <name|id>] [--team <T…>]",
+  );
 }
 
 const { token } = configToken();
 const team = await resolveTeam(token, flag("team"));
 
-console.log(`onboard: creating the app "${agent}" as a WORKSPACE app`);
+console.log(`onboard: creating the app "${appName}" as a WORKSPACE app for agent "${agent}"`);
 const created = await api(token, "apps.manifest.create", {
-  manifest: manifestFor(agent),
+  manifest: manifestFor(appName),
   team_id: team,
 });
 const appId = String(created.app_id);

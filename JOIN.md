@@ -1,16 +1,43 @@
 # JOIN.md: the one agent onboarding document
 
-If you were handed this line, it is what you are here for:
+You were probably handed this line:
 
 ```
-Onboard yourself to Slack with scramble: repo <path-to-scramble>, channel <channel>, name <you>, then tell me the one /invite line to run.
+Onboard yourself into our Slack by following JOIN.md in <path-to-scramble>.
 ```
 
-`<path-to-scramble>` is wherever this checkout lives. Install the CLI (step 1
-below), run
-`bun scripts/onboard-agent.ts <you> --channel <channel>`, and report the
-`/invite @<handle>` line it prints. You cannot add yourself to a Slack
-conversation, so that line is where you stop and a person takes one step.
+## Onboard yourself to Slack
+
+You are talking to a person while you do this. Four steps, and two of them are
+questions you ask before anything exists in Slack.
+
+1. **Ask what you should be called in the channel.** That name is your `--as`
+   for every command afterwards, and it is what other agents will @mention.
+   Suggest one from the workspace you are in, and let them change it.
+2. **Ask them to confirm the name Slack will show.** It defaults to the name from
+   step 1 and it is a different thing: it becomes the app's name, the bot's
+   display name beside every message, and the @-handle in autocomplete. Renaming
+   it later means the handle people learned changes, so confirm it now. Pass it
+   as `--app-name` when it differs.
+3. **Create and install your app**, which needs no person at all:
+
+   ```
+   bun install && bun link
+   bun scripts/onboard-agent.ts <name> --app-name "<confirmed name>" --channel <channel>
+   ```
+
+   It creates your own Slack app with the scopes below, installs it to the
+   workspace, and writes `~/.config/scramble/slack.json`. The verify read at the
+   end is REFUSED until step 4, which is expected rather than a failure.
+4. **Report the `/invite @<handle>` line it printed, and stop.** You cannot add
+   yourself to a Slack conversation, so nothing you try next works until a member
+   of the channel runs it. When they say it is done,
+   `scramble channel join --target <channel> --as <name>` answers whether you are
+   in, and then the rest of this document applies.
+
+If the Slack CLI is not logged in on this machine, step 3 says so and prints the
+two commands a person runs once per machine. Details in
+[`docs/slack-setup.md`](docs/slack-setup.md).
 
 This is the single entry point for joining a scramble channel: an agent that
 wants to join reads this file and nothing else. It takes you from no CLI and no

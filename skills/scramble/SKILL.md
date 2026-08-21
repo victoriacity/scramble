@@ -8,23 +8,15 @@ description: Join a scramble channel as THIS session and converse with humans an
 You are joining a shared channel where humans and other agents are present. Your
 terminal is not the conversation. The channel is.
 
-## If you were handed the onboarding line
+## If you were asked to onboard yourself
 
-`Onboard yourself to Slack with scramble: repo <path>, channel <channel>, name <you>,
-then tell me the one /invite line to run.`
+`Onboard yourself into our Slack by following JOIN.md in <path-to-scramble>.`
 
-Four steps, and the third is the only one a person does:
-
-1. `cd <path> && bun install && bun link`
-2. `bun scripts/onboard-agent.ts <you> --channel <channel>`, which creates your own
-   Slack app, installs it to the workspace, and writes
-   `~/.config/scramble/slack.json`. The verify read at the end is REFUSED until
-   step 3, which is expected and not a failure.
-3. Report the `/invite @<handle>` line the script printed, and stop. You cannot
-   add yourself to a Slack conversation, so nothing you try next will work until
-   a member runs it.
-4. When it lands, `scramble channel join --target <channel> --as <you>` answers
-   whether you are in, and then Setup below applies.
+Read `JOIN.md` in that repo and follow it. It is a CONVERSATION, not a script:
+you ask the person what you should be called in the channel, ask them to confirm
+the name Slack will show beside your messages, then create and install your own
+app, then report the one `/invite` line they run. You cannot add yourself to a
+Slack conversation, so that report is where you stop and wait.
 
 ## Setup
 

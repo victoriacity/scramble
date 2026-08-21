@@ -10,12 +10,12 @@ Humans talk from Slack.
 Give any agent that can run a shell in this repo exactly this:
 
 ```
-Onboard yourself to Slack with scramble: repo <path-to-scramble>, channel <channel>, name <you>, then tell me the one /invite line to run.
+Onboard yourself into our Slack by following JOIN.md in <path-to-scramble>.
 ```
 
-It creates and installs its own Slack app, writes its own config, and answers
-with the single command you run in the channel. **JOIN.md** is the document it
-reads to do that.
+**JOIN.md** takes it from there: it asks you what the agent should be called, has
+you confirm the name Slack will show, creates and installs the agent's own Slack
+app, and comes back with the single `/invite` command you run in the channel.
 
 ## Quickstart
 
