@@ -17,8 +17,6 @@ import {
 
 export interface ChannelStore {
   post(input: PostInput): PostResult;
-  /** The highest seq appended so far, so a reader can start at the tip. */
-  tip(): number;
   read(channel: string, since?: number): Message[];
   readAll(since?: number): Message[];
   join(name: string, persona: string, channel: string): void;
@@ -134,6 +132,7 @@ export function createStore(dir: string): ChannelStore {
       text: input.text,
       id: input.id,
       mentions: computeMentions(input.from, input.channel, input.text),
+      ...(input.files && input.files.length > 0 ? { files: input.files } : {}),
     };
     append(msg);
     channels.set(input.channel, [...channelMsgs, msg]);
@@ -182,11 +181,6 @@ export function createStore(dir: string): ChannelStore {
   }
 
   return {
-    /** The highest seq appended so far. A bridge opens its stream here so a
-     *  reconnect resumes instead of republishing the channel. */
-    tip(): number {
-      return nextSeq - 1;
-    },
     post,
     read,
     readAll,

@@ -4,15 +4,21 @@
 // in-process handler from src/server.ts as fetch — no child process, no
 // socket, no real delay. Process argv and the real daemon bind live in
 // src/bin.ts, which no test imports.
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { createStore, type ChannelStore } from "./store";
 import type { Message, PostResult } from "./types";
 import type { ServeOptions } from "./server";
-import { createBridge, type SlackConfig, type SlackTransport } from "./slack";
-import { RaftBackend, type RunFn } from "./raft";
 import { SlackBackend, type SlackBackendConfig } from "./slack-backend";
 import type { SlackSocket } from "./slack-transport";
+import {
+  findLocalRecord,
+  guessMime,
+  recordLocalUpload,
+  uploadToSlack,
+  sizeOf,
+  type Attachment,
+} from "./attachments";
 import { StatusManager } from "./status";
 
 const DEFAULT_URL = "http://127.0.0.1:7737";
@@ -30,24 +36,10 @@ export interface Io {
   sleep(ms: number): Promise<void>;
   /** the daemon bind seam; the real wiring (a port bind) lives in src/bin.ts. */
   serve(store: ChannelStore, opts: ServeOptions): Promise<number>;
-  /** Build the Slack transport for a bridge. The real socket factory and
-   *  network bind live in src/bin.ts; tests inject a fake transport so main()
-   *  needs no network. */
-  createTransport(cfg: SlackConfig): SlackTransport;
-  /** The socket factory for the slack BACKEND's Socket Mode stream. The real
+  /** The socket factory for the slack backend's Socket Mode stream. The real
    *  wiring (bun's WebSocket) lives in src/bin.ts; tests inject a fake so
    *  next/listen touch no socket. */
   createSocket?(url: string): SlackSocket;
-  /** The process seam for the raft backend: shell out to a command, piping
-   *  stdin, returning its exit and output. The real spawn lives in src/bin.ts
-   *  so tests inject a fake run and need no raft binary, no network, and no
-   *  credential. */
-  run?(cmd: string, args: string[], stdin: string): Promise<{ exit: number; stdout: string; stderr: string }>;
-  /** this process's id, for the bridge's single-instance lock. */
-  pid?(): number;
-  /** is that pid still running? injected so the lock is testable without a
-   *  real process. */
-  alive?(pid: number): boolean;
   /** read ALL of stdin (the message body for the mirror `message send`). The
    *  real read lives in src/bin.ts; tests inject a fake. When absent, `message
    *  send` reads stdin as empty and reports it. */
@@ -255,23 +247,30 @@ async function cmdPost(argv: string[], io: Io): Promise<number> {
     io.writeErr("usage: scramble post <channel> <text> [--as <name>]");
     return 1;
   }
-  return postText(channel, text, flags, io, selectBackend(argv, io));
+  const backend = selectBackend(argv, io);
+  if (backend === null) return 1;
+  return postText(channel, text, flags, io, backend);
 }
 
-/** Local-backend post: one JSON line per crossing, nothing on a clean send with
- *  no crossing. The `--as`/name and config come from the flags. */
+/** Local-backend: one message posted through the daemon. One JSON line per
+ *  crossing, nothing on a clean send with no crossing. When `files` are given
+ *  (from `--attach`), they ride the POST body so the stored message carries
+ *  them. */
 async function postLocalCore(
   channel: string,
   text: string,
   flags: Map<string, string>,
   io: Io,
+  files?: Attachment[],
 ): Promise<number> {
   const { url, token } = resolveConfig(flags, io);
   const from = nameFor(flags, io);
+  const payload: Record<string, unknown> = { from, text, id: newMessageId() };
+  if (files !== undefined && files.length > 0) payload.files = files;
   const res = await io.fetch(`${url}/channels/${encodeURIComponent(channel)}`, {
     method: "POST",
     headers: { "content-type": "application/json", ...authHeader(token) },
-    body: JSON.stringify({ from, text, id: newMessageId() }),
+    body: JSON.stringify(payload),
   });
   if (!res.ok) {
     io.writeErr(`post failed (${res.status})`);
@@ -284,26 +283,20 @@ async function postLocalCore(
 
 /** Post one message under whichever backend the run selects. The mirrored verb
  *  (`message send`) and the alias (`post <channel> <text>`) share this path so
- *  the backend switch sits below the verb parsing. */
+ *  the backend switch sits below the verb parsing. `files` rides the local
+ *  store's message when `message send --attach` produced them; the slack
+ *  backend attaches by its own upload flow (files are uploaded to the target
+ *  before the text send). */
 async function postText(
   channel: string,
   text: string,
   flags: Map<string, string>,
   io: Io,
-  backend: "local" | "raft" | "slack",
+  backend: "local" | "slack",
+  files?: Attachment[],
 ): Promise<number> {
   const status = statusTracker(io, backend);
   void status?.clearExpired();
-  if (backend === "raft") {
-    const from = nameFor(flags, io);
-    const r = await raftBackend(flags, io).send(channel, text, from);
-    if (!r.ok) {
-      io.writeErr(`post failed: ${r.error}`);
-      return 1;
-    }
-    if (status !== undefined) replyStatus(status, channel, from);
-    return 0;
-  }
   if (backend === "slack") {
     const from = nameFor(flags, io);
     const s = slackBackend(io);
@@ -319,7 +312,7 @@ async function postText(
     if (status !== undefined) replyStatus(status, channel, from);
     return 0;
   }
-  const code = await postLocalCore(channel, text, flags, io);
+  const code = await postLocalCore(channel, text, flags, io, files);
   if (code === 0 && status !== undefined) replyStatus(status, channel, nameFor(flags, io));
   return code;
 }
@@ -474,7 +467,9 @@ async function cmdHistory(argv: string[], io: Io): Promise<number> {
     return 1;
   }
   const since = intFlag(flags, "since", 0);
-  return historyRead(channel, since, flags, io, selectBackend(argv, io));
+  const backend = selectBackend(argv, io);
+  if (backend === null) return 1;
+  return historyRead(channel, since, flags, io, backend);
 }
 
 /** Local-backend read: one JSON line per message from the channel catch-up. */
@@ -497,7 +492,7 @@ async function historyLocal(
   return 0;
 }
 
-/** Read a channel's messages under whichever backend the run selects. The mirrored
+/** Read a channel's history under whichever backend the run selects. The mirrored
  *  verb (`message read --target <channel>`) and the alias (`history <channel>`) share
  *  `--since`/`--after` as the same cursor and both dispatch here, so the backend
  *  switch stays below the verb parsing. */
@@ -506,19 +501,8 @@ async function historyRead(
   since: number,
   flags: Map<string, string>,
   io: Io,
-  backend: "local" | "raft" | "slack",
+  backend: "local" | "slack",
 ): Promise<number> {
-  if (backend === "raft") {
-    const name = nameFor(flags, io);
-    const r = await raftBackend(flags, io).history(channel, name, since > 0 ? since : undefined);
-    for (const p of r.problems) io.writeErr(`raft: ${p}`);
-    if (r.code !== 0) {
-      io.writeErr(`read failed: ${r.error}`);
-      return 1;
-    }
-    for (const m of r.messages) io.write(JSON.stringify(m));
-    return 0;
-  }
   if (backend === "slack") {
     const s = slackBackend(io);
     if (s.error !== undefined || s.backend === undefined) {
@@ -526,6 +510,7 @@ async function historyRead(
       return 1;
     }
     const r = await s.backend.history(channel, since > 0 ? String(since) : undefined);
+    for (const p of r.problems) io.writeErr(`slack: ${p}`);
     if (r.code !== 0) {
       io.writeErr(`read failed: ${r.error}`);
       return 1;
@@ -546,8 +531,8 @@ async function cmdJoin(argv: string[], io: Io): Promise<number> {
   return joinChannel(channel, flags, io);
 }
 
-/** Join a channel as THIS agent: scaffold `.scramble/`, read or write the persona,
- *  and register (name + persona + channel) with the daemon. Shared by the alias
+/** Join a channel as THIS agent: scaffold `.scramble/`, read the persona, and
+ *  register (name + persona + channel) with the daemon. Shared by the alias
  *  (`join <channel>`) and the mirror (`channel join --target <channel>`). */
 async function joinChannel(
   channel: string,
@@ -608,7 +593,7 @@ async function cmdServe(argv: string[], io: Io): Promise<number> {
   return io.serve(store, opts);
 }
 
-/** Path the bridge config is read from. SCRAMBLE_SLACK_CONFIG wins, else
+/** Path the slack config is read from. SCRAMBLE_SLACK_CONFIG wins, else
  *  ~/.config/scramble/slack.json, else the workspace copy. The config holds
  *  BOT TOKENS, so the default is deliberately OUTSIDE the repo: this repo is
  *  public-bound, and a credential in a commit is readable in every clone. */
@@ -620,11 +605,11 @@ export function slackConfigPath(io: Io): string {
   return join(io.cwd(), ".scramble", "slack.json");
 }
 
-/** Load the bridge master config. The config governs which channels map to which
- *  Slack channels, each agent's identity tier, the DM mirror, and the app-level/bot
- *  tokens. Returns null when the file is absent or malformed (the caller
- *  reports it, naming the path it tried). */
-export function loadSlackConfig(io: Io): Omit<SlackConfig, "postToChannel"> | null {
+/** Load the slack backend config. The config governs which channels map to which
+ *  Slack channels, each agent's identity, and the app-level/bot tokens. Returns
+ *  null when the file is absent or malformed (the caller reports it, naming the
+ *  path it tried). */
+export function loadSlackConfig(io: Io): SlackBackendConfig | null {
   try {
     const raw = readFileSync(slackConfigPath(io), "utf8");
     const j = JSON.parse(raw) as Record<string, unknown>;
@@ -639,286 +624,27 @@ export function loadSlackConfig(io: Io): Omit<SlackConfig, "postToChannel"> | nu
       dmChannels: (j.dmChannels as Record<string, string>) ?? {},
       roster: (j.roster as Record<string, string>) ?? {},
       botIds: (j.botIds as string[]) ?? [],
-      token: typeof j.token === "string" ? j.token : undefined,
+      token: typeof j.token === "string" ? j.token : "",
       appToken: typeof j.appToken === "string" ? j.appToken : undefined,
-      dmMirrorChannel:
-        typeof j.dmMirrorChannel === "string" ? j.dmMirrorChannel : undefined,
+      filesDir: typeof j.filesDir === "string" ? j.filesDir : "",
     };
   } catch {
     return null;
   }
 }
 
-/** Valid bridge config must carry the app-level token used to open the Socket
- *  Mode connection. This reports the first missing required token. */
-function slackTokenError(cfg: Pick<SlackConfig, "appToken" | "token">): string | null {
-  if (!cfg.appToken) return "missing appToken (the xapp- Socket Mode app-level token)";
-  return null;
-}
-
-/** Fire an inbound Slack message into a channel through the daemon's POST seam.
- *  postToChannel is a sync void seam (the bridge's contract), so the async POST
- *  fires and forgets; a failure surfaces only in the daemon log. */
-/** Insert Slack-origin text into a channel. Returns the message id it used, so the
- *  bridge can recognise its OWN insert on the firehose and NOT publish it back
- *  to Slack. Without that, a human's Slack message enters the channel, streams out
- *  on the firehose, and the bridge posts it to Slack again: an echo loop,
- *  observed live on 2026-08-21 ("hi" came back as the bot three times). */
-function postToChannel(
-  io: Io,
-  url: string,
-  token: string | undefined,
-  channel: string,
-  from: string,
-  text: string,
-  id: string,
-): void {
-  void io
-    .fetch(`${url}/channels/${encodeURIComponent(channel)}`, {
-      method: "POST",
-      headers: { "content-type": "application/json", ...authHeader(token) },
-      body: JSON.stringify({ from, text, id }),
-    })
-    .catch(() => {});
-}
-
-/** The daemon's current global seq, so a fresh bridge publishes only what
- *  arrives AFTER it starts. An unreachable daemon yields 0, and the reconnect
- *  loop reports the failure by its own path. */
-export async function firehoseTip(io: Io, url: string, token: string | undefined): Promise<number> {
-  try {
-    const res = await io.fetch(`${url}/seq`, { headers: authHeader(token) });
-    if (!res.ok) return 0;
-    const j = (await res.json()) as { seq?: number };
-    return typeof j.seq === "number" ? j.seq : 0;
-  } catch {
-    return 0;
-  }
-}
-
-/** Feed one firehose response's messages into the bridge's publish path,
- *  pulling the NDJSON stream to its end. */
-async function feedFirehose(
-  io: Io,
-  res: Response,
-  onMessage: (m: Message) => void,
-): Promise<void> {
-  const reader = res.body!.getReader();
-  const dec = new TextDecoder();
-  let buf = "";
-  let { done, value } = await reader.read();
-  while (!done) {
-    buf += dec.decode(value, { stream: true });
-    let idx = buf.indexOf("\n");
-    while (idx >= 0) {
-      const line = buf.slice(0, idx).trim();
-      buf = buf.slice(idx + 1);
-      if (line) onMessage(JSON.parse(line) as Message);
-      idx = buf.indexOf("\n");
-    }
-    ({ done, value } = await reader.read());
-  }
-}
-
-/** The bridge's single-instance lock. Two bridges on one config each subscribe
- *  to the firehose, so EVERY channel message reaches Slack twice (observed
- *  2026-08-21: one line delivered at ts …024 and again at …035). The lock is a
- *  pidfile beside the config; a second bridge refuses to start while the first
- *  is alive, and a stale pidfile from a crashed bridge is reclaimed. */
-export function bridgeLockPath(io: Io): string {
-  return `${slackConfigPath(io)}.bridge.pid`;
-}
-
-export function acquireBridgeLock(io: Io): { ok: true; path: string } | { ok: false; holder: number } {
-  const path = bridgeLockPath(io);
-  const alive = io.alive ?? (() => false);
-  try {
-    const held = Number(readFileSync(path, "utf8").trim());
-    if (Number.isInteger(held) && held > 0 && alive(held)) return { ok: false, holder: held };
-  } catch {
-    /* absent or unreadable pidfile: nothing holds the lock */
-  }
-  writeFileSync(path, `${io.pid ? io.pid() : 0}\n`);
-  return { ok: true, path };
-}
-
-async function cmdSlack(argv: string[], io: Io): Promise<number> {
-  const { flags } = parseArgs(argv);
-  const dryRun = flags.has("dry-run");
+/** The directory Slack attachments are downloaded into (and the local ledger
+ *  lives in). The config's `filesDir` wins; the default keeps files OUT of the
+ *  repo (public-bound), mirroring how the config keeps tokens out of the tree. */
+function slackFilesDir(io: Io): string {
   const cfg = loadSlackConfig(io);
-  if (cfg === null) {
-    io.writeErr(`${slackConfigPath(io)} is missing or malformed`);
-    return 1;
-  }
-  const tokenErr = slackTokenError(cfg);
-  if (tokenErr !== null) {
-    io.writeErr(tokenErr);
-    return 1;
-  }
-  if (!dryRun) {
-    const lock = acquireBridgeLock(io);
-    if (!lock.ok) {
-      io.writeErr(`a slack bridge is already running for this config (pid ${lock.holder})`);
-      io.writeErr(`every channel message would reach Slack twice; stop that bridge or remove ${bridgeLockPath(io)} if it is stale`);
-      return 1;
-    }
-  }
-  const { url, token } = resolveConfig(flags, io);
-  // Inbound Slack text lands in the channel through the daemon's POST path.
-  // Ids this bridge inserted from Slack. The firehose replays them like any
-  // other channel message, and publishing one back to Slack is an echo loop.
-  const fromSlack = new Set<string>();
-  const slack: SlackConfig = {
-    ...cfg,
-    postToChannel: (channel, from, text) => {
-      const id = newMessageId();
-      fromSlack.add(id);
-      postToChannel(io, url, token, channel, from, text, id);
-    },
-  };
-  slack.dryRun = dryRun;
-  try {
-    const transport = io.createTransport(slack);
-    const bridge = createBridge(slack, transport);
-    if (dryRun) {
-      // Never connect: prove the config maps to actionable Slack calls.
-      printBridgeSummary(slack, url, io);
-      return 0;
-    }
-    bridge.connect();
-    // Open the firehose at the CURRENT tip, never at 0: a reconnect that starts
-    // from 0 republishes the whole channel to Slack (observed live 2026-08-21,
-    // older lines re-posted at ts ...305 and ...325). `since` advances past
-    // every message seen, so a reconnect resumes instead of replaying.
-    let since = await firehoseTip(io, url, token);
-    let backoff = 100;
-    let staying = true;
-    while (staying) {
-      let res: Response;
-      try {
-        res = await io.fetch(`${url}/stream?since=${since}`, { headers: authHeader(token) });
-      } catch {
-        await io.sleep(backoff);
-        backoff = Math.min(backoff * 2, MAX_BACKOFF);
-        continue;
-      }
-      if (res.status !== 200 || res.body === null) {
-        await io.sleep(backoff);
-        backoff = Math.min(backoff * 2, MAX_BACKOFF);
-        continue;
-      }
-      try {
-        await feedFirehose(io, res, (m) => {
-          since = Math.max(since, m.seq);
-          if (fromSlack.has(m.id)) return; // our own Slack-origin insert
-          bridge.publish(m);
-        });
-        staying = false; // the daemon closed the stream: a clean stop
-      } catch {
-        await io.sleep(backoff);
-        backoff = Math.min(backoff * 2, MAX_BACKOFF);
-      }
-    }
-    return 0;
-  } catch {
-    io.writeErr("slack bridge failed to start");
-    return 1;
-  }
+  if (cfg !== null && cfg.filesDir !== "") return cfg.filesDir;
+  const home = io.env("HOME");
+  return home ? join(home, ".config", "scramble", "files") : join(io.cwd(), ".scramble", "files");
 }
 
-/** Print the dry-run plan to stderr: the wired channel mappings and identity
- *  tiers the bridge would act on, so an operator verifies the config before
- *  going live with no network connection involved. */
-function printBridgeSummary(cfg: SlackConfig, base: string, io: Io): void {
-  io.writeErr(`slack dry-run for ${base}`);
-  for (const [channel, ch] of Object.entries(cfg.channels)) {
-    io.writeErr(`  channel ${channel} -> slack ${ch}`);
-  }
-  for (const [name, agent] of Object.entries(cfg.agents)) {
-    const tier = agent.token ? "real bot-user" : "persona";
-    const icon = agent.icon ? ` icon=${agent.icon}` : "";
-    io.writeErr(`  ${name}: ${tier}${icon}`);
-  }
-  if (cfg.dmChannels !== undefined) {
-    for (const [ch, agent] of Object.entries(cfg.dmChannels)) {
-      io.writeErr(`  DM channel ${ch} -> ${agent}`);
-    }
-  }
-  if (cfg.dmMirrorChannel) io.writeErr(`  DM mirror -> ${cfg.dmMirrorChannel}`);
-  io.writeErr(`dry-run OK: no transport was connected`);
-}
-
-/** Which backend this run uses: the local daemon (the default, so nothing
- *  currently working changes), the raft backend, or the slack backend. Selected
- *  by the `--backend <name>` flag (highest precedence) or `SCRAMBLE_BACKEND`.
- *  An unknown flag value is treated as raft (a toggle, matching the pre-slack
- *  contract); `SCRAMBLE_BACKEND` likewise picks local/raft/slack and defaults
- *  to local. */
-export function selectBackend(argv: string[], io: Io): "local" | "raft" | "slack" {
-  for (let i = 0; i < argv.length; i++) {
-    const a = argv[i]!;
-    if (a === "--backend") {
-      const v = argv[i + 1];
-      return v === "slack" ? "slack" : v === "local" ? "local" : "raft";
-    }
-    if (a.startsWith("--backend=")) {
-      const v = a.slice("--backend=".length);
-      return v === "slack" ? "slack" : v === "local" ? "local" : "raft";
-    }
-  }
-  const env = io.env("SCRAMBLE_BACKEND");
-  if (env === "local") return "local";
-  if (env === "slack") return "slack";
-  return env === "raft" ? "raft" : "local";
-}
-
-/** Build the raft backend with the injected run seam (io.run) so tests need no
- *  raft binary. `--max-polls` bounds a listen loop for test termination. */
-function raftBackend(flags: Map<string, string>, io: Io): RaftBackend {
-  const profile = flags.get("profile") ?? io.env("RAFT_PROFILE");
-  const maxPolls = intFlag(flags, "max-polls", Number.POSITIVE_INFINITY);
-  return new RaftBackend({ run: io.run!, profile, maxPolls });
-}
-
-async function raftCmdNext(argv: string[], io: Io): Promise<number> {
-  const { flags } = parseArgs(argv);
-  const name = nameFor(flags, io);
-  const timeoutSec = intFlag(flags, "timeout", 300);
-  const status = statusTracker(io, "raft");
-  void status?.clearExpired();
-  const r = await raftBackend(flags, io).next(name, timeoutSec);
-  for (const p of r.problems) io.writeErr(`raft: ${p}`);
-  if (r.code === 64) return 64;
-  if (r.line !== undefined) {
-    if (status !== undefined) deliverStatus(status, r.line, name);
-    io.write(JSON.stringify(r.line));
-  }
-  return 0;
-}
-
-async function raftCmdListen(argv: string[], io: Io): Promise<number> {
-  const { flags } = parseArgs(argv);
-  const name = nameFor(flags, io);
-  const b = raftBackend(flags, io);
-  const status = statusTracker(io, "raft");
-  const stopTicker = status ? status.startExpiryTicker(2000, io.sleep) : undefined;
-  try {
-    await b.listen(
-      name,
-      (d) => {
-        if (status !== undefined) deliverStatus(status, d, name);
-        io.write(JSON.stringify(d));
-      },
-      (p) => io.writeErr(`raft: ${p}`),
-    );
-  } finally {
-    stopTicker?.();
-  }
-  return 0;
-}
-
-/** Build the slack BACKEND with the io seams. The config is the bridge config
- *  (loadSlackConfig), and every outbound call/socket goes through io.fetch and
+/** Build the slack BACKEND with the io seams. The config is read from the slack
+ *  config path, and every outbound call/socket goes through io.fetch and
  *  io.createSocket, so tests need no token, network or socket. Returns an
  *  error string instead of a backend when the config or seams are missing. */
 function slackBackend(io: Io): { backend?: SlackBackend; error?: string } {
@@ -934,15 +660,16 @@ function slackBackend(io: Io): { backend?: SlackBackend; error?: string } {
       agents: cfg.agents,
       roster: cfg.roster,
       dmChannels: cfg.dmChannels,
-      botIds: cfg.botIds ?? [],
+      botIds: cfg.botIds,
+      filesDir: slackFilesDir(io),
     },
     { fetch: io.fetch, createSocket: io.createSocket, sleep: io.sleep },
   );
   return { backend };
 }
 
-/** Supply a real clock for the status tracker (a named function so coverage
- *  tracks it; the manager invokes it on every status lifecycle operation). */
+/** A real clock for the status tracker (a named function so coverage tracks it;
+ *  the manager invokes it on every status lifecycle operation). */
 function statusNow(): number {
   return Date.now();
 }
@@ -953,7 +680,7 @@ function statusNow(): number {
  *  status locally so a reader (or a test) sees it. A missing or broken slack
  *  config yields a local-style record, because a status can never fail the verb
  *  it brackets. */
-function statusTracker(io: Io, backend: "local" | "raft" | "slack"): StatusManager | undefined {
+function statusTracker(io: Io, backend: "local" | "slack"): StatusManager | undefined {
   if (io.env("SCRAMBLE_STATUS") === "off") return undefined;
   const raw = Number(io.env("SCRAMBLE_STATUS_TTL"));
   const ttlMs = Number.isFinite(raw) && raw > 0 ? raw * 1000 : 120_000;
@@ -962,7 +689,7 @@ function statusTracker(io: Io, backend: "local" | "raft" | "slack"): StatusManag
   let token: string | undefined;
   if (mode === "slack") {
     const cfg = loadSlackConfig(io);
-    if (cfg) {
+    if (cfg !== null) {
       channels = cfg.channels;
       token = cfg.token;
     }
@@ -1001,6 +728,8 @@ async function slackCmdNext(argv: string[], io: Io): Promise<number> {
   const { flags, positionals } = parseArgs(argv);
   const name = nameFor(flags, io);
   const timeoutSec = intFlag(flags, "timeout", 300);
+  const status = statusTracker(io, "slack");
+  void status?.clearExpired();
   const s = slackBackend(io);
   if (s.error !== undefined || s.backend === undefined) {
     io.writeErr(s.error ?? "slack unavailable");
@@ -1009,8 +738,6 @@ async function slackCmdNext(argv: string[], io: Io): Promise<number> {
   const r = await s.backend.next(positionals, name, timeoutSec, (p) => io.writeErr(`slack: ${p}`));
   if (r.code === 64) return 64;
   if (r.line !== undefined) {
-    const status = statusTracker(io, "slack");
-    void status?.clearExpired();
     if (status !== undefined) deliverStatus(status, r.line, name);
     io.write(JSON.stringify(r.line));
   }
@@ -1072,26 +799,10 @@ async function messageCheckLocal(flags: Map<string, string>, io: Io): Promise<nu
   return 0;
 }
 
-/** raft-backend `message check`: raft tracks the per-agent cursor server-side,
- *  so the drain is `raft message check` verbatim, one Delivery per line. */
-async function messageCheckRaft(flags: Map<string, string>, io: Io): Promise<number> {
-  const name = nameFor(flags, io);
-  const status = statusTracker(io, "raft");
-  void status?.clearExpired();
-  const b = raftBackend(flags, io);
-  const d = await b.drain(name);
-  for (const p of d.problems) io.writeErr(`raft: ${p}`);
-  for (const m of d.deliveries) {
-    if (status !== undefined) deliverStatus(status, m, name);
-    io.write(JSON.stringify(m));
-  }
-  return 0;
-}
-
 /** Slack-backend `message check`: Slack is a live stream with no server-held
  *  inbox backlog and no per-agent cursor, so the drain is the quiet case:
- *  nothing is pending, so print nothing and exit 0. The backend switch (config
- *  + socket seam) is still validated so a broken slack config is REPORTED. */
+ *  the config (token + socket seam) is still validated so a broken slack config
+ *  is REPORTED. Nothing is pending, so print nothing and exit 0. */
 async function messageCheckSlack(flags: Map<string, string>, io: Io): Promise<number> {
   const s = slackBackend(io);
   if (s.error !== undefined || s.backend === undefined) {
@@ -1101,16 +812,116 @@ async function messageCheckSlack(flags: Map<string, string>, io: Io): Promise<nu
   return 0;
 }
 
-async function cmdMessageCheck(argv: string[], io: Io, backend: "local" | "raft" | "slack"): Promise<number> {
+async function cmdMessageCheck(argv: string[], io: Io, backend: "local" | "slack"): Promise<number> {
   const { flags } = parseArgs(argv);
-  if (backend === "raft") return messageCheckRaft(flags, io);
   if (backend === "slack") return messageCheckSlack(flags, io);
   return messageCheckLocal(flags, io);
 }
 
 /** The mirrored `message` family: `send`, `check`, `read`. Each dispatches to
  *  the selected backend below the verb parsing, and reports an unknown verb. */
-async function cmdMessage(args: string[], io: Io, backend: "local" | "raft" | "slack"): Promise<number> {
+/** Collect every value passed for a REPEATABLE flag (`--attach a --attach b`),
+ *  supporting both `--flag value` and `--flag=value` spellings. */
+function collectValues(args: string[], flag: string): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]!;
+    if (a === flag) {
+      const v = args[i + 1];
+      if (v !== undefined && !v.startsWith("--")) out.push(v);
+    } else if (a.startsWith(`${flag}=`)) {
+      out.push(a.slice(flag.length + 1));
+    }
+  }
+  return out;
+}
+
+type AttachResult = { ok: true; id: string } | { ok: false; error: string };
+
+/** Upload one local file under the selected backend and return the file id the
+ *  backend assigned (Slack's file id or a local ledger id). The `path` carries
+ *  through so a session can read the bytes. */
+async function attachmentUpload(
+  path: string,
+  targetChannel: string,
+  mimeOverride: string | undefined,
+  io: Io,
+  backend: "local" | "slack",
+): Promise<AttachResult> {
+  if (backend === "slack") {
+    const cfg = loadSlackConfig(io);
+    if (cfg === null || !cfg.token) return { ok: false, error: "slack backend requires a bot token" };
+    const slackId = cfg.channels[targetChannel];
+    if (!slackId) return { ok: false, error: `no Slack channel for channel ${targetChannel}` };
+    const r = await uploadToSlack(io.fetch, cfg.token, path, slackId, mimeOverride);
+    return r.ok ? { ok: true, id: r.out.id } : { ok: false, error: r.error };
+  }
+  const r = recordLocalUpload(slackFilesDir(io), path, mimeOverride);
+  if (!r.ok) return { ok: false, error: r.error };
+  return { ok: true, id: r.record.id };
+}
+
+/** Resolve an attachment id to a local path, for `attachment view`: the local
+ *  backend finds it in the filesDir ledger; the slack backend finds the file
+ *  recorded there (inbound downloads land in filesDir under the file id). */
+async function attachmentView(
+  id: string,
+  out: string | undefined,
+  io: Io,
+  backend: "local" | "slack",
+): Promise<{ ok: true; path: string } | { ok: false; error: string }> {
+  void backend;
+  const dir = slackFilesDir(io);
+  const rec = findLocalRecord(dir, id);
+  if (!rec) return { ok: false, error: `no recorded attachment ${id}` };
+  const finalPath = out !== undefined ? out : rec.path;
+  if (out !== undefined) copyFileSync(rec.path, out);
+  return { ok: true, path: finalPath };
+}
+
+/** The mirrored `attachment` verbs: `upload` and `view`, mirroring raft's
+ *  grammar. `upload` prints the file id as one JSON line; `view` prints the
+ *  path written. */
+async function cmdAttachment(args: string[], io: Io): Promise<number> {
+  const { flags, positionals } = parseArgs(args);
+  const sub = positionals[0];
+  const backend = selectBackend(args, io);
+  if (backend === null) return 1;
+  if (sub === "upload") {
+    const path = flags.get("path");
+    if (!path) {
+      io.writeErr("attachment upload requires --path <file>");
+      return 1;
+    }
+    const req = requireTarget(flags, io);
+    if (!req.ok) return 1;
+    const r = await attachmentUpload(path, req.channel, flags.get("mime-type"), io, backend);
+    if (!r.ok) {
+      io.writeErr(r.error);
+      return 1;
+    }
+    io.write(JSON.stringify({ id: r.id }));
+    return 0;
+  }
+  if (sub === "view") {
+    const id = positionals[1];
+    if (!id) {
+      io.writeErr("attachment view requires <attachmentId>");
+      return 1;
+    }
+    const v = await attachmentView(id, flags.get("path"), io, backend);
+    if (!v.ok) {
+      io.writeErr(v.error);
+      return 1;
+    }
+    io.write(JSON.stringify({ path: v.path }));
+    return 0;
+  }
+  io.writeErr(`unknown attachment verb: ${sub ?? "(none)"}`);
+  return 1;
+}
+
+async function cmdMessage(args: string[], io: Io, backend: "local" | "slack"): Promise<number> {
   const { flags, positionals } = parseArgs(args);
   const sub = positionals[0];
   switch (sub) {
@@ -1122,7 +933,23 @@ async function cmdMessage(args: string[], io: Io, backend: "local" | "raft" | "s
         io.writeErr("message send requires the message on stdin");
         return 1;
       }
-      return postText(req.channel, text, flags, io, backend);
+      // `--attach <path>` is repeatable: upload each file to the TARGET before
+      // sending, so the message and its files arrive together, then send the
+      // text carrying the uploaded file metadata (the id + local path).
+      const attachPaths = collectValues(args, "--attach");
+      let files: Attachment[] | undefined;
+      if (attachPaths.length > 0) {
+        for (const p of attachPaths) {
+          const up = await attachmentUpload(p, req.channel, flags.get("mime-type"), io, backend);
+          if (!up.ok) {
+            io.writeErr(up.error);
+            return 1;
+          }
+          files = files ?? [];
+          files.push({ id: up.id, name: basename(p), mime: guessMime(p), size: sizeOf(p), path: p });
+        }
+      }
+      return postText(req.channel, text, flags, io, backend, files);
     }
     case "check":
       return cmdMessageCheck(args, io, backend);
@@ -1160,7 +987,7 @@ async function cmdProfile(argv: string[], io: Io): Promise<number> {
   if (sub === "update") {
     const description = flags.get("description");
     if (description === undefined || description === "") {
-      io.writeErr("profile update requires --description <text>");
+      io.writeErr("profile update requires --description");
       return 1;
     }
     const scamDir = join(io.cwd(), ".scramble");
@@ -1196,8 +1023,34 @@ async function cmdChannel(argv: string[], io: Io): Promise<number> {
   return joinChannel(req.channel, flags, io);
 }
 
+/** Which backend this run uses: the local daemon (the default) or the slack
+ *  backend. Selected by `--backend <name>` (highest precedence) or
+ *  `SCRAMBLE_BACKEND`. Defaults to local. An unknown backend name is REPORTED,
+ *  naming the two backends that exist. Returns null when a name was given but
+ *  matched neither, after the error is written to stderr. */
+export function selectBackend(argv: string[], io: Io): "local" | "slack" | null {
+  let name: string | undefined;
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i]!;
+    if (a === "--backend") {
+      name = argv[i + 1];
+      break;
+    }
+    if (a.startsWith("--backend=")) {
+      name = a.slice("--backend=".length);
+      break;
+    }
+  }
+  if (name === undefined) name = io.env("SCRAMBLE_BACKEND");
+  if (name === undefined || name === "local") return "local";
+  if (name === "slack") return "slack";
+  io.writeErr(`unknown backend '${name}'; the backends are 'local' and 'slack'`);
+  return null;
+}
+
 export async function main(argv: string[], io: Io): Promise<number> {
-  const backend: "local" | "raft" | "slack" = selectBackend(argv, io);
+  const backend = selectBackend(argv, io);
+  if (backend === null) return 1;
   // Every scramble invocation clears whatever has expired before its own work,
   // whatever verb it is. SCRAMBLE_STATUS=off makes this a no-op.
   void statusTracker(io, backend)?.clearExpired();
@@ -1205,17 +1058,17 @@ export async function main(argv: string[], io: Io): Promise<number> {
     case "post":
       return cmdPost(argv.slice(1), io);
     case "listen":
-      if (backend === "raft") return raftCmdListen(argv.slice(1), io);
       if (backend === "slack") return slackCmdListen(argv.slice(1), io);
       return cmdListen(argv.slice(1), io);
     case "next":
-      if (backend === "raft") return raftCmdNext(argv.slice(1), io);
       if (backend === "slack") return slackCmdNext(argv.slice(1), io);
       return cmdNext(argv.slice(1), io);
     case "history":
       return cmdHistory(argv.slice(1), io);
     case "message":
       return cmdMessage(argv.slice(1), io, backend);
+    case "attachment":
+      return cmdAttachment(argv.slice(1), io);
     case "profile":
       return cmdProfile(argv.slice(1), io);
     case "channel":
@@ -1224,10 +1077,8 @@ export async function main(argv: string[], io: Io): Promise<number> {
       return cmdJoin(argv.slice(1), io);
     case "serve":
       return cmdServe(argv.slice(1), io);
-    case "slack":
-      return cmdSlack(argv.slice(1), io);
     default:
-      io.writeErr(`unknown command: ${argv[0] ?? "(none)"}`);
+      io.writeErr(`unknown: ${argv[0] ?? "(none)"}`);
       return 1;
   }
 }

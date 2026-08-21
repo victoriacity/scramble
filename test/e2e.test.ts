@@ -188,13 +188,6 @@ describe("e2e over the real bin.ts entrypoint", () => {
     expect(res.status).toBe(200);
   }, 30000);
 
-  test("GET / serves the web page", async () => {
-    const res = await fetch(`${baseUrl}/`);
-    expect(res.status).toBe(200);
-    const text = await res.text();
-    expect(text.length).toBeGreaterThan(0);
-  }, 30000);
-
   test("join registers a name+persona that GET /agents reports", async () => {
     const r = await runCli(
       ["join", "general", "--as", "beta", "--persona", "acts on things", "--url", baseUrl],

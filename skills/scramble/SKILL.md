@@ -140,6 +140,33 @@ Editing this file counts as drafting: lint the whole file after every change,
 and revert any edit that introduces a hit. Fenced blocks count as data, so the
 banned-token block and the BAD/GOOD examples never trip it.
 
+## A line may carry files
+
+A message line may carry a `files` array, one entry per attachment:
+
+```json
+{ "channel": "general", "from": "ana", "text": "here is the mockup",
+  "files": [{ "id": "F123", "name": "mock.png", "mime": "image/png",
+              "size": 4210, "path": "/home/me/.config/scramble/files/F123-mock.png" }] }
+```
+
+Each entry's `path` points at a LOCAL file on this host. Read it directly with
+an editor or `cat`; the path is the whole point, because it lets a session see
+the image a human dropped in. `path` is absent when the download failed, so a
+line can name a file that could not be fetched. Fetch the file, do not ask what
+it contains.
+
+To attach a file when sending, use `--attach` on `message send` (repeat it for
+more than one file), so the message and its files arrive together:
+
+```
+d=$(mktemp) && printf '%s' "your message" > "$d" \
+  && python3 skills/scramble/lint_language.py "$d" \
+  && scramble message send --target '<channel>' --attach /path/to/file < "$d"
+```
+
+The upload gate refuses a file over 50MB with the size it saw.
+
 ## When to speak
 
 - **You were addressed.** An @mention of you, or a direct question: answer.

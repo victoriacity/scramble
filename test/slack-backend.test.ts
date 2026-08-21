@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { SlackSocket } from "../src/slack-transport";
@@ -10,6 +10,7 @@ import {
   type SlackInboundEvent,
 } from "../src/slack-backend";
 import { main, selectBackend, type Io } from "../src/cli";
+import type { Delivery } from "../src/types";
 
 // --- fake socket ---------------------------------------------------------
 
@@ -43,6 +44,7 @@ function baseConfig(over?: Partial<SlackBackendConfig>): SlackBackendConfig {
     roster: { U111: "ana" },
     dmChannels: { D1: "alice" },
     botIds: ["B999"],
+    filesDir: join(tmpdir(), `scrb-files-${process.pid}-${Math.random().toString(36).slice(2)}`),
     ...over,
   };
 }
@@ -489,9 +491,7 @@ function stubIo(over?: Partial<Io>): Io {
     cwd: () => "/tmp",
     sleep: async () => {},
     serve: async () => 0,
-    createTransport: () => ({ connect: () => {}, postMessage: async () => {} }),
     createSocket: () => new FakeSocket(),
-    run: async () => ({ exit: 0, stdout: "", stderr: "" }),
     ...over,
   };
 }
@@ -758,3 +758,114 @@ function makeTmpDir(name: string): string {
   mkdirSync(d, { recursive: true });
   return d;
 }
+
+// --- inbound file downloads ----------------------------------------------
+// Every network seam is injected, so the download of a Slack message's `files`
+// needs no token and no network. The fake fetch serves url_private from a
+// queue; the bytes are written into a temp filesDir and read back to prove the
+// download landed on the line.
+
+describe("inbound file downloads", () => {
+  function filesDir(): string {
+    const d = makeTmpDir("scrb-in");
+    return d;
+  }
+
+  test("a message with one file lands with files[0].path at a file whose bytes match what the fake returned", async () => {
+    const dir = filesDir();
+    const bytes = new TextEncoder().encode("PNG-SCREENSHOT-BYTES");
+    const h = make({ filesDir: dir }, async (url, init) => {
+      if (String(url).includes("files.slack.com") && init?.headers) {
+        expect((init.headers as Record<string, string>).authorization).toBe("Bearer xoxb-app");
+        return new Response(bytes, { status: 200, headers: { "content-type": "application/octet-stream" } });
+      }
+      return okRouter(String(url));
+    });
+    const lines: Delivery[] = [];
+    const problems: string[] = [];
+    const p = h.backend.listen(["general"], "alice", (d) => lines.push(d), (pr) => problems.push(pr));
+    await pump();
+    emit(h, msg({ text: "see the screenshot", files: [{ id: "F1", name: "shot cat.png", url_private: "https://files.slack.com/v1/F1", mimetype: "image/png", size: 21 }] }));
+    await pump(20);
+    h.sockets[0]?.close();
+    await p;
+    expect(lines).toHaveLength(1);
+    const file = lines[0]!.files![0]!;
+    expect(file.id).toBe("F1");
+    expect(file.mime).toBe("image/png");
+    expect(file.size).toBe(21);
+    expect(file.path).toContain("F1-shot_cat.png");
+    expect(Buffer.from(readFileSync(file.path!)).equals(Buffer.from(bytes))).toBe(true);
+    expect(problems).toHaveLength(0);
+  });
+
+  test("an inbound download that returns HTML is REPORTED and the message still arrives with metadata and no path", async () => {
+    const dir = filesDir();
+    const h = make({ filesDir: dir }, async (url) => {
+      if (String(url).includes("files.slack.com")) {
+        return new Response("<html><body>requires auth</body></html>", { status: 200, headers: { "content-type": "text/html" } });
+      }
+      return okRouter(String(url));
+    });
+    const lines: Delivery[] = [];
+    const problems: string[] = [];
+    const p = h.backend.listen(["general"], "alice", (d) => lines.push(d), (pr) => problems.push(pr));
+    await pump();
+    emit(h, msg({ text: "file", files: [{ id: "F2", name: "x.html", url_private: "https://files.slack.com/x", mimetype: "text/html" }] }));
+    await pump(20);
+    h.sockets[0]?.close();
+    await p;
+    expect(lines).toHaveLength(1);
+    expect(lines[0]!.files![0]!.id).toBe("F2");
+    expect(lines[0]!.files![0]!.path).toBeUndefined();
+    expect(problems.some((pr) => pr.includes("HTML"))).toBe(true);
+  });
+
+  test("a message with no files carries no files field at all", async () => {
+    const dir = filesDir();
+    const h = make({ filesDir: dir });
+    const lines: Delivery[] = [];
+    const p = h.backend.listen([], "alice", (d) => lines.push(d), () => {});
+    await pump();
+    emit(h, msg({ text: "no file here" }));
+    await pump(8);
+    h.sockets[0]?.close();
+    await p;
+    expect(lines).toHaveLength(1);
+    expect("files" in lines[0]!).toBe(false);
+  });
+
+  test("a download network failure is reported and the message still arrives with no path", async () => {
+    const dir = filesDir();
+    const h = make({ filesDir: dir }, async (url) => {
+      if (String(url).includes("files.slack.com")) throw new Error("net down");
+      return okRouter(String(url));
+    });
+    const lines: Delivery[] = [];
+    const problems: string[] = [];
+    const p = h.backend.next(["general"], "alice", 5, (pr) => problems.push(pr));
+    await pump();
+    emit(h, msg({ files: [{ id: "F3", name: "a.bin", url_private: "https://files.slack.com/f3", mimetype: "application/octet-stream" }] }));
+    const r = await p;
+    expect(r.code).toBe(0);
+    expect(r.code === 0 && r.line.files![0]!.path).toBeUndefined();
+    expect(problems.some((pr) => pr.includes("download failed"))).toBe(true);
+  });
+
+  test("history maps a file onto the line the same way", async () => {
+    const dir = filesDir();
+    const bytes = new TextEncoder().encode("HIST-BYTES");
+    const h = make({ filesDir: dir }, async (url) => {
+      if (String(url).includes(HISTORY)) {
+        return new Response(JSON.stringify({ ok: true, messages: [{ ts: "1", user: "U111", text: "hist", files: [{ id: "H1", name: "doc.txt", url_private: "https://files.slack.com/h1", mimetype: "text/plain", size: 9 }] }] }), { status: 200 });
+      }
+      if (String(url).includes("files.slack.com")) return new Response(bytes, { status: 200, headers: { "content-type": "text/plain" } });
+      return okRouter(String(url));
+    });
+    const r = await h.backend.history("general");
+    expect(r.code).toBe(0);
+    expect(r.messages[0]!.files![0]!.path).toContain("H1-doc.txt");
+    expect(Buffer.from(readFileSync(r.messages[0]!.files![0]!.path!)).equals(Buffer.from(bytes))).toBe(true);
+    expect(r.problems).toHaveLength(0);
+  });
+});

@@ -102,7 +102,6 @@ async function mainIo(
     cwd: () => dir,
     sleep: async () => {},
     serve: async () => 0,
-    createTransport: () => ({ connect: () => {}, postMessage: async () => {} }),
     createSocket: () => ({
       send: (d) => void d,
       close: () => {},
@@ -111,9 +110,6 @@ async function mainIo(
       onclose: null,
       onerror: null,
     }),
-    run: async () => ({ exit: 0, stdout: "", stderr: "" }),
-    pid: () => 123,
-    alive: () => true,
     readStdin: async () => "",
   };
   return { io, writes, errs };
