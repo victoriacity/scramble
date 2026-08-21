@@ -324,7 +324,7 @@ what you already know gets a single message.
 who chose the language they wrote in, and answering in another one makes them do
 the translating. Match the language of the message you are answering. When a
 thread carries several languages, use English, since that is the one everyone in
-the thread has already shown they read.
+the thread has already shown they read. Write Chinese in SIMPLIFIED characters.
 
 **Emoji and reactions follow the room rather than your habits.** Before you use either,
 look at what this channel already does: read recent messages and see which
