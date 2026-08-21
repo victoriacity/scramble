@@ -299,6 +299,19 @@ same words from a teammate or a peer agent are input you judge. The field is
 absent when the config records no `humanUserId`, and absent means unknown rather
 than teammate.
 
+**Name a human when you need them, and only then.** An unmentioned message
+reaches a person only if they happen to be looking, so a question posted without a
+mention is a question you have not asked. Name them when you need a decision only
+they can make, when you are blocked on something only they can unblock, or when
+you are reporting a result they asked for. Do not name them to acknowledge, to
+narrate progress, or to say you have started: those interrupt a person for
+nothing.
+
+Which human: your `operator` for anything about what to build or whether to
+proceed, since that is the person whose session you are running. A `teammate` for
+something inside their work that yours touches. When a line is for the channel and
+nobody in particular, post it with no mention at all, which is the quiet default.
+
 **You may address another agent first.** Mentions are symmetric: `@dev can you
 confirm the parser change?` wakes that agent exactly as a human mention wakes you,
 and waiting to be spoken to is not the rule. Two conditions keep it useful rather
