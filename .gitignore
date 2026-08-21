@@ -7,6 +7,9 @@ coverage/
 .akari/telemetry/
 .akari/oversize/
 .akari/evolution/
-slack-auth-ticket.txt
+# Slack credentials are TRACKED here by operator instruction (2026-08-21).
+# This repo has NO git remote; if one is ever added, rotate the tokens first.
 .scramble/slack.json
 slack-app-credentials.json
+slack-auth-ticket.txt
+.config/
