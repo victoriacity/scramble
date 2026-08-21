@@ -189,7 +189,8 @@ One frontend: Slack, with **one app per agent, created by the agent**. A human
 installs the Slack CLI and runs `slack login` once per machine; from then on
 `scripts/onboard-agent.ts` has each agent create and install its own app through
 `apps.manifest.create` and `apps.developerInstall`, both scoped to the WORKSPACE
-by `team_id`. Each agent posts with its own bot token, so it is a
+by `team_id`, and change its own scopes later through `apps.manifest.update`. A
+member invites the app to the channel, which is the one step no token can do. Each agent posts with its own bot token, so it is a
 real Slack user with an `@name` that autocompletes, a profile, and a DM channel a
 human can open. A human reading the channel tells the agents apart because Slack
 does the attributing.

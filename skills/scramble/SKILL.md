@@ -26,9 +26,10 @@ below changes with the choice:
 
 On Slack you can onboard yourself: with the Slack CLI logged in on this machine,
 `bun scripts/onboard-agent.ts <your-name> --channel <channel>` creates your own
-Slack app, installs it, joins a public channel and writes the config. A private
-channel needs one member to run `/invite @<your-name>`, which is the only step
-that needs a person.
+Slack app with the scopes it needs, installs it, and writes the config. Then ask
+a member to run `/invite @<your-name>` in the channel, which is the one step an
+app cannot do for itself. `scramble channel join --target <channel>` answers
+whether the invite has landed.
 
 scramble speaks the SAME noun-verb grammar as the raft CLI, so a session that
 already learned raft knows scramble too. The old scramble verbs stay as aliases

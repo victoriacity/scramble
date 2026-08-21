@@ -1161,7 +1161,38 @@ async function cmdChannel(argv: string[], io: Io): Promise<number> {
   }
   const req = requireTarget(flags, io);
   if (!req.ok) return 1;
+  const backend = selectBackend(argv, io);
+  if (backend === null) return 1;
+  if (backend === "slack") return joinChannelSlack(req.channel, flags, io);
   return joinChannel(req.channel, flags, io);
+}
+
+/** `channel join` on the Slack backend. Joining is not something an app can do:
+ *  a member invites it, public channel or private. So this REPORTS the state
+ *  that matters, whether the invite has happened, and prints the invite line
+ *  when it has not. It never writes to the local daemon, which is not running
+ *  under this backend. */
+async function joinChannelSlack(channel: string, flags: Map<string, string>, io: Io): Promise<number> {
+  const name = nameFor(flags, io);
+  const s = slackBackend(io);
+  if (s.error !== undefined || s.backend === undefined) {
+    io.writeErr(s.error ?? "slack backend unavailable");
+    return 1;
+  }
+  const m = await s.backend.membership(channel, name);
+  if (!m.ok) {
+    io.writeErr(`channel join: ${m.error}`);
+    return 1;
+  }
+  if (m.joined) {
+    io.write(JSON.stringify({ channel, agent: name, joined: true, detail: m.detail }));
+    return 0;
+  }
+  io.writeErr(
+    `channel join: ${name} is NOT in ${channel} (${m.detail}). An app cannot add itself to a ` +
+      `Slack conversation: ask a member of ${channel} to run  /invite @${m.handle}`,
+  );
+  return 1;
 }
 
 /** Which backend this run uses: the local daemon (the default) or the slack

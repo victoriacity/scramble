@@ -23,6 +23,7 @@ const POST_URL = "https://slack.com/api/chat.postMessage";
 const HISTORY_URL = "https://slack.com/api/conversations.history";
 const REPLIES_URL = "https://slack.com/api/conversations.replies";
 const USERS_INFO_URL = "https://slack.com/api/users.info";
+const AUTH_TEST_URL = "https://slack.com/api/auth.test";
 
 /** Cap on the number of threaded ROOTS expanded per history call — the fan-out
  *  is bounded: one extra conversations.replies request per expanded root, on
@@ -235,6 +236,33 @@ export class SlackBackend {
    *  default, so a single-app config keeps working unchanged. */
   private appTokenFor(agent: string): string {
     return this.agents[agent]?.appToken ?? this.appToken ?? "";
+  }
+
+  /** Is this agent's app IN the conversation, and what is its handle? An app
+   *  cannot add itself to a Slack conversation, public or private: a member
+   *  invites it. So the useful answer to "join" is whether the invite has
+   *  happened, and the handle to invite when it has not. A one-message read is
+   *  the probe, because that is the access the agent actually needs. */
+  async membership(
+    channel: string,
+    as: string,
+  ): Promise<{ ok: true; joined: boolean; handle: string; detail: string } | { ok: false; error: string }> {
+    const slackChannel = this.channels[channel];
+    if (!slackChannel) return { ok: false, error: `no Slack channel for channel ${channel}` };
+    const t = this.agentToken(as);
+    if (!t.ok) return { ok: false, error: t.error };
+    const who = await readOk<{ user?: string }>(this.fetch, AUTH_TEST_URL, {
+      headers: { authorization: `Bearer ${t.token}` },
+    });
+    if (!who.ok) return { ok: false, error: who.error };
+    const handle = who.data.user ?? as;
+    const probe = await readOk<{ error?: string }>(
+      this.fetch,
+      `${HISTORY_URL}?channel=${encodeURIComponent(slackChannel)}&limit=1`,
+      { headers: { authorization: `Bearer ${t.token}` } },
+    );
+    if (probe.ok) return { ok: true, joined: true, handle, detail: "a read of the conversation succeeded" };
+    return { ok: true, joined: false, handle, detail: probe.error };
   }
 
   /** POST one post to the Slack channel a channel maps to, with the agent's own bot

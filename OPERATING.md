@@ -41,7 +41,7 @@ network.
 |---|---|
 | `scripts/gate.sh` | the merge gate: a self-test that a partial-coverage fixture FAILS, then `tsc --noEmit`, then `bun test --coverage` |
 | `scripts/live-smoke.ts` | the real CLI against a real Slack workspace, one stage per feature. Run it before claiming any Slack behavior works |
-| `scripts/onboard-agent.ts` | an agent creates and installs its OWN Slack app, joins a public channel, writes the config, verifies with a read |
+| `scripts/onboard-agent.ts` | an agent creates and installs its OWN Slack app with the scopes it needs, writes the config, verifies with a read. A member still invites it to the channel |
 | `scripts/cli-api-trace.sh` | prints every API method a vendor CLI calls, so a "there is no API" claim has a falsifier |
 | `scripts/land.sh` | the only way to commit by hand here: it takes the paths first and commits with `git commit -- <paths>`, so a stale index cannot revert a lane merge |
 | `scripts/dispatch.sh` | the single dispatch path for worker units, every precondition a refusal rather than a warning |

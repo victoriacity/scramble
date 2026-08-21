@@ -1247,6 +1247,88 @@ describe("message check under the slack backend", () => {
 });
 
 
+describe("channel join on the slack backend", () => {
+  // An app cannot add itself to a Slack conversation, public or private: a
+  // member invites it. So the verb reports whether the invite has happened and
+  // prints the invite line when it has not, and it never touches the local
+  // daemon, which is not running under this backend.
+  function joinIo(cwd: string, fetch: (u: string) => Promise<Response>): { io: Io; writes: string[]; errs: string[] } {
+    const writes: string[] = [];
+    const errs: string[] = [];
+    return {
+      io: {
+        write: (l) => writes.push(l),
+        writeErr: (l) => errs.push(l),
+        fetch: (input) => fetch(String(input)),
+        env: () => undefined,
+        cwd: () => cwd,
+        sleep: async () => {},
+        serve: async () => 0,
+        createSocket: () => ({ send: () => {}, close: () => {}, onopen: null, onmessage: null, onclose: null, onerror: null }),
+      },
+      writes,
+      errs,
+    };
+  }
+
+  test("an invited agent is reported as joined", async () => {
+    const cwd = scratchDir("join-in");
+    writeSlackConfig(cwd, { token: "xoxb-d", channels: { team: "C1" }, agents: { dev: { token: "T_DEV" } } });
+    const { io, writes } = joinIo(cwd, async (u) => {
+      if (u.includes("auth.test")) return new Response(JSON.stringify({ ok: true, user: "devbot" }), { status: 200 });
+      return new Response(JSON.stringify({ ok: true, messages: [] }), { status: 200 });
+    });
+    const code = await main(["channel", "join", "--target", "team", "--as", "dev", "--backend", "slack"], io);
+    expect(code).toBe(0);
+    expect(JSON.parse(writes[0]!)).toEqual({
+      channel: "team",
+      agent: "dev",
+      joined: true,
+      detail: "a read of the conversation succeeded",
+    });
+  });
+
+  test("an uninvited agent gets the invite line with its own handle", async () => {
+    const cwd = scratchDir("join-out");
+    writeSlackConfig(cwd, { token: "xoxb-d", channels: { team: "C1" }, agents: { dev: { token: "T_DEV" } } });
+    const { io, errs } = joinIo(cwd, async (u) => {
+      if (u.includes("auth.test")) return new Response(JSON.stringify({ ok: true, user: "devbot" }), { status: 200 });
+      return new Response(JSON.stringify({ ok: false, error: "not_in_channel" }), { status: 200 });
+    });
+    const code = await main(["channel", "join", "--target", "team", "--as", "dev", "--backend", "slack"], io);
+    expect(code).toBe(1);
+    const said = errs.join(" ");
+    expect(said).toContain("not_in_channel");
+    expect(said).toContain("/invite @devbot");
+  });
+
+  test("a channel absent from the config is refused by name", async () => {
+    const cwd = scratchDir("join-nochan");
+    writeSlackConfig(cwd, { token: "xoxb-d", channels: {}, agents: { dev: { token: "T_DEV" } } });
+    const { io, errs } = joinIo(cwd, async () => new Response(JSON.stringify({ ok: true }), { status: 200 }));
+    expect(await main(["channel", "join", "--target", "ghost", "--as", "dev", "--backend", "slack"], io)).toBe(1);
+    expect(errs.join(" ")).toContain("no Slack channel for channel ghost");
+  });
+
+  test("a failing auth.test is reported rather than read as absence", async () => {
+    const cwd = scratchDir("join-badauth");
+    writeSlackConfig(cwd, { token: "xoxb-d", channels: { team: "C1" }, agents: { dev: { token: "T_DEV" } } });
+    const { io, errs } = joinIo(cwd, async (u) => {
+      if (u.includes("auth.test")) return new Response(JSON.stringify({ ok: false, error: "invalid_auth" }), { status: 200 });
+      return new Response(JSON.stringify({ ok: true, messages: [] }), { status: 200 });
+    });
+    expect(await main(["channel", "join", "--target", "team", "--as", "dev", "--backend", "slack"], io)).toBe(1);
+    expect(errs.join(" ")).toContain("invalid_auth");
+  });
+
+  test("a missing slack config is reported, naming the path", async () => {
+    const cwd = scratchDir("join-nocfg");
+    const { io, errs } = joinIo(cwd, async () => new Response(JSON.stringify({ ok: true }), { status: 200 }));
+    expect(await main(["channel", "join", "--target", "team", "--as", "dev", "--backend", "slack"], io)).toBe(1);
+    expect(errs.join(" ")).toContain("slack.json");
+  });
+});
+
 function writeSlackConfig(cwd: string, cfg: Record<string, unknown>): void {
   mkdirSync(join(cwd, ".scramble"), { recursive: true });
   writeFileSync(join(cwd, ".scramble", "slack.json"), JSON.stringify(cfg));

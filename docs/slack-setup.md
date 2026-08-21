@@ -48,9 +48,9 @@ Everything after that is the agent's own work:
 bun scripts/onboard-agent.ts <agent-name> --channel <channel-name>
 ```
 
-That script creates the agent's own Slack app, installs it to the workspace,
-joins the channel when the channel is public, writes
-`~/.config/scramble/slack.json`, and verifies with a real read. It never prints a
+That script creates the agent's own Slack app with the scopes it needs, installs
+it to the workspace, writes `~/.config/scramble/slack.json`, and verifies with a
+real read. It never prints a
 token. Two Slack calls do the work, both using the credential `slack login`
 stored:
 
@@ -88,23 +88,34 @@ the install dialog's workspace choice matters when doing it by hand. And a file'
 `url_private` points at the org host (`T0…` in the path even for a workspace
 app), which is where the inbound download blocker below lives.
 
-### The one human operation left is the private-channel invite
+### The one human operation left is the invite
 
-A public channel needs nobody: the app holds `channels:join` and the script calls
-`conversations.join`, verified by a fresh app joining `#general` unaided.
-
-Slack has no API for an app to add itself to a PRIVATE conversation, and the
-CLI's own credential cannot do it either: `conversations.invite` with it answers
-`missing_scope`, needing `channels:write.invites, groups:write.invites` that an
-app-configuration token does not carry. So for a private channel, one member runs
+An app does not join a channel, public or private: a member invites it.
 
 ```
 /invite @<agent>
 ```
 
-The channel's ID never has to be handed over: the CLI credential holds
-`groups:read`, so `bun scripts/onboard-agent.ts <name> --channel <name>` finds a
-private channel by name even though no bot token can enumerate one.
+The CLI's own credential cannot do it either: `conversations.invite` with it
+answers `missing_scope`, needing `channels:write.invites` and
+`groups:write.invites`, which an app-configuration token does not carry. So the
+invite is the one per-agent human operation, and it is one line in the channel.
+
+Two things make it cheap. The channel's ID never has to be handed over, because
+the CLI credential holds `groups:read` and
+`bun scripts/onboard-agent.ts <name> --channel <name>` finds even a private
+channel by name. And the config is written before the invite, so the agent works
+the moment the invite lands with nothing to re-run: the verify read is refused
+until then, and the script says so rather than calling it a failure.
+
+### An agent changes its own permissions
+
+Scopes are not a human step either. The agent edits its scope list and runs
+`apps.manifest.update` followed by `apps.developerInstall` again for the `appId`
+in its own config entry, both with the same CLI credential, and the reinstall
+returns the token carrying the new scope.
+Measured: adding a scope to a live app and reinstalling returned the same bot
+token with the scope present on the next `auth.test`.
 
 ### Verify
 
@@ -141,7 +152,7 @@ that conversation, or the id is wrong.
 | `appToken` | App-level token (`xapp-`), scope `connections:write`. The top-level default a Socket Mode connect uses for an agent with no per-agent `appToken`. |
 | `token` | The default bot token (`xoxb-`), used when `--as` names no agent with a token of its own. Required. |
 | `channels` | scramble channel name → Slack conversation id. A channel absent here fails loudly: `no Slack channel for channel <name>`. |
-| `agents` | Agent name → `{ "token": "xoxb-…", "appToken": "xapp-…" }`: the bot and app-level tokens that agent acts with. The per-agent `appToken` is optional: when absent the top-level `appToken` is used for that agent's Socket Mode connect, so a single-app config keeps working unchanged. `onboard-agent.ts` writes both per-agent keys it receives from `apps.developerInstall` here. |
+| `agents` | Agent name → `{ "token": "xoxb-…", "appToken": "xapp-…", "appId": "A…" }`: the bot and app-level tokens that agent acts with. The per-agent `appToken` is optional: when absent the top-level `appToken` is used for that agent's Socket Mode connect, so a single-app config keeps working unchanged. `onboard-agent.ts` writes both per-agent tokens it receives from `apps.developerInstall` here, plus `appId`, which is what the agent needs to change its own scopes or remove its own app later. |
 | `dmChannels` | Slack DM conversation id → the agent that DM belongs to, so an inbound DM is attributed to the right agent. |
 | `roster` | Slack user id → name. A cache, not a requirement: an id absent here resolves through `users.info` (scope `users:read`) and is remembered for the run. |
 | `filesDir` | Where inbound attachments are downloaded and the local file ledger lives. |
@@ -150,7 +161,7 @@ Every call uses the ACTING agent's credential: `--as <name>` resolves through
 `agents.<name>.token` (falling back to the top-level `token`) for every read,
 threaded-reply expansion, attachment download and post, and through
 `agents.<name>.appToken` (falling back to the top-level `appToken`) for the
-Socket Mode connect — so an agent talking to Slack is always the agent, never
+Socket Mode connect, so an agent talking to Slack is always the agent, never
 somebody else's app.
 
 Channel names may contain `/` (a DM channel is `dm/<agent>/<peer>`), so

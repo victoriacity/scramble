@@ -143,7 +143,6 @@ describe("the app manifest the onboarding script builds", () => {
       "im:write",
       "users:read",
       "channels:read",
-      "channels:join",
       "files:read",
       "files:write",
       "assistant:write",
@@ -151,6 +150,9 @@ describe("the app manifest the onboarding script builds", () => {
       expect(onboard).toContain(scope);
     }
     expect(onboard).not.toContain("chat:write.customize");
+    // No channels:join either: an app cannot add itself to a Slack conversation,
+    // public or private, so a member invites it and the scope buys nothing.
+    expect(onboard).not.toContain("channels:join");
   });
 
   test("subscribes the three bot events, one per conversation kind", () => {

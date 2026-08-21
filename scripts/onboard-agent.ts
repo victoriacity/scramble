@@ -37,7 +37,6 @@ const SCOPES: Array<[string, string]> = [
   ["im:write", "open and write a DM, so a human can talk to this agent alone"],
   ["users:read", "resolve <@U…> to a name; without it a mention matches no agent"],
   ["channels:read", "name a channel by its id, and find a public channel by name"],
-  ["channels:join", "join a public channel unaided, which removes the last human step"],
   ["files:write", "upload an attachment"],
   ["files:read", "download an inbound attachment"],
   ["assistant:write", "the automatic working status on an assistant thread"],
@@ -228,8 +227,9 @@ console.log(`onboard: installed to ${team}, bot token and app-level token receiv
 const who = await get(botToken, "auth.test");
 console.log(`onboard: the bot is @${String(who.user)} (${String(who.bot_id)})`);
 
-// The channel. A public one the agent joins itself; a private one needs the one
-// human operation that has no API: a member inviting it from inside.
+// The channel. AN AGENT DOES NOT JOIN A CHANNEL, whether it is public or
+// private: a member invites it. The channel mapping is written either way, so
+// the agent works the moment the invite lands, with nothing to re-run.
 let channelName: string | undefined;
 let channelId: string | undefined;
 const wanted = flag("channel");
@@ -237,17 +237,10 @@ if (wanted !== undefined && wanted !== "") {
   const ch = await resolveChannel(token, team, wanted);
   channelId = ch.id;
   channelName = ch.name;
-  if (ch.private) {
-    console.log(
-      `onboard: ${ch.name} is PRIVATE. Slack has no API for an app to add itself to a\n` +
-        `         private conversation, so one human operation remains: in #${ch.name}, run\n` +
-        `           /invite @${String(who.user)}`,
-    );
-  } else {
-    const j = await api(botToken, "conversations.join", { channel: ch.id });
-    void j;
-    console.log(`onboard: joined #${ch.name} unaided`);
-  }
+  console.log(
+    `onboard: the one human operation left is the invite. In #${ch.name}, a member runs\n` +
+      `           /invite @${String(who.user)}`,
+  );
 }
 
 // The config, merged so a machine can hold several agents, and never printed.
@@ -257,16 +250,21 @@ type Cfg = {
   token?: string;
   appToken?: string;
   channels?: Record<string, string>;
-  agents?: Record<string, { token?: string; appToken?: string }>;
+  agents?: Record<string, { token?: string; appToken?: string; appId?: string }>;
   roster?: Record<string, string>;
   dmChannels?: Record<string, string>;
 };
 const cfg: Cfg = existsSync(cfgPath) ? (JSON.parse(readFileSync(cfgPath, "utf8")) as Cfg) : {};
+// The APP ID is recorded beside the tokens, because an agent that cannot name
+// its own app cannot change its own scopes (apps.manifest.update) or remove it
+// (apps.manifest.delete). Recovering it afterwards took a bots.info lookup
+// through a DIFFERENT agent's token, which the design should not need.
 cfg.agents = {
   ...(cfg.agents ?? {}),
   [agent]: {
     token: botToken,
     ...(appToken !== undefined && appToken !== "" ? { appToken } : {}),
+    appId,
   },
 };
 cfg.token = cfg.token ?? botToken;
@@ -291,7 +289,12 @@ if (channelName !== undefined) {
   const code = await p.exited;
   const lines = out.split("\n").filter((l) => l.startsWith("{")).length;
   console.log(`onboard: verify read exit ${code}, ${lines} line(s)${err.trim() ? `, stderr: ${err.trim().split("\n")[0]}` : ""}`);
-  if (code !== 0) die("the verify read failed; the config above is written but not proven");
+  if (code !== 0) {
+    console.log(
+      `onboard: the read is refused until the invite lands, which is expected. Run it\n` +
+        `         again after the /invite above to confirm.`,
+    );
+  }
 }
 console.log(
   `onboard: done. ${agent} can now run:\n` +
