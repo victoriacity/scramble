@@ -23,7 +23,6 @@ env vars. Any `AKARI_*` variable must be documented here (the engine's
   daemon, the CLI, the drivers.
 - `test/`: per-unit bun test suites.
 - `scripts/gate.sh`: the merge gate (`tsc --noEmit`, `bun test --coverage`).
-- `scripts/dispatch.sh`: the operator one-shot that launches a scramble fleet.
 
 ## Gate
 

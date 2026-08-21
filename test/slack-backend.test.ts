@@ -489,9 +489,7 @@ function stubIo(over?: Partial<Io>): Io {
     cwd: () => "/tmp",
     sleep: async () => {},
     serve: async () => 0,
-    createTransport: () => ({ connect: () => {}, postMessage: async () => {} }),
     createSocket: () => new FakeSocket(),
-    run: async () => ({ exit: 0, stdout: "", stderr: "" }),
     ...over,
   };
 }

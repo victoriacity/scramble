@@ -51,20 +51,6 @@ async function readLines(res: Response, n: number): Promise<string[]> {
 
 const ndis = (lines: string[]) => lines.map((l) => JSON.parse(l) as Record<string, unknown>);
 
-// --- index.html transient presence, so both the serve and 404 branches run
-const indexRel = "web/index.html";
-const indexFile = join(process.cwd(), "web", "index.html");
-const hadIndex = existsSync(indexFile);
-const origIndex = hadIndex ? readFileSync(indexFile, "utf8") : "";
-
-beforeAll(() => {
-  mkdirSync(join(process.cwd(), "web"), { recursive: true });
-});
-afterAll(() => {
-  if (hadIndex) writeFileSync(indexFile, origIndex);
-  else if (existsSync(indexFile)) unlinkSync(join(process.cwd(), "web", "index.html"));
-});
-
 describe("POST /channels/:channel", () => {
   test("returns seq + crossings on first send", async () => {
     const h = handler();
@@ -303,10 +289,10 @@ describe("streams", () => {
     expect(res.status).toBe(400);
   });
 
-  test("405 for a non-GET on /stream", async () => {
+  test("the removed firehose /stream route now 404s under any method", async () => {
     const h = handler();
     const res = await h(new Request("http://x/stream", { method: "POST", body: "{}" }));
-    expect(res.status).toBe(405);
+    expect(res.status).toBe(404);
   });
 
   test("agent stream: only the agent's channels, Delivery with mentioned, own excluded", async () => {
@@ -337,29 +323,6 @@ describe("streams", () => {
     await reader.cancel();
   });
 
-  test("firehose stream: every channel", async () => {
-    const h = handler();
-    await h(post({ from: "a", text: "hello", id: "1" }));
-    await h(
-      new Request("http://x/channels/" + encodeURIComponent("dm/a/b"), {
-        method: "POST",
-        body: JSON.stringify({ from: "b", text: "world", id: "2" }),
-      }),
-    );
-    const res = await h(new Request("http://x/stream?since=0"));
-    const lines = ndisos(await readLines(res, 2));
-    expect(lines.map((l) => l.text)).toEqual(["hello", "world"]);
-  });
-
-  test("since cursor resumes a firehose", async () => {
-    const h = handler();
-    await h(post({ from: "a", text: "x", id: "1" }));
-    await h(post({ from: "b", text: "y", id: "2" }));
-    const res = await h(new Request("http://x/stream?since=1"));
-    const lines = ndisos(await readLines(res, 1));
-    expect(lines[0]!.text).toBe("y");
-  });
-
   test("agent pending snapshot returns the finite delivery set", async () => {
     const h = handler();
     await h(new Request("http://x/agents/dev", { method: "POST", body: '{"persona":"p","channel":"general"}' }));
@@ -382,17 +345,6 @@ describe("streams", () => {
     // a cursor skips what was already drained
     const since = await h(new Request("http://x/agents/dev/pending?since=1"));
     expect((await since.json()) as unknown[]).toHaveLength(0);
-  });
-
-  test("firehose stream: a live message flows into the open stream", async () => {
-    const h = handler();
-    const res = await h(new Request("http://x/stream?since=0"));
-    const reader = res.body!.getReader();
-    const pending = reader.read();
-    await h(post({ from: "a", text: "live", id: "1" }));
-    const { value } = await pending;
-    expect(JSON.parse(new TextDecoder().decode(value)).text).toBe("live");
-    await reader.cancel();
   });
 });
 
@@ -437,34 +389,16 @@ describe("auth", () => {
   });
 });
 
-describe("GET /", () => {
-  test("serves web/index.html when present", async () => {
-    writeFileSync(indexFile, "hello scramble page");
-    const h = handler();
-    const res = await h(new Request("http://x/"));
-    expect(res.status).toBe(200);
-    expect(await res.text()).toBe("hello scramble page");
-  });
-
-  test("404 when index.html is missing", async () => {
-    if (existsSync(indexFile)) unlinkSync(indexFile);
-    const h = handler();
-    const res = await h(new Request("http://x/"));
-    expect(res.status).toBe(404);
-    expect(await bodyJson(res)).toMatchObject({ error: "index.html not found" });
-  });
-
-  test("405 for POST on /", async () => {
-    const h = handler();
-    const res = await h(new Request("http://x/", { method: "POST", body: "{}" }));
-    expect(res.status).toBe(405);
-  });
-});
-
 describe("unknown route", () => {
   test("404 for an unmatched path", async () => {
     const h = handler();
     const res = await h(new Request("http://x/does/not/exist"));
+    expect(res.status).toBe(404);
+  });
+
+  test("404 at the root: the daemon's built-in page route was removed with the web page", async () => {
+    const h = handler();
+    const res = await h(new Request("http://x/"));
     expect(res.status).toBe(404);
   });
 });
@@ -481,18 +415,3 @@ describe("serve()", () => {
 function ndisos(lines: string[]) {
   return lines.map((l) => JSON.parse(l) as Record<string, unknown>);
 }
-
-test("GET /seq reports the current tip and rejects other methods", async () => {
-  // A bridge reads this once at startup and opens its stream there, so a
-  // reconnect resumes instead of republishing the channel to Slack.
-  const store = createStore(freshDir());
-  const h = createHandler(store, {});
-  store.post({ channel: "general", from: "a", text: "one", id: "i1" });
-  store.post({ channel: "general", from: "a", text: "two", id: "i2" });
-  const ok = await h(new Request("http://x/seq"));
-  expect(ok.status).toBe(200);
-  expect(await ok.json()).toEqual({ seq: store.tip() });
-  expect(store.tip()).toBe(2);
-  const bad = await h(new Request("http://x/seq", { method: "POST" }));
-  expect(bad.status).toBe(405);
-});
