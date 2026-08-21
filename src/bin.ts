@@ -9,6 +9,23 @@ import { createSlackTransport, type SlackSocket } from "./slack-transport";
 import type { SlackConfig, SlackTransport } from "./slack";
 import { main } from "./cli";
 
+// The real raft process seam: shell out to the raft binary, piping stdin.
+// Kept at the edge so no test imports it — tests inject a fake run into
+// src/cli.ts's main() and need no raft binary, no network, no credential.
+async function runRaft(cmd: string, args: string[], stdin: string): Promise<{ exit: number; stdout: string; stderr: string }> {
+  const proc = Bun.spawn([cmd, ...args], {
+    stdin: "pipe",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  proc.stdin.write(new TextEncoder().encode(stdin));
+  proc.stdin.end();
+  const exit = await proc.exited;
+  const stdout = new TextDecoder().decode(await new Response(proc.stdout).arrayBuffer());
+  const stderr = new TextDecoder().decode(await new Response(proc.stderr).arrayBuffer());
+  return { exit, stdout, stderr };
+}
+
 // The real WebSocket adapter: wire bun's built-in WebSocket onto the
 // transport's SlackSocket surface. Kept at the edge so no test needs a socket.
 function createSocket(cfg: SlackConfig): SlackTransport {
@@ -62,6 +79,7 @@ const io = {
   createTransport(cfg: SlackConfig): SlackTransport {
     return createSocket(cfg);
   },
+  run: runRaft,
 };
 
 if (import.meta.main) {

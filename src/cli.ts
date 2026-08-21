@@ -10,6 +10,7 @@ import { createStore, type RoomStore } from "./store";
 import type { Message, PostResult } from "./types";
 import type { ServeOptions } from "./server";
 import { createBridge, type SlackConfig, type SlackTransport } from "./slack";
+import { RaftBackend, type RunFn } from "./raft";
 
 const DEFAULT_URL = "http://127.0.0.1:7737";
 const MAX_BACKOFF = 2000; // ms cap on reconnect delay
@@ -30,6 +31,11 @@ export interface Io {
    *  network bind live in src/bin.ts; tests inject a fake transport so main()
    *  needs no network. */
   createTransport(cfg: SlackConfig): SlackTransport;
+  /** The process seam for the raft backend: shell out to a command, piping
+   *  stdin, returning its exit and output. The real spawn lives in src/bin.ts
+   *  so tests inject a fake run and need no raft binary, no network, and no
+   *  credential. */
+  run?(cmd: string, args: string[], stdin: string): Promise<{ exit: number; stdout: string; stderr: string }>;
 }
 
 /** The CLI owns --bind string parsing. The one interpretation site: it turns a
@@ -572,16 +578,95 @@ function printBridgeSummary(cfg: SlackConfig, base: string, io: Io): void {
   io.writeErr(`dry-run OK: no transport was connected`);
 }
 
+/** Which transport this run uses: the local daemon backend (the default, so
+ *  nothing currently working changes) or the raft backend. Selected by the
+ *  `--backend raft` flag (highest precedence) or the `SCRAMBLE_BACKEND` env. */
+export function selectBackend(argv: string[], io: Io): "local" | "raft" {
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i]!;
+    if (a === "--backend") return argv[i + 1] === "local" ? "local" : "raft";
+    if (a.startsWith("--backend=")) return a === "--backend=local" ? "local" : "raft";
+  }
+  return io.env("SCRAMBLE_BACKEND") === "raft" ? "raft" : "local";
+}
+
+/** Build the raft backend with the injected run seam (io.run) so tests need no
+ *  raft binary. `--max-polls` bounds a listen loop for test termination. */
+function raftBackend(flags: Map<string, string>, io: Io): RaftBackend {
+  const profile = flags.get("profile") ?? io.env("RAFT_PROFILE");
+  const maxPolls = intFlag(flags, "max-polls", Number.POSITIVE_INFINITY);
+  return new RaftBackend({ run: io.run!, profile, maxPolls });
+}
+
+async function raftCmdPost(argv: string[], io: Io): Promise<number> {
+  const { flags, positionals } = parseArgs(argv);
+  const room = positionals[0];
+  const text = positionals.slice(1).join(" ");
+  if (room === undefined || !text) {
+    io.writeErr("usage: scramble post <room> <text> [--as <name>]");
+    return 1;
+  }
+  const from = nameFor(flags, io);
+  const r = await raftBackend(flags, io).send(room, text, from);
+  if (!r.ok) {
+    io.writeErr(`post failed: ${r.error}`);
+    return 1;
+  }
+  return 0;
+}
+
+async function raftCmdNext(argv: string[], io: Io): Promise<number> {
+  const { flags } = parseArgs(argv);
+  const name = nameFor(flags, io);
+  const timeoutSec = intFlag(flags, "timeout", 300);
+  const r = await raftBackend(flags, io).next(name, timeoutSec);
+  for (const p of r.problems) io.writeErr(`raft: ${p}`);
+  if (r.code === 64) return 64;
+  if (r.line !== undefined) io.write(JSON.stringify(r.line));
+  return 0;
+}
+
+async function raftCmdListen(argv: string[], io: Io): Promise<number> {
+  const { flags } = parseArgs(argv);
+  const name = nameFor(flags, io);
+  const b = raftBackend(flags, io);
+  await b.listen(
+    name,
+    (d) => io.write(JSON.stringify(d)),
+    (p) => io.writeErr(`raft: ${p}`),
+  );
+  return 0;
+}
+
+async function raftCmdHistory(argv: string[], io: Io): Promise<number> {
+  const { flags, positionals } = parseArgs(argv);
+  const room = positionals[0];
+  if (room === undefined) {
+    io.writeErr("history requires a room");
+    return 1;
+  }
+  const name = nameFor(flags, io);
+  const r = await raftBackend(flags, io).history(room, name);
+  for (const p of r.problems) io.writeErr(`raft: ${p}`);
+  if (r.code !== 0) {
+    io.writeErr(`history failed: ${r.error}`);
+    return 1;
+  }
+  for (const m of r.messages) io.write(JSON.stringify(m));
+  return 0;
+}
+
 export async function main(argv: string[], io: Io): Promise<number> {
+  const raft = selectBackend(argv, io) === "raft";
   switch (argv[0]) {
     case "post":
-      return cmdPost(argv.slice(1), io);
+      return raft ? raftCmdPost(argv.slice(1), io) : cmdPost(argv.slice(1), io);
     case "listen":
-      return cmdListen(argv.slice(1), io);
+      return raft ? raftCmdListen(argv.slice(1), io) : cmdListen(argv.slice(1), io);
     case "next":
-      return cmdNext(argv.slice(1), io);
+      return raft ? raftCmdNext(argv.slice(1), io) : cmdNext(argv.slice(1), io);
     case "history":
-      return cmdHistory(argv.slice(1), io);
+      return raft ? raftCmdHistory(argv.slice(1), io) : cmdHistory(argv.slice(1), io);
     case "join":
       return cmdJoin(argv.slice(1), io);
     case "serve":

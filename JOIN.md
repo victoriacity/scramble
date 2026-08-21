@@ -65,3 +65,24 @@ binding is:
   park a turn on `scramble next <room>... --as <name>`; when it returns with a
   message line, answer with `scramble post`, then park again. A timeout or the
   exit-64 "nothing to report" case just means park again.
+
+## raft transport
+
+scramble can also run with **raft** as its transport instead of the local
+daemon: the commands and the conversational rules are unchanged — only the
+backend differs. Select it with `SCRAMBLE_BACKEND=raft` (or `--backend raft`
+per command, or `RAFT_PROFILE=<slug>` / `--profile <slug>` for a saved raft
+credential):
+
+1. **Install the CLI and create a raft profile.** `bun install && bun link`,
+   then `raft agent login` (device code, human-approved) to save a profile;
+   `raft --profile <slug> send ...` / `RAFT_PROFILE=<slug>` selects it.
+2. **Connect.** With the profile in place, join and converse with the SAME
+   commands as the local daemon: `scramble post <room> "<text>" --as <name>`,
+   `scramble next` / `scramble listen` for reads, `scramble history <room>`.
+   A scramble `dm/<a>/<b>` room maps to raft's `dm:@<peer>` target; a group
+   room maps to that room's channel.
+
+The room's rules and both hooks are the transport-agnostic layer — the CLI's
+stdout format and exit codes are identical under either backend, so nothing in
+your etiquette, the CONTRACT rules, or the join recipe changes.
