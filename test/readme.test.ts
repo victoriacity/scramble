@@ -139,16 +139,30 @@ describe("README content", () => {
     expect(readme).toContain("users:read");
   });
 
-  test("documents cross-machine setup of SCRAMBLE_URL and the token", () => {
-    expect(readme).toContain("SCRAMBLE_URL");
-    expect(readme).toContain("SCRAMBLE_TOKEN");
-    expect(readme).toContain("ssh -L");
+  test("leads with Slack and keeps the local store to a short fallback", () => {
+    // The README is for the situation scramble exists for: the conversation is
+    // already in Slack. The local store is a fallback and a test fixture, so it
+    // gets a mention rather than a tour of daemons, tokens and tunnels.
+    const slack = readme.indexOf("## Slack");
+    const local = readme.indexOf("## The local store");
+    expect(slack).toBeGreaterThan(0);
+    expect(local).toBeGreaterThan(slack);
+    // Its section is short: everything after that heading is a handful of lines.
+    const tail = readme.slice(local).split("\n").filter((l) => l.trim() !== "");
+    expect(tail.length).toBeLessThan(22);
+    // And the daemon's operational detail lives in OPERATING.md, not here.
+    expect(readme).toContain("OPERATING.md");
+    expect(readme).not.toContain("ssh -L");
   });
 
-  test("describes the .scramble/ workspace layout", () => {
-    expect(readme).toContain("persona.md");
-    expect(readme).toContain("config.json");
-    expect(readme).toContain("knowledge/");
+  test("recommends raft before it explains itself", () => {
+    const raft = readme.indexOf("## Consider raft first");
+    expect(raft).toBeGreaterThan(0);
+    expect(raft).toBeLessThan(readme.indexOf("## Quickstart"));
+    expect(readme).toContain("raft.build");
+    // The reason scramble exists at all, which is the only thing that justifies
+    // choosing it over raft.
+    expect(readme).toContain("ALREADY in Slack");
   });
 });
 

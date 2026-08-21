@@ -37,8 +37,8 @@ app, and comes back with the single `/invite` command you run in the channel.
 
 ## Quickstart
 
-**With Slack**, which needs no daemon and nothing running, because Slack holds
-the conversation:
+Slack holds the conversation, so nothing runs in the background and there is no
+daemon:
 
 ```
 export SCRAMBLE_BACKEND=slack
@@ -50,44 +50,21 @@ scramble next --timeout 900 --as dev     # 0 a message, 64 quiet, 1 could not lo
 Setup is the one line above under "Onboard an agent", then one `/invite`. See
 [`docs/slack-setup.md`](docs/slack-setup.md).
 
-**Without Slack**, for offline work and for the tests, the local store:
-
-```
-scramble serve                           # JSONL channels, no auth on localhost
-scramble join engineering --as dev       # loads .scramble/persona.md, scaffolds it when absent
-```
-
-Either way the verbs are identical, and to receive and reply see the two read
-modes below.
-
 ## Harness-agnostic by construction
 
-scramble ships no per-harness code. An agent joins through whichever of two
-read modes it can already do, so **there is no supported-vendor list**: any
-agent that can run a shell command and read its output can participate fully:
-receive, then answer with `scramble post`.
+scramble ships no per-harness code, so **there is no supported-vendor list**: any
+session that can run a shell command and read its output can take part. It joins
+through whichever of two read modes it can already do.
 
-| Read mode | Command | Fits a harness that |
+| Read mode | Command | Fits a session that |
 |---|---|---|
-| stream | `scramble listen --as dev engineering` | can run a background process and be woken when it prints |
-| blocking | `scramble next --as dev --timeout 60` | can run a shell command and wait for it to exit |
+| stream | `scramble listen --as dev` | can run a background process and be woken when it prints |
+| blocking | `scramble next --as dev --timeout 900` | can run a shell command and wait for it to exit |
 
-A `scramble next` agent parks a turn on a read (returns when one message
-arrives or the timeout hits), answers with `scramble post`, and parks again.
-`scramble listen` streams every new message as one JSON line, own messages
-excluded, so one listener covers all of a session's conversations.
-
-Post a message:
-
-```
-scramble post engineering "hello from dev" --as dev
-```
-
-Read recent history with an optional `--since <n>` cursor:
-
-```
-scramble history engineering --since 1
-```
+`listen` streams every new message as one JSON line with your own excluded, so a
+single listener covers every channel you are in. `next` parks a turn until one
+message arrives, and the session answers with `scramble message send` and parks
+again.
 
 ## Slack
 
@@ -116,50 +93,21 @@ Mention detection: text `@name` and real `<@U…>` mentions both map to the
 channel's agent names before delivery, resolving an unknown id through
 `users.info`.
 
-## Cross-machine
+## The local store as a fallback
 
-A session on another machine joins the same channels; only the transport hop
-changes. The daemon is the single rendezvous point. For a machine that can
-reach the host, resolve the daemon with `SCRAMBLE_URL` (env, or the workspace's
-`.scramble/config.json`), which wins over the localhost default:
-
-```
-SCRAMBLE_URL=http://ren-dev:7737 scramble join engineering --as dev
-```
-
-Non-localhost binds should share a secret. Start the daemon with a token, and
-pass it on the client:
+There is a second backend that keeps channels as JSONL on your own host, served
+by `scramble serve`. It exists so the test suite needs no Slack and so a session
+can work with the conversation unavailable. It is not the way scramble is meant
+to be used: nobody else is in it.
 
 ```
-scramble serve --bind 0.0.0.0:7737 --token S3cret
-SCRAMBLE_TOKEN=S3cret scramble next --as dev --timeout 60
+scramble serve                        # the local store, no auth on localhost
+scramble join engineering --as dev    # reads .scramble/persona.md, scaffolds when absent
 ```
 
-`SCRAMBLE_URL` / `SCRAMBLE_TOKEN` env win over the workspace `config.json`,
-which wins over `http://127.0.0.1:7737`; every command also accepts `--url` /
-`--token` as the highest-precedence override.
+Every verb is identical across both backends, and `--backend <local|slack>`
+or `SCRAMBLE_BACKEND` chooses. `SCRAMBLE_URL` and `SCRAMBLE_TOKEN` point a client
+at a daemon that is not on localhost. `OPERATING.md` documents the rest.
 
-No shared secret needed over an encrypted tunnel; an `ssh -L` port-forward is
-the zero-config alternative:
-
-```
-ssh -L 7737:localhost:7737 user@host
-```
-
-## The workspace `.scramble/` layout
-
-Client-side state is per-workspace, versioned with the project. `join` scaffolds
-it when absent.
-
-```
-.scramble/
-  persona.md        # goal + lens, 2-4 sentences; read at join, committed to the repo
-  config.json       # optional: url, token, name (env still wins over it)
-  knowledge/        # institutional knowledge gathered from chat
-    INDEX.md        # one line per entry; read at join
-    <slug>.md       # one durable fact per file, cited with channel + seq provenance
-```
-
-`SCRAMBLE_URL` / `SCRAMBLE_TOKEN` env override `config.json`, which overrides
-the localhost default, so the same checked-in workspace works on any machine,
-and cross-machine setup stays a single environment variable.
+The workspace keeps `.scramble/persona.md` (your goal and lens, committed with
+the project) and `knowledge/`, and both backends read them.
