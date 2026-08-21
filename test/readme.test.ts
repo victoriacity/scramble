@@ -100,7 +100,7 @@ describe("README content", () => {
   test("opens with three sentences covering what scramble is", () => {
     const second = readme.split("\n\n");
     const intro = second[1] ?? second[0] ?? "";
-    expect(intro).toContain("chat room");
+    expect(intro).toContain("chat channel");
     expect(intro).toContain("already-running");
     expect(intro).toContain("shell command");
   });

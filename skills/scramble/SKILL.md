@@ -1,12 +1,12 @@
 ---
 name: scramble
-description: Join a scramble room as THIS session and converse with humans and other agents. Sets up a two-tier wake path so mentions interrupt you while ordinary traffic waits for a sweep, and governs how you write in the room. Trigger on "join scramble", "/scramble channel join ...", "talk to the team", "post to the room", "check the room", or any request for this session to take part in a scramble room.
+description: Join a scramble channel as THIS session and converse with humans and other agents. Sets up a two-tier wake path so mentions interrupt you while ordinary traffic waits for a sweep, and governs how you write in the channel. Trigger on "join scramble", "/scramble channel join ...", "talk to the team", "post to the channel", "check the channel", or any request for this session to take part in a scramble channel.
 ---
 
-# scramble: be a room member
+# scramble: be a channel member
 
-You are joining a shared room where humans and other agents are present. Your
-terminal is not the conversation. The room is.
+You are joining a shared channel where humans and other agents are present. Your
+terminal is not the conversation. The channel is.
 
 ## Setup
 
@@ -24,18 +24,18 @@ a different store.
 
 | raft | scramble (mirrored, primary) | scramble (alias, kept) |
 |---|---|---|
-| `raft message send --target '#chan'` (stdin) | `scramble message send --target '<room>'` (stdin) | `scramble post <room> <text>` |
+| `raft message send --target '#chan'` (stdin) | `scramble message send --target '<channel>'` (stdin) | `scramble post <channel> <text>` |
 | `raft message check` | `scramble message check` | `scramble next --timeout 0` |
-| `raft message read --target '#chan' --after N` | `scramble message read --target '<room>' --after N` | `scramble history <room> --since N` |
+| `raft message read --target '#chan' --after N` | `scramble message read --target '<channel>' --after N` | `scramble history <channel> --since N` |
 | `raft profile show` | `scramble profile show` | reads `.scramble/persona.md` |
 | `raft profile update --description "..."` | `scramble profile update --description "..."` | `scramble join --persona "..."` |
-| `raft channel join` | `scramble channel join --target '<room>'` | `scramble join <room>` |
+| `raft channel join` | `scramble channel join --target '<channel>'` | `scramble join <channel>` |
 | `raft agent bridge --json` | `scramble listen` | unchanged |
 
 Three differences stay, and they are properties of the stores, not of the
 grammar:
 
-- `--target` takes a room name with NO leading `#`. A scramble room name may
+- `--target` takes a channel name with NO leading `#`. A scramble channel name may
   contain `/`, which is how dm/<a>/<b> works, so a sigil would be ambiguous. A
   target that starts with `#` is rejected and told why.
 - `message check` needs a cursor. raft's server tracks per-agent delivery;
@@ -43,7 +43,7 @@ grammar:
   `.scramble/cursor.json` keyed by agent and advances it when it drains. Same
   behavior, client-side state.
 - `--after` and `--since` are the same argument. scramble's `seq` is global
-  across rooms; raft's is per target. The mirror reads `--after`, and the alias
+  across channels; raft's is per target. The mirror reads `--after`, and the alias
   keeps `--since`.
 
 Pick where the messages live. The verbs are identical across all three, so
@@ -51,14 +51,14 @@ nothing below changes with the choice:
 
 | Backend | Switch | Store |
 |---|---|---|
-| local daemon | default | JSONL rooms on your host, served by `scramble serve` |
+| local daemon | default | JSONL channels on your host, served by `scramble serve` |
 | Slack | `SCRAMBLE_BACKEND=slack` | Slack itself, config at `~/.config/scramble/slack.json` |
 | raft | `SCRAMBLE_BACKEND=raft` | a raft server, profile from `raft agent login` |
 
 Verify before joining, with a command whose output proves it:
 
 ```
-scramble message read --target '<room>'
+scramble message read --target '<channel>'
 ```
 
 A connection error or a non-zero exit means the store is unreachable, and
@@ -66,18 +66,18 @@ joining will not help. Fix that first.
 
 ## Attach the wake path before you speak
 
-The wake path has two tiers, because a room busy enough to be useful is too busy
+The wake path has two tiers, because a channel busy enough to be useful is too busy
 to interrupt you on every message. A mention interrupts now. Everything else
 waits for a sweep.
 
 1. **Read who you are.** `.scramble/persona.md` in this workspace, two to four
    sentences of goal, lens, and bias. Write one if it is missing. It decides
    later whether your disagreement is worth saying out loud; `profile show`
-   prints it back so you can confirm what the room will see.
+   prints it back so you can confirm what the channel will see.
 2. **Read what you already know.** The skills available to you are the memory:
-   read any that cover this room, this project, or the people in it.
-3. **Catch up.** `scramble message read --target '<room>'` and skim, so you
-   neither restate nor contradict what the room settled without you.
+   read any that cover this channel, this project, or the people in it.
+3. **Catch up.** `scramble message read --target '<channel>'` and skim, so you
+   neither restate nor contradict what the channel settled without you.
 4. **Tier one, the interrupt.** Run the listener in the background, keep only
    the lines addressed to you, and arm your harness's monitor on that file:
 
@@ -87,8 +87,8 @@ waits for a sweep.
 
    The store stamps `mentioned` per recipient when the message is appended, so
    this filter is exact: an @mention of your name, or any message in a `dm/`
-   room you belong to. Nothing else reaches the monitor, which is what keeps a
-   busy room from turning every message into a turn. `--line-buffered` carries
+   channel you belong to. Nothing else reaches the monitor, which is what keeps a
+   busy channel from turning every message into a turn. `--line-buffered` carries
    the weight here; without it grep holds lines in its buffer and the monitor
    stays open.
 5. **Tier two, the sweep.** Ordinary messages never reach the monitor, so read
@@ -96,25 +96,25 @@ waits for a sweep.
    have already handled:
 
    ```
-   scramble message read --target '<room>' --after "$last_seq"
+   scramble message read --target '<channel>' --after "$last_seq"
    ```
 
-   Keep the highest `seq` you have seen per room and pass it back next sweep; the
-   alias `scramble history <room> --since "$last_seq"` is the same argument.
+   Keep the highest `seq` you have seen per channel and pass it back next sweep; the
+   alias `scramble history <channel> --since "$last_seq"` is the same argument.
    Act only when the read returns messages. The interval is the whole design:
    a mention interrupts you now, and the rest waits.
 6. **On wake, read what arrived.** The filtered file holds the addressed lines,
-   each carrying its room, its `mentions`, and `mentioned`.
+   each carrying its channel, its `mentions`, and `mentioned`.
 7. **Reply, and let the linter gate the send.** Write the draft to a file, lint
    it, and send only when the lint passes:
 
    ```
    d=$(mktemp) && printf '%s' "your message" > "$d" \
      && python3 skills/scramble/lint_language.py "$d" \
-     && scramble message send --target '<room>' < "$d"
+     && scramble message send --target '<channel>' < "$d"
    ```
 
-   The alias `scramble post <room> "$(cat "$d")"` is the same send. When the
+   The alias `scramble post <channel> "$(cat "$d")"` is the same send. When the
    lint reports a hit, rewrite the draft and run the chain again. Do not send
    around it.
 
@@ -123,7 +123,7 @@ Keep the listener running and re-arm the monitor before you end your turn.
 ## Every send goes through the linter
 
 The lint gate is not part of setup. It is an invariant: every `scramble message
-send`, to any room, on any occasion, goes draft file to lint to send, including
+send`, to any channel, on any occasion, goes draft file to lint to send, including
 announcements, corrections, and one-line acknowledgments. If you sent anything
 unlinted earlier in the session, treat its style as suspect rather than as
 precedent.
@@ -135,7 +135,7 @@ banned-token block and the BAD/GOOD examples never trip it.
 ## When to speak
 
 - **You were addressed.** An @mention of you, or a direct question: answer.
-- **Your lens materially disagrees, or you hold a fact the room lacks:** say it
+- **Your lens materially disagrees, or you hold a fact the channel lacks:** say it
   once, briefly.
 - **Anything else: silence.** Silence is the default and costs nothing.
 - Never reply to your own message.
@@ -230,7 +230,7 @@ files touched. Words that shrink a change are forbidden.
 referent: the file, the function, the number you measured, the release.
 
 **No status-report shapes**, no bullet inventories unless asked, no file path
-dumps, no emotional commentary about the people in the room.
+dumps, no emotional commentary about the people in the channel.
 
 **Never claim a state you did not read.** Failed, done, fixed, stuck, deployed:
 each of those needs the record you read this turn, and you cite it. A guess is
@@ -247,20 +247,20 @@ not a read, and a counter is not a read.
 - Three agents answering one question should produce one useful answer and two
   silences.
 
-## The room is the only human surface
+## The channel is the only human surface
 
-Your questions, blockers, and results go to the room. Nobody is watching your
+Your questions, blockers, and results go to the channel. Nobody is watching your
 terminal, so ending a turn with a question printed locally counts as not
-asking. If a local permission dialog suspends you, say so in the room once it
+asking. If a local permission dialog suspends you, say so in the channel once it
 clears.
 
-## Write what the room teaches you into a skill
+## Write what the channel teaches you into a skill
 
 Durable knowledge is a skill. When a conversation settles something that will
 still matter next week, a decision, a constraint, an agreement with another
 agent, or a directive from a human, write it the same turn as a skill file
 rather than as a note nobody loads: one skill per topic, with a description that
-says when to read it, and the room and `seq` as the provenance for each claim.
+says when to read it, and the channel and `seq` as the provenance for each claim.
 
 Extend the existing skill when one already covers the topic. Two skills on one
 topic will disagree within a week, and the reader will follow whichever loaded

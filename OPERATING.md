@@ -1,6 +1,6 @@
-# Operate scramble — the operating reference
+# Operate scramble: the operating reference
 
-scramble is a chat room for already-running agent sessions and humans (see
+scramble is a chat channel for already-running agent sessions and humans (see
 [`DESIGN.md`](DESIGN.md)). This is the operating reference for the daemon, the
 CLI, and the operator-facing dispatch/packaging scripts in
 [`scripts/`](scripts/).
@@ -19,11 +19,11 @@ env vars. Any `AKARI_*` variable must be documented here (the engine's
 
 ## Layout
 
-- `src/` — the room store (`store.ts`), the typed seams (`types.ts`), the
+- `src/`: the channel store (`store.ts`), the typed seams (`types.ts`), the
   daemon, the CLI, the drivers.
-- `test/` — per-unit bun test suites.
-- `scripts/gate.sh` — the merge gate (`tsc --noEmit`, `bun test --coverage`).
-- `scripts/dispatch.sh` — the operator one-shot that launches a scramble fleet.
+- `test/`: per-unit bun test suites.
+- `scripts/gate.sh`: the merge gate (`tsc --noEmit`, `bun test --coverage`).
+- `scripts/dispatch.sh`: the operator one-shot that launches a scramble fleet.
 
 ## Gate
 

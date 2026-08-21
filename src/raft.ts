@@ -50,12 +50,12 @@ function raftArgs(profile: string | undefined, rest: string[]): string[] {
   return profile ? ["--profile", profile, ...rest] : rest;
 }
 
-/** Map a scramble room name to the raft target it addresses: a group room maps
- *  to `#room`; a `dm/<a>/<b>` room maps to `dm:@peer`, the member that is not
+/** Map a scramble channel name to the raft target it addresses: a group channel maps
+ *  to `#channel`; a `dm/<a>/<b>` channel maps to `dm:@peer`, the member that is not
  *  the acting `from`. */
-export function toTarget(room: string, from: string): string {
-  if (!room.startsWith(DM_PREFIX)) return `#${room}`;
-  const segs = room.split("/");
+export function toTarget(channel: string, from: string): string {
+  if (!channel.startsWith(DM_PREFIX)) return `#${channel}`;
+  const segs = channel.split("/");
   const a = segs[1] ?? "";
   const b = segs[2] ?? "";
   const peers = [a, b].filter((s) => s && s !== from);
@@ -63,9 +63,9 @@ export function toTarget(room: string, from: string): string {
   return `dm:@${peer}`;
 }
 
-/** Derive the scramble room the raft target refers to, for the subscribing
+/** Derive the scramble channel the raft target refers to, for the subscribing
  *  agent: `#channel` -> `channel`; `dm:@peer` -> `dm/<agent>/<peer>`. */
-export function roomFromTarget(target: string, agent: string): string {
+export function channelFromTarget(target: string, agent: string): string {
   if (target.startsWith("dm:")) {
     const peer = target.slice(3).replace(/^@/, "");
     return `${DM_PREFIX}${agent}/${peer}`;
@@ -74,12 +74,12 @@ export function roomFromTarget(target: string, agent: string): string {
   return target;
 }
 
-/** The members a message addresses. A dm/ room addresses its peers (everyone
- *  but the sender); a group room addresses the @-tokens in the text. */
-function computeMentions(room: string, text: string, sender: string): string[] {
+/** The members a message addresses. A dm/ channel addresses its peers (everyone
+ *  but the sender); a group channel addresses the @-tokens in the text. */
+function computeMentions(channel: string, text: string, sender: string): string[] {
   const out = new Set<string>();
-  if (room.startsWith(DM_PREFIX)) {
-    for (const seg of room.split("/").slice(1)) {
+  if (channel.startsWith(DM_PREFIX)) {
+    for (const seg of channel.split("/").slice(1)) {
       if (seg && seg !== sender) out.add(seg);
     }
   } else {
@@ -108,8 +108,7 @@ export function parseDelivery(line: string, agent: string, seq: number): Deliver
     typeof o.text === "string" ? o.text : typeof o.content === "string" ? o.content : "";
   const target =
     typeof o.channel === "string" ? o.channel
-    : typeof o.target === "string" ? o.target
-    : typeof o.room === "string" ? o.room : "";
+    : typeof o.target === "string" ? o.target : "";
   if (text === "" || target === "") return trimmed;
   const from =
     typeof o.from === "string" ? o.from
@@ -122,9 +121,9 @@ export function parseDelivery(line: string, agent: string, seq: number): Deliver
     : typeof o.time === "string" ? o.time
     : new Date().toISOString();
   const id = typeof o.id === "string" ? o.id : typeof o.uuid === "string" ? o.uuid : `raft-${seq}`;
-  const room = roomFromTarget(target, agent);
-  const mentions = computeMentions(room, text, from);
-  return { seq, ts, room, from, text, id, mentions, mentioned: mentions.includes(agent) };
+  const channel = channelFromTarget(target, agent);
+  const mentions = computeMentions(channel, text, from);
+  return { seq, ts, channel, from, text, id, mentions, mentioned: mentions.includes(agent) };
 }
 
 /** True when a raft result is a failure we must surface: a non-zero exit, or a
@@ -163,10 +162,10 @@ export class RaftBackend {
     return res.stderr || res.stdout || "raft returned no output";
   }
 
-  /** Send a post: maps the room to a raft target, pipes text on stdin. A
+  /** Send a post: maps the channel to a raft target, pipes text on stdin. A
    *  non-zero exit or an error payload is surfaced, never swallowed. */
-  async send(room: string, text: string, from: string): Promise<{ ok: boolean; code: 0 | 1; error?: string }> {
-    const target = toTarget(room, from);
+  async send(channel: string, text: string, from: string): Promise<{ ok: boolean; code: 0 | 1; error?: string }> {
+    const target = toTarget(channel, from);
     const res = await this.run("raft", raftArgs(this.profile, ["message", "send", "--target", target]), text);
     if (isErrorRun(res)) return { ok: false, code: 1, error: this.errorText(res) };
     return { ok: true, code: 0 };
@@ -220,11 +219,11 @@ export class RaftBackend {
     }
   }
 
-  /** Read room history from raft. `--after N` mirrors the read cursor; raft's
+  /** Read channel history from raft. `--after N` mirrors the read cursor; raft's
    *  seq is per target, so after is passed through verbatim. Unparseable lines
    *  are REPORTED, not dropped. */
-  async history(room: string, from: string, after?: number): Promise<{ code: 0 | 1; error?: string; messages: Message[]; problems: string[] }> {
-    const target = toTarget(room, from);
+  async history(channel: string, from: string, after?: number): Promise<{ code: 0 | 1; error?: string; messages: Message[]; problems: string[] }> {
+    const target = toTarget(channel, from);
     const args = ["message", "read", "--target", target, ...(after !== undefined ? ["--after", String(after)] : [])];
     const res = await this.run("raft", raftArgs(this.profile, args), "");
     if (isErrorRun(res)) return { code: 1, error: this.errorText(res), messages: [], problems: [] };
@@ -241,7 +240,7 @@ export class RaftBackend {
       messages.push({
         seq: parsed.seq,
         ts: parsed.ts,
-        room: parsed.room,
+        channel: parsed.channel,
         from: parsed.from,
         text: parsed.text,
         id: parsed.id,

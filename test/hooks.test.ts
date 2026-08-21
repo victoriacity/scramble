@@ -90,8 +90,8 @@ describe("stopBackstop", () => {
     const d = stopBackstop({
       handledSeq: 3,
       delivered: [
-        { room: "general", seq: 6, mentioned: false },
-        { room: "general", seq: 4, mentioned: false },
+        { channel: "general", seq: 6, mentioned: false },
+        { channel: "general", seq: 4, mentioned: false },
       ],
       posted: [],
     });
@@ -101,7 +101,7 @@ describe("stopBackstop", () => {
   test("blocks an addressed message that got no reply", () => {
     const d = stopBackstop({
       handledSeq: 5,
-      delivered: [{ room: "general", seq: 5, mentioned: true, from: "human" }],
+      delivered: [{ channel: "general", seq: 5, mentioned: true, from: "human" }],
       posted: [],
     });
     expectStop(d).blocked();
@@ -110,7 +110,7 @@ describe("stopBackstop", () => {
   test("passes addressed-and-answered", () => {
     const d = stopBackstop({
       handledSeq: 5,
-      delivered: [{ room: "general", seq: 5, mentioned: true }],
+      delivered: [{ channel: "general", seq: 5, mentioned: true }],
       posted: ["general"],
     });
     expectStop(d).allowed();
@@ -119,7 +119,7 @@ describe("stopBackstop", () => {
   test("passes not-addressed-and-silent — the untouched case", () => {
     const d = stopBackstop({
       handledSeq: 5,
-      delivered: [{ room: "general", seq: 5, mentioned: false }],
+      delivered: [{ channel: "general", seq: 5, mentioned: false }],
       posted: [],
     });
     expectStop(d).allowed();

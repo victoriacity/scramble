@@ -24,9 +24,9 @@ function freshHandler() {
 }
 
 async function seed(h: (req: Request) => Promise<Response>): Promise<void> {
-  // Create a real room so room-scoped routes resolve to a non-empty room.
+  // Create a real channel so channel-scoped routes resolve to a non-empty channel.
   await h(
-    new Request("http://x/rooms/general", {
+    new Request("http://x/channels/general", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ from: "ana", text: "hi", id: "1" }),
@@ -60,39 +60,39 @@ describe("web/index.html", () => {
   test("every fetch route the page uses is answered by the handler", async () => {
     const html = readPage();
     // The page's script builds its requests from these route fragments:
-    //   "/rooms"                          → GET /rooms (room list)
-    //   "/rooms/" + room + "?since=0"     → GET /rooms/:room (catch-up)
-    //   "/rooms/" + room + "/stream?since=0" → GET /rooms/:room/stream (live)
-    //   "/rooms/" + room + POST           → POST /rooms/:room (send)
-    expect(html).toContain('fetch("/rooms")');
-    expect(html).toContain('"/rooms/" + encodeURIComponent');
+    //   "/channels"                          → GET /channels (channel list)
+    //   "/channels/" + channel + "?since=0"     → GET /channels/:channel (catch-up)
+    //   "/channels/" + channel + "/stream?since=0" → GET /channels/:channel/stream (live)
+    //   "/channels/" + channel + POST           → POST /channels/:channel (send)
+    expect(html).toContain('fetch("/channels")');
+    expect(html).toContain('"/channels/" + encodeURIComponent');
     expect(html).toContain('?since=0"');
-    expect(html).toContain('"/rooms/" + encodeURIComponent(room)');
+    expect(html).toContain('"/channels/" + encodeURIComponent(channel)');
     expect(html).toContain('method: "POST"');
 
     const { h } = freshHandler();
     await seed(h);
 
-    // room list answers, not 404
-    const roomsRes = await h(new Request("http://x/rooms"));
-    expect(roomsRes.status).toBe(200);
-    const rooms = (await roomsRes.json()) as string[];
-    expect(rooms).toContain("general");
+    // channel list answers, not 404
+    const channelsRes = await h(new Request("http://x/channels"));
+    expect(channelsRes.status).toBe(200);
+    const channels = (await channelsRes.json()) as string[];
+    expect(channels).toContain("general");
 
-    // catch-up history answers for the room the page would select
-    const histRes = await h(new Request("http://x/rooms/general?since=0"));
+    // catch-up history answers for the channel the page would select
+    const histRes = await h(new Request("http://x/channels/general?since=0"));
     expect(histRes.status).toBe(200);
     expect((await histRes.json()) as unknown[]).toHaveLength(1);
 
     // live stream answers
-    const streamRes = await h(new Request("http://x/rooms/general/stream?since=0"));
+    const streamRes = await h(new Request("http://x/channels/general/stream?since=0"));
     expect(streamRes.status).toBe(200);
     expect(streamRes.headers.get("content-type")).toContain("ndjson");
     await streamRes.body!.cancel();
 
     // send answers
     const postRes = await h(
-      new Request("http://x/rooms/general", {
+      new Request("http://x/channels/general", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ from: "bob", text: "hey", id: "2" }),

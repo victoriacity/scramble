@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import type { RoomStore } from "../src/store";
+import type { ChannelStore } from "../src/store";
 import { createStore } from "../src/store";
 import { createHandler } from "../src/server";
 import { main, parseBind, loadSlackConfig, slackConfigPath, acquireBridgeLock, bridgeLockPath, firehoseTip, type Io } from "../src/cli";
@@ -18,7 +18,7 @@ function msg(seq: number | string, from: string, text: string, mentions: string[
   return {
     seq,
     ts: "2026-01-01T00:00:00.000Z",
-    room: "general",
+    channel: "general",
     from,
     text,
     id: `id${seq}`,
@@ -137,7 +137,7 @@ describe("post", () => {
     const handler = createHandler(createStore(scratchDir("st1")));
     // seed a crossing from bob
     await handler(
-      new Request("http://x/rooms/general", {
+      new Request("http://x/channels/general", {
         method: "POST",
         body: JSON.stringify({ from: "bob", text: "first", id: "j1", lastSeen: 0 }),
       }),
@@ -198,16 +198,16 @@ describe("listen", () => {
     expect(lines[0]!.mentioned).toBe(false);
   });
 
-  test("explicit rooms stream per-room with the agent excluded and mentioned stamped", async () => {
+  test("explicit channels stream per-channel with the agent excluded and mentioned stamped", async () => {
     const cwd = scratchDir("listen2");
     const { io, writes } = stubIo(cwd, async (input) => {
       const u = new URL(input);
-      expect(u.pathname).toBe("/rooms/general/stream");
+      expect(u.pathname).toBe("/channels/general/stream");
       expect(u.searchParams.get("exclude")).toBe("ana");
       return ndjs([msg("b1", "bob", "@ana hello", ["ana"])], "close");
     });
     const code = await main(["listen", "general", "--as", "ana"], io);
-    expect(code).toBe(0); // clean close of a single-room stream
+    expect(code).toBe(0); // clean close of a single-channel stream
     const line = JSON.parse(writes[0]!);
     expect(line.mentioned).toBe(true);
     expect(line.text).toBe("@ana hello");
@@ -256,7 +256,7 @@ describe("next", () => {
     const pending = main(["next", "general", "--as", "ana", "--timeout", "5"], io);
     await new Promise((r) => setTimeout(r, 30));
     await handler(
-      new Request("http://x/rooms/general", {
+      new Request("http://x/channels/general", {
         method: "POST",
         body: JSON.stringify({ from: "bob", text: "hey ana", id: "n1", lastSeen: 0 }),
       }),
@@ -325,13 +325,13 @@ describe("history", () => {
     expect(writes.map((l) => JSON.parse(l).text)).toEqual(["one", "two"]);
   });
 
-  test("missing room is an error", async () => {
+  test("missing channel is an error", async () => {
     const { io, errs } = stubIo(scratchDir("hist2"), async () => {
       throw new Error("unreachable");
     });
     const code = await main(["history"], io);
     expect(code).toBe(1);
-    expect(errs[0]).toContain("room");
+    expect(errs[0]).toContain("channel");
   });
 
   test("a server failure prints the status to stderr and exits 1", async () => {
@@ -363,14 +363,14 @@ describe("join", () => {
       sent.push({ url: u, init });
       return new Response("{}", { status: 200 });
     });
-    const code = await main(["join", "general", "--as", "alice", "--persona", "i join rooms"], io);
+    const code = await main(["join", "general", "--as", "alice", "--persona", "i join channels"], io);
     expect(code).toBe(0);
     expect(existsSync(join(dir, ".scramble", "persona.md"))).toBe(true);
     expect(existsSync(join(dir, ".scramble", "knowledge", "INDEX.md"))).toBe(true);
     expect(sent[0]!.url).toContain("/agents/alice");
     const body = JSON.parse(sent[0]!.init!.body as string);
-    expect(body.persona).toBe("i join rooms");
-    expect(body.room).toBe("general");
+    expect(body.persona).toBe("i join channels");
+    expect(body.channel).toBe("general");
   });
 
   test("a successful join prints the doc pointers to stderr and keeps stdout empty", async () => {
@@ -398,13 +398,13 @@ describe("join", () => {
     expect(stub.length).toBeGreaterThan(0);
   });
 
-  test("missing room is an error", async () => {
+  test("missing channel is an error", async () => {
     const { io, errs } = stubIo(scratchDir("join3"), async () => {
       throw new Error("unreachable");
     });
     const code = await main(["join"], io);
     expect(code).toBe(1);
-    expect(errs[0]).toContain("room");
+    expect(errs[0]).toContain("channel");
   });
 
   test("a failed registration prints the status to stderr and exits 1", async () => {
@@ -422,7 +422,7 @@ describe("serve", () => {
     const { io } = stubIo(dir, async () => {
       throw new Error("no fetch for serve");
     });
-    let store: RoomStore | undefined;
+    let store: ChannelStore | undefined;
     let opts: unknown;
     io.serve = async (s, o) => {
       store = s;
@@ -573,7 +573,7 @@ describe("message send (mirrored)", () => {
     const cwd = scratchDir("msgsend");
     const handler = createHandler(createStore(scratchDir("msgsend-store")));
     await handler(
-      new Request("http://x/rooms/general", {
+      new Request("http://x/channels/general", {
         method: "POST",
         body: JSON.stringify({ from: "bob", text: "first", id: "j1", lastSeen: 0 }),
       }),
@@ -585,7 +585,7 @@ describe("message send (mirrored)", () => {
     expect(JSON.parse(writes[0]!)).toMatchObject({ from: "bob", text: "first" });
   });
 
-  test("equal-form --target=room works", async () => {
+  test("equal-form --target=channel works", async () => {
     const cwd = scratchDir("msgsend-eq");
     const handler = createHandler(createStore(scratchDir("msgsend-eq-store")));
     const { io, writes } = stubIo(cwd, (u, init) => handler(new Request(u, init)));
@@ -637,11 +637,11 @@ describe("message check (local => cursor drain)", () => {
     await handler(
       new Request("http://x/agents/dev", {
         method: "POST",
-        body: JSON.stringify({ persona: "p", room: "general" }),
+        body: JSON.stringify({ persona: "p", channel: "general" }),
       }),
     );
     await handler(
-      new Request("http://x/rooms/general", {
+      new Request("http://x/channels/general", {
         method: "POST",
         body: JSON.stringify({ from: "ana", text: "@dev hi", id: "1", lastSeen: 0 }),
       }),
@@ -987,7 +987,7 @@ describe("scramble slack", () => {
     const code = await main(["slack", "--dry-run"], io);
     expect(code).toBe(0);
     // the plan is printed to stderr
-    expect(errs.some((l) => l.includes("general -> channel C1"))).toBe(true);
+    expect(errs.some((l) => l.includes("channel general -> slack C1"))).toBe(true);
     expect(errs.some((l) => l.includes("alice: real bot-user"))).toBe(true);
     expect(errs.some((l) => l.includes("dry-run OK"))).toBe(true);
     // transport never connected, never posted
@@ -1003,9 +1003,9 @@ describe("scramble slack", () => {
     const transport = fakeTransport(posts, captured);
     const { io } = slackIo(cwd, transport);
     io.fetch = async (input) => {
-      // the firehose delivers one room message then closes
+      // the firehose delivers one channel message then closes
       return firehose([
-        { seq: 1, ts: "t", room: "general", from: "alice", text: "hi", id: "i1", mentions: [] },
+        { seq: 1, ts: "t", channel: "general", from: "alice", text: "hi", id: "i1", mentions: [] },
       ]);
     };
     const code = await main(["slack"], io);
@@ -1017,7 +1017,7 @@ describe("scramble slack", () => {
     expect(captured.h).toBeDefined();
   });
 
-  test("inbound Slack messages route into the room via the daemon POST seam", async () => {
+  test("inbound Slack messages route into the channel via the daemon POST seam", async () => {
     const cwd = scratchDir("slack-inbound");
     writeSlackConfig(cwd, validSlackCfg());
     const posts: SlackPostOptions[] = [];
@@ -1026,7 +1026,7 @@ describe("scramble slack", () => {
     const { io } = slackIo(cwd, transport);
     const posted: Array<{ url: string; body: string }> = [];
     io.fetch = async (input, init) => {
-      if (String(input).includes("/rooms/")) {
+      if (String(input).includes("/channels/")) {
         posted.push({ url: String(input), body: String(init?.body) });
         return new Response(JSON.stringify({ seq: 9, crossings: [] }), { status: 200 });
       }
@@ -1036,13 +1036,13 @@ describe("scramble slack", () => {
     expect(code).toBe(0);
     // after live mode connected, fire an inbound channel message
     captured.h?.({ type: "message", channel: "C1", user: "U111", text: "from slack" });
-    // the postToRoom wiring produced a daemon POST for room "general"
-    const roomPosts = posted.filter((p) => p.url.includes("/rooms/general"));
-    expect(roomPosts).toHaveLength(1);
-    expect(JSON.parse(roomPosts[0]!.body)).toMatchObject({ from: "U111", text: "from slack" });
+    // the postToChannel wiring produced a daemon POST for channel "general"
+    const channelPosts = posted.filter((p) => p.url.includes("/channels/general"));
+    expect(channelPosts).toHaveLength(1);
+    expect(JSON.parse(channelPosts[0]!.body)).toMatchObject({ from: "U111", text: "from slack" });
   });
 
-  test("an inbound room POST rejection is swallowed (fire-and-forget) without failing the command", async () => {
+  test("an inbound channel POST rejection is swallowed (fire-and-forget) without failing the command", async () => {
     const cwd = scratchDir("slack-inbound-reject");
     writeSlackConfig(cwd, validSlackCfg());
     const posts: SlackPostOptions[] = [];
@@ -1050,7 +1050,7 @@ describe("scramble slack", () => {
     const transport = fakeTransport(posts, captured);
     const { io } = slackIo(cwd, transport);
     io.fetch = async (input) => {
-      if (String(input).includes("/rooms/")) throw new Error("room POST failed");
+      if (String(input).includes("/channels/")) throw new Error("channel POST failed");
       return firehose([]);
     };
     const code = await main(["slack"], io);
@@ -1072,7 +1072,7 @@ describe("scramble slack", () => {
       call++;
       if (call === 1) throw new Error("daemon down");
       return firehose([
-        { seq: 2, ts: "t", room: "general", from: "bob", text: "retry", id: "i2", mentions: [] },
+        { seq: 2, ts: "t", channel: "general", from: "bob", text: "retry", id: "i2", mentions: [] },
       ]);
     };
     const code = await main(["slack"], io);
@@ -1094,7 +1094,7 @@ describe("scramble slack", () => {
       call++;
       if (call === 1) return new Response("nope", { status: 503 });
       return firehose([
-        { seq: 3, ts: "t", room: "general", from: "alice", text: "back", id: "i3", mentions: [] },
+        { seq: 3, ts: "t", channel: "general", from: "alice", text: "back", id: "i3", mentions: [] },
       ]);
     };
     const code = await main(["slack"], io);
@@ -1116,7 +1116,7 @@ describe("scramble slack", () => {
       call++;
       if (call === 1) return ndjs([msg(4, "bob", "dropped")], "error");
       return firehose([
-        { seq: 5, ts: "t", room: "general", from: "alice", text: "stable", id: "i5", mentions: [] },
+        { seq: 5, ts: "t", channel: "general", from: "alice", text: "stable", id: "i5", mentions: [] },
       ]);
     };
     const code = await main(["slack"], io);
@@ -1167,7 +1167,7 @@ describe("bridge echo loop and replay", () => {
     };
   }
 
-  test("firehoseTip reports the highest seq across rooms, so a fresh bridge skips history", async () => {
+  test("firehoseTip reports the highest seq across channels, so a fresh bridge skips history", async () => {
     const io = bridgeIo({
       fetch: async () => new Response(JSON.stringify({ seq: 7 }), { status: 200 }),
     });
@@ -1205,7 +1205,7 @@ describe("bridge echo guard", () => {
       streamCalls++;
       if (streamCalls === 1) throw new Error("connection reset");
       return firehose([
-        { seq: 5, ts: "t", room: "general", from: "alice", text: "after the reset", id: "i5", mentions: [] },
+        { seq: 5, ts: "t", channel: "general", from: "alice", text: "after the reset", id: "i5", mentions: [] },
       ]);
     };
     expect(await main(["slack"], io)).toBe(0);
@@ -1215,7 +1215,7 @@ describe("bridge echo guard", () => {
 
   test("a Slack-origin message is NOT published back to Slack", async () => {
     // The echo loop, observed live 2026-08-21: a human's Slack message enters
-    // the room, streams out on the firehose, and the bridge posts it to Slack
+    // the channel, streams out on the firehose, and the bridge posts it to Slack
     // again. The bridge must recognise its OWN insert by id and skip it.
     const cwd = scratchDir("slack-echo");
     writeSlackConfig(cwd, validSlackCfg());
@@ -1234,7 +1234,7 @@ describe("bridge echo guard", () => {
       captured.h?.({ type: "message", channel: "C1", user: "U111", text: "hi from slack" });
       await new Promise((r) => setTimeout(r, 5));
       return firehose([
-        { seq: 9, ts: "t", room: "general", from: "ana", text: "hi from slack", id: insertedId ?? "x", mentions: [] },
+        { seq: 9, ts: "t", channel: "general", from: "ana", text: "hi from slack", id: insertedId ?? "x", mentions: [] },
       ]);
     };
     const code = await main(["slack"], io);
@@ -1245,7 +1245,7 @@ describe("bridge echo guard", () => {
 });
 
 describe("bridge single-instance lock", () => {
-  // Two bridges on one config each subscribe to the firehose, so every room
+  // Two bridges on one config each subscribe to the firehose, so every channel
   // message reaches Slack twice. Observed live on 2026-08-21.
   function lockIo(dir: string, over?: Partial<Io>): Io {
     return {

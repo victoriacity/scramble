@@ -2,11 +2,11 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import type { RoomStore } from "../src/store";
+import type { ChannelStore } from "../src/store";
 import { createStore } from "../src/store";
 import { createHandler } from "../src/server";
 import { main, selectBackend, type Io } from "../src/cli";
-import { RaftBackend, toTarget, roomFromTarget, parseDelivery, type RunResult, type RunFn } from "../src/raft";
+import { RaftBackend, toTarget, channelFromTarget, parseDelivery, type RunResult, type RunFn } from "../src/raft";
 
 // --- test scaffolding --------------------------------
 
@@ -51,7 +51,7 @@ function raftIo(cwd: string, run: RunFn): { io: Io; writes: string[]; errs: stri
 
 /** A local-daemon io for equivalence: route every fetch to a real in-memory
  *  handler backed by scratchDir, like the existing cli tests. */
-function localIo(cwd: string, store?: RoomStore): { io: Io; writes: string[]; errs: string[] } {
+function localIo(cwd: string, store?: ChannelStore): { io: Io; writes: string[]; errs: string[] } {
   const writes: string[] = [];
   const errs: string[] = [];
   const handler = createHandler(store ?? createStore(scratchDir("local")));
@@ -70,24 +70,24 @@ function localIo(cwd: string, store?: RoomStore): { io: Io; writes: string[]; er
 
 // --- unit tests against the raft backend ---------------
 
-describe("toTarget / roomFromTarget", () => {
-  test("a group room maps to #room", () => {
+describe("toTarget / channelFromTarget", () => {
+  test("a group channel maps to #channel", () => {
     expect(toTarget("general", "ana")).toBe("#general");
     expect(toTarget("engineering", "bob")).toBe("#engineering");
   });
 
-  test("a dm/ room maps to the peer other than the actor", () => {
+  test("a dm/ channel maps to the peer other than the actor", () => {
     expect(toTarget("dm/ana/bob", "ana")).toBe("dm:@bob");
     expect(toTarget("dm/ana/bob", "bob")).toBe("dm:@ana");
   });
 
-  test("a dm/ room with a single peer maps to the peer", () => {
+  test("a dm/ channel with a single peer maps to the peer", () => {
     expect(toTarget("dm/ana/", "ana")).toBe("dm:@ana");
   });
 
-  test("roomFromTarget round-trips a channel and a dm", () => {
-    expect(roomFromTarget("#general", "ana")).toBe("general");
-    expect(roomFromTarget("dm:@bob", "ana")).toBe("dm/ana/bob");
+  test("channelFromTarget round-trips a channel and a dm", () => {
+    expect(channelFromTarget("#general", "ana")).toBe("general");
+    expect(channelFromTarget("dm:@bob", "ana")).toBe("dm/ana/bob");
   });
 });
 
@@ -97,7 +97,7 @@ describe("parseDelivery", () => {
     const d = parseDelivery(line, "ana", 7);
     expect(typeof d).not.toBe("string");
     if (typeof d !== "string") {
-      expect(d.room).toBe("general");
+      expect(d.channel).toBe("general");
       expect(d.from).toBe("bob");
       expect(d.mentioned).toBe(true);
       expect(d.mentions).toContain("ana");
@@ -110,7 +110,7 @@ describe("parseDelivery", () => {
     const d = parseDelivery(line, "ana", 2);
     expect(typeof d).not.toBe("string");
     if (typeof d !== "string") {
-      expect(d.room).toBe("dm/ana/bob");
+      expect(d.channel).toBe("dm/ana/bob");
       expect(d.mentioned).toBe(true);
     }
   });
@@ -130,7 +130,7 @@ describe("raft send/drain/next/listen backend", () => {
     const { run } = fakeRaft({
       exit: 0,
       stdout: [
-        JSON.stringify({ channel: "#room", text: "hey @ana", from: "bob" }),
+        JSON.stringify({ channel: "#channel", text: "hey @ana", from: "bob" }),
         "this is not json",
       ].join("\n"),
       stderr: "",
@@ -161,7 +161,7 @@ describe("raft send/drain/next/listen backend", () => {
   test("next returns on the first message", async () => {
     const { run } = fakeRaft({
       exit: 0,
-      stdout: JSON.stringify({ channel: "#room", text: "@ana hey", from: "bob" }),
+      stdout: JSON.stringify({ channel: "#channel", text: "@ana hey", from: "bob" }),
       stderr: "",
     });
     const b = new RaftBackend({ run, now: () => 0, sleep: async () => {} });
@@ -183,7 +183,7 @@ describe("raft send/drain/next/listen backend", () => {
     let n = 0;
     const run2: RunFn = async () => {
       n++;
-      if (n === 1) return { exit: 0, stdout: JSON.stringify({ channel: "#room", text: "one", from: "bob" }), stderr: "" };
+      if (n === 1) return { exit: 0, stdout: JSON.stringify({ channel: "#channel", text: "one", from: "bob" }), stderr: "" };
       return { exit: 0, stdout: "", stderr: "" };
     };
     const b = new RaftBackend({ run: run2, maxPolls: 2, sleep: async () => {} });
@@ -197,16 +197,16 @@ describe("raft send/drain/next/listen backend", () => {
   test("history returns messages and surfaces errors", async () => {
     const { run } = fakeRaft({
       exit: 0,
-      stdout: JSON.stringify({ channel: "#room", text: "one", from: "bob" }),
+      stdout: JSON.stringify({ channel: "#channel", text: "one", from: "bob" }),
       stderr: "",
     });
     const b = new RaftBackend({ run });
-    const ok = await b.history("room", "ana");
+    const ok = await b.history("channel", "ana");
     expect(ok.code).toBe(0);
     expect(ok.messages).toHaveLength(1);
     expect(ok.messages[0]!.text).toBe("one");
     const bad = fakeRaft({ exit: 1, stdout: "", stderr: "gone" });
-    const r2 = await new RaftBackend({ run: bad.run }).history("room", "ana");
+    const r2 = await new RaftBackend({ run: bad.run }).history("channel", "ana");
     expect(r2.code).toBe(1);
     expect(r2.error).toContain("gone");
   });
@@ -235,7 +235,7 @@ describe("backend equivalence through main()", () => {
     // local: seed the store with one message
     const store = createStore(scratchDir("eq-store"));
     await createHandler(store)(
-      new Request("http://x/rooms/general", { method: "POST", body: JSON.stringify({ from: "bob", text: "one", id: "i1" }) }),
+      new Request("http://x/channels/general", { method: "POST", body: JSON.stringify({ from: "bob", text: "one", id: "i1" }) }),
     );
     const l = localIo(cwd, store);
     const lcode = await main(["history", "general"], l.io);
@@ -253,8 +253,8 @@ describe("backend equivalence through main()", () => {
     expect(rcode).toBe(lcode);
     expect(r.writes).toHaveLength(1);
     // identical conversational identity — ts/id/seq are transport-local in raft
-    expect(JSON.parse(r.writes[0]!)).toMatchObject({ from: "bob", text: "one", room: "general" });
-    expect(JSON.parse(l.writes[0]!)).toMatchObject({ from: "bob", text: "one", room: "general" });
+    expect(JSON.parse(r.writes[0]!)).toMatchObject({ from: "bob", text: "one", channel: "general" });
+    expect(JSON.parse(l.writes[0]!)).toMatchObject({ from: "bob", text: "one", channel: "general" });
   });
 
   test("next returns on the first message under both backends", async () => {
@@ -266,7 +266,7 @@ describe("backend equivalence through main()", () => {
     l.io.sleep = (ms: number) => new Promise((r) => setTimeout(r, Math.min(ms, 5)));
     const pending = main(["next", "general", "--as", "ana", "--timeout", "5"], l.io);
     await new Promise((r) => setTimeout(r, 20));
-    await handler(new Request("http://x/rooms/general", { method: "POST", body: JSON.stringify({ from: "bob", text: "hey", id: "n" }) }));
+    await handler(new Request("http://x/channels/general", { method: "POST", body: JSON.stringify({ from: "bob", text: "hey", id: "n" }) }));
     const lcode = await pending;
     expect(lcode).toBe(0);
     expect(JSON.parse(l.writes[0]!)).toMatchObject({ from: "bob", text: "hey" });
@@ -285,7 +285,7 @@ describe("backend equivalence through main()", () => {
 });
 
 describe("raft through main()", () => {
-  test("a dm/ room post targets dm:@peer with the text on stdin", async () => {
+  test("a dm/ channel post targets dm:@peer with the text on stdin", async () => {
     const cwd = scratchDir("raft-dm");
     const { run, calls } = fakeRaft({ exit: 0, stdout: "ok", stderr: "" });
     const { io } = raftIo(cwd, run);
@@ -325,7 +325,7 @@ describe("raft through main()", () => {
     const cwd = scratchDir("raft-listen");
     const { run } = fakeRaft({
       exit: 0,
-      stdout: JSON.stringify({ channel: "#room", text: "ping", from: "bob" }),
+      stdout: JSON.stringify({ channel: "#channel", text: "ping", from: "bob" }),
       stderr: "",
     });
     const { io, writes } = raftIo(cwd, run);
@@ -370,13 +370,13 @@ describe("raft through main()", () => {
     expect(errs[0]).toContain("usage");
   });
 
-  test("a raft history with no room is an error", async () => {
+  test("a raft history with no channel is an error", async () => {
     const cwd = scratchDir("raft-hist-usage");
     const { run } = fakeRaft({ exit: 0, stdout: "", stderr: "" });
     const { io, errs } = raftIo(cwd, run);
     const code = await main(["history", "--backend", "raft"], io);
     expect(code).toBe(1);
-    expect(errs[0]).toContain("room");
+    expect(errs[0]).toContain("channel");
   });
 
   test("a raft history failure surfaces the raft error", async () => {
@@ -406,7 +406,7 @@ describe("mirrored raft grammar", () => {
     const cwd = scratchDir("mirror-check");
     const { run } = fakeRaft({
       exit: 0,
-      stdout: JSON.stringify({ channel: "#room", text: "@ana ping", from: "bob" }),
+      stdout: JSON.stringify({ channel: "#channel", text: "@ana ping", from: "bob" }),
       stderr: "",
     });
     const { io, writes } = raftIo(cwd, run);
@@ -426,7 +426,7 @@ describe("mirrored raft grammar", () => {
     const code = await main(["message", "read", "--target", "general", "--after", "3", "--as", "ana", "--backend", "raft"], io);
     expect(code).toBe(0);
     expect(calls[0]!.args).toEqual(["message", "read", "--target", "#general", "--after", "3"]);
-    expect(JSON.parse(writes[0]!)).toMatchObject({ from: "bob", text: "one", room: "general" });
+    expect(JSON.parse(writes[0]!)).toMatchObject({ from: "bob", text: "one", channel: "general" });
   });
 
   test("message read surfaces a raft failure", async () => {
@@ -470,11 +470,11 @@ describe("selectBackend", () => {
   });
 
   test("defaults to local when nothing selects raft", () => {
-    expect(selectBackend(["post", "room", "text"], ioWithEnv(undefined))).toBe("local");
+    expect(selectBackend(["post", "channel", "text"], ioWithEnv(undefined))).toBe("local");
   });
 
   test("SCRAMBLE_BACKEND=raft selects raft without a flag", () => {
-    expect(selectBackend(["post", "room", "text"], ioWithEnv("raft"))).toBe("raft");
+    expect(selectBackend(["post", "channel", "text"], ioWithEnv("raft"))).toBe("raft");
   });
 
   test("unknown --backend values are treated as raft (a toggle, not a deny)", () => {

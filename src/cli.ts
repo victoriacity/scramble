@@ -6,7 +6,7 @@
 // src/bin.ts, which no test imports.
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import { createStore, type RoomStore } from "./store";
+import { createStore, type ChannelStore } from "./store";
 import type { Message, PostResult } from "./types";
 import type { ServeOptions } from "./server";
 import { createBridge, type SlackConfig, type SlackTransport } from "./slack";
@@ -28,7 +28,7 @@ export interface Io {
   /** injectable wait so tests need no real delay. */
   sleep(ms: number): Promise<void>;
   /** the daemon bind seam; the real wiring (a port bind) lives in src/bin.ts. */
-  serve(store: RoomStore, opts: ServeOptions): Promise<number>;
+  serve(store: ChannelStore, opts: ServeOptions): Promise<number>;
   /** Build the Slack transport for a bridge. The real socket factory and
    *  network bind live in src/bin.ts; tests inject a fake transport so main()
    *  needs no network. */
@@ -164,23 +164,23 @@ function intFlag(flags: Map<string, string>, name: string, fallback: number): nu
   return Number.isFinite(n) ? n : fallback;
 }
 
-/** The mirrored-verb `--target`: a room name with NO leading '#'. A scramble
- *  room may contain '/' (that is how `dm/<a>/<b>` works), so a sigil would be
+/** The mirrored-verb `--target`: a channel name with NO leading '#'. A scramble
+ *  channel may contain '/' (that is how `dm/<a>/<b>` works), so a sigil would be
  *  ambiguous. A target that starts with '#' is REJECTED, with the reason, and
  *  a missing --target is reported with what the caller saw. */
-function requireTarget(flags: Map<string, string>, io: Io): { ok: true; room: string } | { ok: false } {
+function requireTarget(flags: Map<string, string>, io: Io): { ok: true; channel: string } | { ok: false } {
   const target = flags.get("target");
   if (target === undefined || target === "") {
-    io.writeErr("missing --target <room>");
+    io.writeErr("missing --target <channel>");
     return { ok: false };
   }
   if (target.startsWith("#")) {
     io.writeErr(
-      `--target takes a room name with no leading '#' (a scramble room may contain '/' — how dm/<a>/<b> works — so a sigil would be ambiguous). Got '${target}'`,
+      `--target takes a channel name with no leading '#' (a scramble channel may contain '/' — how dm/<a>/<b> works — so a sigil would be ambiguous). Got '${target}'`,
     );
     return { ok: false };
   }
-  return { ok: true, room: target };
+  return { ok: true, channel: target };
 }
 
 /** The `.scramble/cursor.json` seam for `message check`: the store keeps no
@@ -216,7 +216,7 @@ function writeCursor(io: Io, name: string, seq: number): void {
 }
 
 /** A message rendered for THIS agent: an agent-scoped Delivery already carries
- *  `mentioned`; a room-scoped Message gets it stamped from its mentions list. */
+ *  `mentioned`; a channel-scoped Message gets it stamped from its mentions list. */
 function render(agentStream: boolean, name: string, m: Message & { mentioned?: boolean }): Record<string, unknown> {
   if (agentStream) return m as unknown as Record<string, unknown>;
   return { ...m, mentioned: m.mentions.includes(name) };
@@ -248,26 +248,26 @@ async function drainStream(
 
 async function cmdPost(argv: string[], io: Io): Promise<number> {
   const { flags, positionals } = parseArgs(argv);
-  const room = positionals[0];
+  const channel = positionals[0];
   const text = positionals.slice(1).join(" ");
-  if (room === undefined || !text) {
-    io.writeErr("usage: scramble post <room> <text> [--as <name>]");
+  if (channel === undefined || !text) {
+    io.writeErr("usage: scramble post <channel> <text> [--as <name>]");
     return 1;
   }
-  return postText(room, text, flags, io, selectBackend(argv, io));
+  return postText(channel, text, flags, io, selectBackend(argv, io));
 }
 
 /** Local-backend post: one JSON line per crossing, nothing on a clean send with
  *  no crossing. The `--as`/name and config come from the flags. */
 async function postLocalCore(
-  room: string,
+  channel: string,
   text: string,
   flags: Map<string, string>,
   io: Io,
 ): Promise<number> {
   const { url, token } = resolveConfig(flags, io);
   const from = nameFor(flags, io);
-  const res = await io.fetch(`${url}/rooms/${encodeURIComponent(room)}`, {
+  const res = await io.fetch(`${url}/channels/${encodeURIComponent(channel)}`, {
     method: "POST",
     headers: { "content-type": "application/json", ...authHeader(token) },
     body: JSON.stringify({ from, text, id: newMessageId() }),
@@ -282,10 +282,10 @@ async function postLocalCore(
 }
 
 /** Post one message under whichever backend the run selects. The mirrored verb
- *  (`message send`) and the alias (`post <room> <text>`) share this path so
+ *  (`message send`) and the alias (`post <channel> <text>`) share this path so
  *  the backend switch sits below the verb parsing. */
 async function postText(
-  room: string,
+  channel: string,
   text: string,
   flags: Map<string, string>,
   io: Io,
@@ -293,7 +293,7 @@ async function postText(
 ): Promise<number> {
   if (backend === "raft") {
     const from = nameFor(flags, io);
-    const r = await raftBackend(flags, io).send(room, text, from);
+    const r = await raftBackend(flags, io).send(channel, text, from);
     if (!r.ok) {
       io.writeErr(`post failed: ${r.error}`);
       return 1;
@@ -307,21 +307,21 @@ async function postText(
       io.writeErr(s.error ?? "slack backend unavailable");
       return 1;
     }
-    const r = await s.backend.post(room, text, from);
+    const r = await s.backend.post(channel, text, from);
     if (!r.ok) {
       io.writeErr(`post failed: ${r.error}`);
       return 1;
     }
     return 0;
   }
-  return postLocalCore(room, text, flags, io);
+  return postLocalCore(channel, text, flags, io);
 }
 
-function streamUrls(base: string, name: string, rooms: string[], since: number): string[] {
-  if (rooms.length) {
-    return rooms.map(
-      (r) =>
-        `${base}/rooms/${encodeURIComponent(r)}/stream?since=${since}&exclude=${encodeURIComponent(name)}`,
+function streamUrls(base: string, name: string, channels: string[], since: number): string[] {
+  if (channels.length) {
+    return channels.map(
+      (c) =>
+        `${base}/channels/${encodeURIComponent(c)}/stream?since=${since}&exclude=${encodeURIComponent(name)}`,
     );
   }
   return [`${base}/agents/${encodeURIComponent(name)}/stream?since=${since}`];
@@ -361,15 +361,15 @@ async function cmdListen(argv: string[], io: Io): Promise<number> {
   const { flags, positionals } = parseArgs(argv);
   const name = nameFor(flags, io);
   const { url, token } = resolveConfig(flags, io);
-  const rooms = positionals;
-  const agentStream = rooms.length === 0;
+  const channels = positionals;
+  const agentStream = channels.length === 0;
   let lastSeq = 0;
   let backoff = 100;
   let staying = true;
   while (staying) {
     const stop = await listenOnce(
       io,
-      streamUrls(url, name, rooms, lastSeq),
+      streamUrls(url, name, channels, lastSeq),
       agentStream,
       name,
       token,
@@ -391,11 +391,11 @@ async function cmdNext(argv: string[], io: Io): Promise<number> {
   const { flags, positionals } = parseArgs(argv);
   const name = nameFor(flags, io);
   const { url, token } = resolveConfig(flags, io);
-  const rooms = positionals;
-  const agentStream = rooms.length === 0;
+  const channels = positionals;
+  const agentStream = channels.length === 0;
   const timeoutSec = intFlag(flags, "timeout", 300);
   const deadline = Date.now() + timeoutSec * 1000;
-  const urls = streamUrls(url, name, rooms, 0);
+  const urls = streamUrls(url, name, channels, 0);
   const responses: Response[] = [];
   const states = await Promise.all(
     urls.map(async (u) => {
@@ -451,24 +451,24 @@ async function cmdNext(argv: string[], io: Io): Promise<number> {
 
 async function cmdHistory(argv: string[], io: Io): Promise<number> {
   const { flags, positionals } = parseArgs(argv);
-  const room = positionals[0];
-  if (room === undefined) {
-    io.writeErr("history requires a room");
+  const channel = positionals[0];
+  if (channel === undefined) {
+    io.writeErr("history requires a channel");
     return 1;
   }
   const since = intFlag(flags, "since", 0);
-  return historyRead(room, since, flags, io, selectBackend(argv, io));
+  return historyRead(channel, since, flags, io, selectBackend(argv, io));
 }
 
-/** Local-backend read: one JSON line per message from the room catch-up. */
+/** Local-backend read: one JSON line per message from the channel catch-up. */
 async function historyLocal(
-  room: string,
+  channel: string,
   since: number,
   flags: Map<string, string>,
   io: Io,
 ): Promise<number> {
   const { url, token } = resolveConfig(flags, io);
-  const res = await io.fetch(`${url}/rooms/${encodeURIComponent(room)}?since=${since}`, {
+  const res = await io.fetch(`${url}/channels/${encodeURIComponent(channel)}?since=${since}`, {
     headers: authHeader(token),
   });
   if (!res.ok) {
@@ -480,12 +480,12 @@ async function historyLocal(
   return 0;
 }
 
-/** Read a room's messages under whichever backend the run selects. The mirrored
- *  verb (`message read --target <room>`) and the alias (`history <room>`) share
+/** Read a channel's messages under whichever backend the run selects. The mirrored
+ *  verb (`message read --target <channel>`) and the alias (`history <channel>`) share
  *  `--since`/`--after` as the same cursor and both dispatch here, so the backend
  *  switch stays below the verb parsing. */
 async function historyRead(
-  room: string,
+  channel: string,
   since: number,
   flags: Map<string, string>,
   io: Io,
@@ -493,7 +493,7 @@ async function historyRead(
 ): Promise<number> {
   if (backend === "raft") {
     const name = nameFor(flags, io);
-    const r = await raftBackend(flags, io).history(room, name, since > 0 ? since : undefined);
+    const r = await raftBackend(flags, io).history(channel, name, since > 0 ? since : undefined);
     for (const p of r.problems) io.writeErr(`raft: ${p}`);
     if (r.code !== 0) {
       io.writeErr(`read failed: ${r.error}`);
@@ -508,7 +508,7 @@ async function historyRead(
       io.writeErr(s.error ?? "slack unavailable");
       return 1;
     }
-    const r = await s.backend.history(room, since > 0 ? String(since) : undefined);
+    const r = await s.backend.history(channel, since > 0 ? String(since) : undefined);
     if (r.code !== 0) {
       io.writeErr(`read failed: ${r.error}`);
       return 1;
@@ -516,24 +516,24 @@ async function historyRead(
     for (const m of r.messages) io.write(JSON.stringify(m));
     return 0;
   }
-  return historyLocal(room, since, flags, io);
+  return historyLocal(channel, since, flags, io);
 }
 
 async function cmdJoin(argv: string[], io: Io): Promise<number> {
   const { flags, positionals } = parseArgs(argv);
-  const room = positionals[0];
-  if (room === undefined) {
-    io.writeErr("join requires a room");
+  const channel = positionals[0];
+  if (channel === undefined) {
+    io.writeErr("join requires a channel");
     return 1;
   }
-  return joinRoom(room, flags, io);
+  return joinChannel(channel, flags, io);
 }
 
-/** Join a room as THIS agent: scaffold `.scramble/`, read or write the persona,
- *  and register (name + persona + room) with the daemon. Shared by the alias
- *  (`join <room>`) and the mirror (`channel join --target <room>`). */
-async function joinRoom(
-  room: string,
+/** Join a channel as THIS agent: scaffold `.scramble/`, read or write the persona,
+ *  and register (name + persona + channel) with the daemon. Shared by the alias
+ *  (`join <channel>`) and the mirror (`channel join --target <channel>`). */
+async function joinChannel(
+  channel: string,
   flags: Map<string, string>,
   io: Io,
 ): Promise<number> {
@@ -550,7 +550,7 @@ async function joinRoom(
   const res = await io.fetch(`${url}/agents/${encodeURIComponent(name)}`, {
     method: "POST",
     headers: { "content-type": "application/json", ...authHeader(token) },
-    body: JSON.stringify({ persona, room }),
+    body: JSON.stringify({ persona, channel }),
   });
   if (!res.ok) {
     io.writeErr(`join failed (${res.status})`);
@@ -560,8 +560,8 @@ async function joinRoom(
   // hunting: the join procedure and the conversational rules. These go to
   // stderr (stdout stays JSON-only per the CLI contract).
   const repoDir = import.meta.dir ? join(import.meta.dir, "..") : io.cwd();
-  io.writeErr(`joined ${room} as ${name}; read the join procedure at ${join(repoDir, "JOIN.md")}`);
-  io.writeErr(`the room's rules live at ${join(repoDir, "skills", "scramble", "CONTRACT.md")}`);
+  io.writeErr(`joined ${channel} as ${name}; read the join procedure at ${join(repoDir, "JOIN.md")}`);
+  io.writeErr(`the channel's rules live at ${join(repoDir, "skills", "scramble", "CONTRACT.md")}`);
   return 0;
 }
 
@@ -603,11 +603,11 @@ export function slackConfigPath(io: Io): string {
   return join(io.cwd(), ".scramble", "slack.json");
 }
 
-/** Load the bridge master config. The config governs which rooms map to which
- *  channels, each agent's identity tier, the DM mirror, and the app-level/bot
+/** Load the bridge master config. The config governs which channels map to which
+ *  Slack channels, each agent's identity tier, the DM mirror, and the app-level/bot
  *  tokens. Returns null when the file is absent or malformed (the caller
  *  reports it, naming the path it tried). */
-export function loadSlackConfig(io: Io): Omit<SlackConfig, "postToRoom"> | null {
+export function loadSlackConfig(io: Io): Omit<SlackConfig, "postToChannel"> | null {
   try {
     const raw = readFileSync(slackConfigPath(io), "utf8");
     const j = JSON.parse(raw) as Record<string, unknown>;
@@ -639,25 +639,25 @@ function slackTokenError(cfg: Pick<SlackConfig, "appToken" | "token">): string |
   return null;
 }
 
-/** Fire an inbound Slack message into a room through the daemon's POST seam.
- *  postToRoom is a sync void seam (the bridge's contract), so the async POST
+/** Fire an inbound Slack message into a channel through the daemon's POST seam.
+ *  postToChannel is a sync void seam (the bridge's contract), so the async POST
  *  fires and forgets; a failure surfaces only in the daemon log. */
-/** Insert Slack-origin text into a room. Returns the message id it used, so the
+/** Insert Slack-origin text into a channel. Returns the message id it used, so the
  *  bridge can recognise its OWN insert on the firehose and NOT publish it back
- *  to Slack. Without that, a human's Slack message enters the room, streams out
+ *  to Slack. Without that, a human's Slack message enters the channel, streams out
  *  on the firehose, and the bridge posts it to Slack again: an echo loop,
  *  observed live on 2026-08-21 ("hi" came back as the bot three times). */
-function postToRoom(
+function postToChannel(
   io: Io,
   url: string,
   token: string | undefined,
-  room: string,
+  channel: string,
   from: string,
   text: string,
   id: string,
 ): void {
   void io
-    .fetch(`${url}/rooms/${encodeURIComponent(room)}`, {
+    .fetch(`${url}/channels/${encodeURIComponent(channel)}`, {
       method: "POST",
       headers: { "content-type": "application/json", ...authHeader(token) },
       body: JSON.stringify({ from, text, id }),
@@ -704,7 +704,7 @@ async function feedFirehose(
 }
 
 /** The bridge's single-instance lock. Two bridges on one config each subscribe
- *  to the firehose, so EVERY room message reaches Slack twice (observed
+ *  to the firehose, so EVERY channel message reaches Slack twice (observed
  *  2026-08-21: one line delivered at ts …024 and again at …035). The lock is a
  *  pidfile beside the config; a second bridge refuses to start while the first
  *  is alive, and a stale pidfile from a crashed bridge is reclaimed. */
@@ -742,21 +742,21 @@ async function cmdSlack(argv: string[], io: Io): Promise<number> {
     const lock = acquireBridgeLock(io);
     if (!lock.ok) {
       io.writeErr(`a slack bridge is already running for this config (pid ${lock.holder})`);
-      io.writeErr(`every room message would reach Slack twice; stop that bridge or remove ${bridgeLockPath(io)} if it is stale`);
+      io.writeErr(`every channel message would reach Slack twice; stop that bridge or remove ${bridgeLockPath(io)} if it is stale`);
       return 1;
     }
   }
   const { url, token } = resolveConfig(flags, io);
-  // Inbound Slack text lands in the room through the daemon's POST path.
+  // Inbound Slack text lands in the channel through the daemon's POST path.
   // Ids this bridge inserted from Slack. The firehose replays them like any
-  // other room message, and publishing one back to Slack is an echo loop.
+  // other channel message, and publishing one back to Slack is an echo loop.
   const fromSlack = new Set<string>();
   const slack: SlackConfig = {
     ...cfg,
-    postToRoom: (room, from, text) => {
+    postToChannel: (channel, from, text) => {
       const id = newMessageId();
       fromSlack.add(id);
-      postToRoom(io, url, token, room, from, text, id);
+      postToChannel(io, url, token, channel, from, text, id);
     },
   };
   slack.dryRun = dryRun;
@@ -770,7 +770,7 @@ async function cmdSlack(argv: string[], io: Io): Promise<number> {
     }
     bridge.connect();
     // Open the firehose at the CURRENT tip, never at 0: a reconnect that starts
-    // from 0 republishes the whole room to Slack (observed live 2026-08-21,
+    // from 0 republishes the whole channel to Slack (observed live 2026-08-21,
     // older lines re-posted at ts ...305 and ...325). `since` advances past
     // every message seen, so a reconnect resumes instead of replaying.
     let since = await firehoseTip(io, url, token);
@@ -814,8 +814,8 @@ async function cmdSlack(argv: string[], io: Io): Promise<number> {
  *  going live with no network connection involved. */
 function printBridgeSummary(cfg: SlackConfig, base: string, io: Io): void {
   io.writeErr(`slack dry-run for ${base}`);
-  for (const [room, ch] of Object.entries(cfg.channels)) {
-    io.writeErr(`  room ${room} -> channel ${ch}`);
+  for (const [channel, ch] of Object.entries(cfg.channels)) {
+    io.writeErr(`  channel ${channel} -> slack ${ch}`);
   }
   for (const [name, agent] of Object.entries(cfg.agents)) {
     const tier = agent.token ? "real bot-user" : "persona";
@@ -1011,7 +1011,7 @@ async function cmdMessage(args: string[], io: Io, backend: "local" | "raft" | "s
         io.writeErr("message send requires the message on stdin");
         return 1;
       }
-      return postText(req.room, text, flags, io, backend);
+      return postText(req.channel, text, flags, io, backend);
     }
     case "check":
       return cmdMessageCheck(args, io, backend);
@@ -1019,7 +1019,7 @@ async function cmdMessage(args: string[], io: Io, backend: "local" | "raft" | "s
       const req = requireTarget(flags, io);
       if (!req.ok) return 1;
       const since = intFlag(flags, "after", intFlag(flags, "since", 0));
-      return historyRead(req.room, since, flags, io, backend);
+      return historyRead(req.channel, since, flags, io, backend);
     }
     default:
       io.writeErr(`unknown message verb: ${sub ?? "(none)"}`);
@@ -1071,8 +1071,8 @@ async function cmdProfile(argv: string[], io: Io): Promise<number> {
   return 1;
 }
 
-/** The mirrored `channel` verbs: `channel join --target <room>` behaves and
- *  reads exactly as the alias `join <room>`. */
+/** The mirrored `channel` verbs: `channel join --target <channel>` behaves and
+ *  reads exactly as the alias `join <channel>`. */
 async function cmdChannel(argv: string[], io: Io): Promise<number> {
   const { flags, positionals } = parseArgs(argv);
   const sub = positionals[0];
@@ -1082,7 +1082,7 @@ async function cmdChannel(argv: string[], io: Io): Promise<number> {
   }
   const req = requireTarget(flags, io);
   if (!req.ok) return 1;
-  return joinRoom(req.room, flags, io);
+  return joinChannel(req.channel, flags, io);
 }
 
 export async function main(argv: string[], io: Io): Promise<number> {

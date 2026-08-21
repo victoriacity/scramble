@@ -184,7 +184,7 @@ describe("e2e over the real bin.ts entrypoint", () => {
     // The daemon was launched with `--bind 127.0.0.1:<port>` and came up there.
     // If the port ever strayed (pre-fix it kept 7737 and used the whole string
     // as the hostname), this fetch against the --bind port could never succeed.
-    const res = await fetch(`${baseUrl}/rooms`);
+    const res = await fetch(`${baseUrl}/channels`);
     expect(res.status).toBe(200);
   }, 30000);
 
@@ -209,15 +209,15 @@ describe("e2e over the real bin.ts entrypoint", () => {
 
   test("post computes mentions and a second poster's crossings include the first message", async () => {
     const first = await runCli(
-      ["post", "crossroom", "@beta hi from ana", "--as", "ana", "--url", baseUrl],
+      ["post", "crosschannel", "@beta hi from ana", "--as", "ana", "--url", baseUrl],
       work,
     );
     expect(first.code).toBe(0);
-    // First poster in an empty room: nothing to cross.
+    // First poster in an empty channel: nothing to cross.
     expect(parseLines(first.stdout)).toHaveLength(0);
 
     const second = await runCli(
-      ["post", "crossroom", "answer from charlie", "--as", "charlie", "--url", baseUrl],
+      ["post", "crosschannel", "answer from charlie", "--as", "charlie", "--url", baseUrl],
       work,
     );
     expect(second.code).toBe(0);
@@ -227,7 +227,7 @@ describe("e2e over the real bin.ts entrypoint", () => {
   }, 30000);
 
   test("next --as <name> --timeout N returns the pending message and exits 0", async () => {
-    // eve must be a member of a room that already holds a message.
+    // eve must be a member of a channel that already holds a message.
     await runCli(["join", "queue", "--as", "eve", "--url", baseUrl], work);
     await runCli(["post", "queue", "wake up eve", "--as", "op", "--url", baseUrl], work);
     const r = await runCli(
@@ -241,7 +241,7 @@ describe("e2e over the real bin.ts entrypoint", () => {
   }, 30000);
 
   test("next exits 64 when nothing arrives before the timeout", async () => {
-    // A fresh agent in a fresh, empty room with a short timeout.
+    // A fresh agent in a fresh, empty channel with a short timeout.
     await runCli(["join", "quiet", "--as", "q", "--url", baseUrl], work);
     const r = await runCli(["next", "--as", "q", "--timeout", "0", "--url", baseUrl], work);
     expect(r.code).toBe(64);
@@ -249,7 +249,7 @@ describe("e2e over the real bin.ts entrypoint", () => {
   }, 30000);
 
   test("listen prints a message posted while it is streaming", async () => {
-    await runCli(["join", "live-room", "--as", "leo", "--url", baseUrl], work);
+    await runCli(["join", "live-channel", "--as", "leo", "--url", baseUrl], work);
     const listener = spawnFollow(
       ["listen", "--as", "leo", "--url", baseUrl],
       work,
@@ -258,14 +258,14 @@ describe("e2e over the real bin.ts entrypoint", () => {
       // Prove the listener's stream is open by having it print a first ping
       // that was posted, THEN post the real message while it is streaming.
       const ping = await runCli(
-        ["post", "live-room", "@leo first ping", "--as", "mara", "--url", baseUrl],
+        ["post", "live-channel", "@leo first ping", "--as", "mara", "--url", baseUrl],
         work,
       );
       expect(ping.code).toBe(0);
       await until(async () => listener.stdout().includes("first ping"));
 
       const post = await runCli(
-        ["post", "live-room", "@leo incoming while streaming", "--as", "mara", "--url", baseUrl],
+        ["post", "live-channel", "@leo incoming while streaming", "--as", "mara", "--url", baseUrl],
         work,
       );
       expect(post.code).toBe(0);

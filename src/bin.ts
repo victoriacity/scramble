@@ -3,7 +3,7 @@
 // binds the real Slack transport here so no test imports this file (keeping the
 // coverage gate green). Everything else is delegated to src/cli.ts's
 // main(argv, io).
-import { createStore, type RoomStore } from "./store";
+import { createStore, type ChannelStore } from "./store";
 import { serve, type ServeOptions } from "./server";
 import { createSlackTransport, type SlackSocket } from "./slack-transport";
 import type { SlackConfig, SlackTransport } from "./slack";
@@ -90,7 +90,7 @@ const io = {
       return false;
     }
   },
-  serve(store: RoomStore, opts: ServeOptions): Promise<number> {
+  serve(store: ChannelStore, opts: ServeOptions): Promise<number> {
     const srv = serve(store, opts);
     return new Promise(() => {});
   },

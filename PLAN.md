@@ -10,7 +10,7 @@ the existing TS toolchain). Single package, no framework: `Bun.serve` + `fetch`.
 /opt/akari/scramble
   DESIGN.md  PLAN.md  README.md
   package.json  tsconfig.json
-  src/store.ts      # room log, global seq, membership, dedup
+  src/store.ts      # channel log, global seq, membership, dedup
   src/daemon.ts     # HTTP endpoints + streams + guards (uses store)
   src/cli.ts        # post / listen / next / history / join / serve
   src/bin.ts        # the only entrypoint (argv, port); no test imports it
@@ -18,7 +18,7 @@ the existing TS toolchain). Single package, no framework: `Bun.serve` + `fetch`.
   web/index.html    # human UI (single static page, SSE)
   JOIN.md           # HARNESS-NEUTRAL join procedure (the primary join doc)
   skills/scramble/
-    SKILL.md        # one trigger ("join this room"): procedure + short rules
+    SKILL.md        # one trigger ("join this channel"): procedure + short rules
     CONTRACT.md     # the 7 rules in full — SINGLE source, quoted nowhere else
   test/             # bun tests per unit + e2e
   scripts/gate.sh   # tsc --noEmit && bun test  (the merge gate)
@@ -94,13 +94,13 @@ deviation from this table is a defect in the deviating unit, not a new contract.
 
 | command | flags | behavior | exit |
 |---|---|---|---|
-| `post <room> <text>` | `--as <name>` | posts; prints the crossings returned, one JSON line each | 0 |
-| `listen [<room>...]` | `--as <name>` | streams; one JSON line per message, room-tagged, `mentioned` stamped, own messages excluded; reconnects resuming at the last seq. No room argument = every room the agent is in | 0 on clean stop |
-| `next [<room>...]` | `--as <name>`, `--timeout <secs>` (default 300) | BLOCKS for ONE message, prints it as one JSON line, exits. Same line format as `listen` | 0 message, 64 timeout |
-| `history <room>` | `--since <n>` | prints messages, one JSON line each | 0 |
-| `join <room>` | `--as <name>`, `--persona <text>` | resolves the workspace, reads `.scramble/persona.md`, scaffolds `.scramble/` when absent, registers with the daemon | 0 |
+| `post <channel> <text>` | `--as <name>` | posts; prints the crossings returned, one JSON line each | 0 |
+| `listen [<channel>...]` | `--as <name>` | streams; one JSON line per message, channel-tagged, `mentioned` stamped, own messages excluded; reconnects resuming at the last seq. No channel argument = every channel the agent is in | 0 on clean stop |
+| `next [<channel>...]` | `--as <name>`, `--timeout <secs>` (default 300) | BLOCKS for ONE message, prints it as one JSON line, exits. Same line format as `listen` | 0 message, 64 timeout |
+| `history <channel>` | `--since <n>` | prints messages, one JSON line each | 0 |
+| `join <channel>` | `--as <name>`, `--persona <text>` | resolves the workspace, reads `.scramble/persona.md`, scaffolds `.scramble/` when absent, registers with the daemon | 0 |
 | `serve` | `--bind <addr>`, `--token <t>`, `--data <dir>` | runs the daemon | — |
-| `slack` | `--url`, `--token`, `--dry-run` | runs the Slack bridge: reads `.scramble/slack.json`, connects Socket Mode, publishes every firehose room message to Slack, routes inbound Slack messages into rooms. `--dry-run` prints the wired Slack calls it WOULD make (channel map + identity tiers) without connecting | 0; 1 on missing/invalid config |
+| `slack` | `--url`, `--token`, `--dry-run` | runs the Slack bridge: reads `.scramble/slack.json`, connects Socket Mode, publishes every firehose channel message to Slack, routes inbound Slack messages into channels. `--dry-run` prints the wired Slack calls it WOULD make (channel map + identity tiers) without connecting | 0; 1 on missing/invalid config |
 
 Global: `SCRAMBLE_URL` / `SCRAMBLE_TOKEN` env win over the workspace
 `.scramble/config.json`, which wins over `http://127.0.0.1:7737`. Every
@@ -119,25 +119,25 @@ nothing breaks.
 
 | raft | scramble (mirrored) | scramble (alias, kept) |
 |---|---|---|
-| `raft message send --target '#chan'` (stdin) | `scramble message send --target '<room>'` (stdin) | `scramble post <room> <text>` |
+| `raft message send --target '#chan'` (stdin) | `scramble message send --target '<channel>'` (stdin) | `scramble post <channel> <text>` |
 | `raft message check` (drain, non-blocking) | `scramble message check` | `scramble next --timeout 0` |
-| `raft message read --target '#chan' --after N` | `scramble message read --target '<room>' --after N` | `scramble history <room> --since N` |
+| `raft message read --target '#chan' --after N` | `scramble message read --target '<channel>' --after N` | `scramble history <channel> --since N` |
 | `raft profile show` | `scramble profile show` | reads `.scramble/persona.md` |
 | `raft profile update --description "…"` | `scramble profile update --description "…"` | `scramble join --persona "…"` |
-| `raft channel join` | `scramble channel join --target '<room>'` | `scramble join <room>` |
+| `raft channel join` | `scramble channel join --target '<channel>'` | `scramble join <channel>` |
 | `raft agent bridge --json` (wake stream) | `scramble listen` | unchanged |
 
 Three differences that stay, because they are properties of the stores rather
 than of the grammar:
 
-- **`--target` takes a room name**, with no `#`. A scramble room name may
+- **`--target` takes a channel name**, with no `#`. A scramble channel name may
   contain `/`, which is how `dm/<a>/<b>` works, so a sigil would be ambiguous.
 - **`message check` needs a cursor.** raft's server tracks per-agent delivery;
   scramble's store does not, so `check` keeps the cursor in
   `.scramble/cursor.json` per agent and advances it on drain. Same behavior,
   client-side state.
 - **`--after` and `--since` are the same argument.** scramble's `seq` is global
-  across rooms; raft's is per target. The mirrored verb accepts `--after` and
+  across channels; raft's is per target. The mirrored verb accepts `--after` and
   the alias keeps `--since`.
 
 ## Rename: a room becomes a channel
@@ -196,25 +196,25 @@ concurrently; same-file overlap is acceptable, the lead merges.
 
 **Round 1**
 
-- **U1 store** — `src/store.ts` + tests. Append-only JSONL rooms under a data
-  dir; ONE global monotonically increasing `seq` across all rooms (persisted,
+- **U1 store** — `src/store.ts` + tests. Append-only JSONL channels under a data
+  dir; ONE global monotonically increasing `seq` across all channels (persisted,
   crash-safe: rebuilt by scanning maxima on boot); membership derived from
   post/listen events plus `dm/<name>/*` auto-membership; client-supplied message
-  id dedup window; room names may contain `/`. Invariants: append is the only
+  id dedup window; channel names may contain `/`. Invariants: append is the only
   write; a message is never mutated or lost after ack; reboot loses nothing.
 
 **Round 2** (after U1's interface lands)
 
 - **U2 daemon** — `src/daemon.ts` + tests. Endpoints per DESIGN.md: post,
-  room catch-up, room stream, agent stream, `GET /` static page passthrough,
-  `GET /agents` roster (name, persona, rooms), `GET /rooms` listing (all rooms
-  including `dm/*`), and a firehose stream (`GET /stream`, every room) for the
+  channel catch-up, channel stream, agent stream, `GET /` static page passthrough,
+  `GET /agents` roster (name, persona, channels), `GET /channels` listing (all channels
+  including `dm/*`), and a firehose stream (`GET /stream`, every channel) for the
   bridge's DM mirror. Line-delimited JSON streams with
   heartbeat comments; `since` resume on both stream kinds; post response
   includes the crossings (messages landed between the sender's last-seen seq
   and the new one); message length cap (config, default ~1500 chars, reject
   with "shorten"); loop guards (per-sender rate limit, identical-repeat drop,
-  room-level agent-sender pause that never pauses humans); optional
+  channel-level agent-sender pause that never pauses humans); optional
   bearer-token check active only when `--token` is set; binds `127.0.0.1`
   default, `--bind` to widen. Invariant: a guard that trips reports what it dropped in
   the response and the daemon log, never silently.
@@ -223,7 +223,7 @@ concurrently; same-file overlap is acceptable, the lead merges.
 
 - **U3 cli** — `src/cli.ts` + tests (tests spawn a real daemon on an ephemeral
   port). `post` (client message id, retry-safe, prints the crossings from the
-  response), `listen` (multi-room and agent-scoped, room-tagged lines each
+  response), `listen` (multi-channel and agent-scoped, channel-tagged lines each
   carrying a computed `mentioned` flag for this agent, reconnect with backoff
   resuming at last seq, own-message exclusion), `history`, `join` (register
   name + persona from the workspace's `.scramble/persona.md`, `--as`/
@@ -232,16 +232,16 @@ concurrently; same-file overlap is acceptable, the lead merges.
   absent), `serve`. Config resolution: `SCRAMBLE_URL`/`SCRAMBLE_TOKEN` env
   over the workspace's `.scramble/config.json` over localhost default. Invariant: `listen` output is machine-stable one-JSON-line
   per message — it is the monitor-attach contract.
-- **U4 web ui** — `web/index.html`. One static page: room list, message pane
+- **U4 web ui** — `web/index.html`. One static page: channel list, message pane
   over SSE with `since` catch-up, post box with a persistent human name. No
   framework, no build. Gate: endpoint test asserting the page serves and posts
   round-trip; visual pass is a lead smoke.
 - **U5 slack bridge** — `src/slack.ts` + tests against a mocked Slack transport.
-  Socket Mode connect; channel↔room map from config; outbound tier choice per
+  Socket Mode connect; channel↔channel map from config; outbound tier choice per
   agent (per-agent bot token → real user; else `chat:write.customize` persona);
   inbound normalization (`<@U…>` → `@name`, bot self-filter on own bot_id set);
   DM mapping `message.im` ↔ `dm/<agent>/<slack-user>`; read-only mirror of
-  agent↔agent DM rooms into a designated channel (default `#scramble-dms`,
+  agent↔agent DM channels into a designated channel (default `#scramble-dms`,
   `[a↔b]` prefix); `--dry-run` printing the API calls it would make. Live-workspace smoke is a lead step (M3), not the
   worker's gate.
 - **U6 codex driver** — CUT. Superseded by the `next` verb in the CLI contract:
@@ -252,7 +252,7 @@ concurrently; same-file overlap is acceptable, the lead merges.
 **Round 4** (after U3)
 
 - **U7 join skill** — `skills/scramble/`. ONE skill (one trigger: join a
-  room), with `CONTRACT.md` as the single source of the rules and `CODEX.md`
+  channel), with `CONTRACT.md` as the single source of the rules and `CODEX.md`
   read on demand; nothing quotes CONTRACT.md, everything cites its path
   (both hook block messages, and the two-line pointer the skill adds to the
   workspace `CLAUDE.md` so a post-compaction session recovers the rules from
@@ -261,14 +261,14 @@ concurrently; same-file overlap is acceptable, the lead merges.
   `.scramble/persona.md` + `knowledge/INDEX.md` before the first message,
   history catch-up, background `scramble listen` + monitor arming,
   speaking rules (chat prose, no codenames/dumps, length-capped), the
-  room-is-the-only-human-surface rule (questions and results go to the room;
+  channel-is-the-only-human-surface rule (questions and results go to the channel;
   local terminal is unwatched; post "blocked on local approval" when a
   permission dialog holds the session), the reply etiquette (mentioned or
   asked → answer; lens disagrees or fact missing → speak once; else silent;
   never respond to own messages), crossings handling (drain before composing;
-  a crossing that made your point → silence), multi-room handling per wake,
+  a crossing that made your point → silence), multi-channel handling per wake,
   and knowledge capture (durable facts from chat → one file per fact under
-  `.scramble/knowledge/` with room+seq provenance, INDEX.md line, same turn;
+  `.scramble/knowledge/` with channel+seq provenance, INDEX.md line, same turn;
   update or delete entries proven wrong, never duplicate); re-arm and end
   turn. Also ships the two hooks per DESIGN.md (post gate as PreToolUse on
   `scramble post`; Stop backstop draining pending seqs) as
@@ -281,7 +281,7 @@ concurrently; same-file overlap is acceptable, the lead merges.
   (notify + Stop hook) as a documented section. Gate: skill lints against the
   CLI's real flags (a script greps SKILL.md commands against `cli.ts`).
 - **U8 e2e** — `test/e2e.test.ts`. Spawns daemon + scripted listeners: group
-  room multi-mention fan-out, DM room isolation, reconnect mid-stream with no
+  channel multi-mention fan-out, DM channel isolation, reconnect mid-stream with no
   gap/dup (kill and resume a listener), cross-machine simulation (daemon on
   `0.0.0.0` + token, client via `SCRAMBLE_URL` with wrong-then-right token),
   loop-guard trip (two scripted agents echoing each other stop within the
@@ -297,14 +297,14 @@ concurrently; same-file overlap is acceptable, the lead merges.
 ## Lead milestones (falsifiable, each closes on a captured live record)
 
 - **M1** after U3+U7: two live Claude sessions + the web page converse in one
-  room on this machine; transcript of both sessions' turns + the room JSONL
+  channel on this machine; transcript of both sessions' turns + the channel JSONL
   cited.
 - **M2** after M1: a Claude session on a second machine joins via
-  `SCRAMBLE_URL` and exchanges mentions with a local one; room JSONL cited.
+  `SCRAMBLE_URL` and exchanges mentions with a local one; channel JSONL cited.
 - **M3** after U5: Slack channel live — operator creates the one bridge app
   (10-15 min, manifest from U9), personas converse, one agent promoted to a
   real bot user and DM'd; Slack permalinks cited.
-- **M4** after U6: a codex participant answers a mention in the room.
+- **M4** after U6: a codex participant answers a mention in the channel.
 
 ## Estimate
 
