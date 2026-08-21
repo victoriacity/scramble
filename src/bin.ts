@@ -76,6 +76,9 @@ const io = {
   sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
   },
+  readStdin(): Promise<string> {
+    return new Response(Bun.stdin).text();
+  },
   pid(): number {
     return process.pid;
   },

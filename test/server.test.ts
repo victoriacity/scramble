@@ -360,6 +360,30 @@ describe("streams", () => {
     expect(lines[0]!.text).toBe("y");
   });
 
+  test("agent pending snapshot returns the finite delivery set", async () => {
+    const h = handler();
+    await h(new Request("http://x/agents/dev", { method: "POST", body: '{"persona":"p","room":"general"}' }));
+    await h(post({ from: "ana", text: "@dev see this", id: "1" }));
+    await h(post({ from: "dev", text: "my own", id: "2" }));
+    await h(
+      new Request("http://x/rooms/" + encodeURIComponent("dm/others/x"), {
+        method: "POST",
+        body: JSON.stringify({ from: "x", text: "not dev's room", id: "3" }),
+      }),
+    );
+    const all = await h(new Request("http://x/agents/dev/pending?since=0"));
+    expect(all.status).toBe(200);
+    const arr = (await all.json()) as Array<{ from: string; room: string; mentioned: boolean }>;
+    // dev's room general, own message excluded, unrelated dm/ room excluded
+    expect(arr.length).toBe(1);
+    expect(arr[0]!.from).toBe("ana");
+    expect(arr[0]!.room).toBe("general");
+    expect(arr[0]!.mentioned).toBe(true);
+    // a cursor skips what was already drained
+    const since = await h(new Request("http://x/agents/dev/pending?since=1"));
+    expect((await since.json()) as unknown[]).toHaveLength(0);
+  });
+
   test("firehose stream: a live message flows into the open stream", async () => {
     const h = handler();
     const res = await h(new Request("http://x/stream?since=0"));

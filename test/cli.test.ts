@@ -564,6 +564,310 @@ describe("unknown command", () => {
   });
 });
 
+// --- the mirrored raft grammar (message / profile / channel) -------------
+// scramble speaks the same noun-verb grammar as the raft CLI; these keep the
+// old verbs as aliases and cover the mirror's parsing under the local backend.
+
+describe("message send (mirrored)", () => {
+  test("--target sends the STDIN message and prints crossings", async () => {
+    const cwd = scratchDir("msgsend");
+    const handler = createHandler(createStore(scratchDir("msgsend-store")));
+    await handler(
+      new Request("http://x/rooms/general", {
+        method: "POST",
+        body: JSON.stringify({ from: "bob", text: "first", id: "j1", lastSeen: 0 }),
+      }),
+    );
+    const { io, writes } = stubIo(cwd, (u, init) => handler(new Request(u, init)));
+    io.readStdin = async () => "hello ana from stdin";
+    const code = await main(["message", "send", "--target", "general", "--as", "ana"], io);
+    expect(code).toBe(0);
+    expect(JSON.parse(writes[0]!)).toMatchObject({ from: "bob", text: "first" });
+  });
+
+  test("equal-form --target=room works", async () => {
+    const cwd = scratchDir("msgsend-eq");
+    const handler = createHandler(createStore(scratchDir("msgsend-eq-store")));
+    const { io, writes } = stubIo(cwd, (u, init) => handler(new Request(u, init)));
+    io.readStdin = async () => "hi";
+    const code = await main(["message", "send", "--target=general", "--as", "ana"], io);
+    expect(code).toBe(0);
+    // no crossings, clean exit
+    expect(writes).toHaveLength(0);
+  });
+
+  test("reads empty stdin as a reported usage error", async () => {
+    const cwd = scratchDir("msgsend-empty");
+    const { io, errs } = stubIo(cwd, async () => {
+      throw new Error("no fetch expected");
+    });
+    io.readStdin = async () => "   ";
+    const code = await main(["message", "send", "--target", "general"], io);
+    expect(code).toBe(1);
+    expect(errs[0]).toContain("stdin");
+  });
+
+  test("a missing --target is reported and exits nonzero", async () => {
+    const cwd = scratchDir("msgsend-notarget");
+    const { io, errs } = stubIo(cwd, async () => {
+      throw new Error("no fetch expected");
+    });
+    io.readStdin = async () => "hello";
+    const code = await main(["message", "send"], io);
+    expect(code).toBe(1);
+    expect(errs[0]).toContain("--target");
+  });
+
+  test("a '#' target is rejected with the sigil reason", async () => {
+    const cwd = scratchDir("msgsend-hash");
+    const { io, errs } = stubIo(cwd, async () => {
+      throw new Error("no fetch expected");
+    });
+    io.readStdin = async () => "hello";
+    const code = await main(["message", "send", "--target", "#general"], io);
+    expect(code).toBe(1);
+    expect(errs[0]).toContain("'#'");
+  });
+});
+
+describe("message check (local => cursor drain)", () => {
+  test("drains pending, writes the cursor, and is quiet when empty", async () => {
+    const cwd = scratchDir("msgcheck");
+    const handler = createHandler(createStore(scratchDir("msgcheck-store")));
+    await handler(
+      new Request("http://x/agents/dev", {
+        method: "POST",
+        body: JSON.stringify({ persona: "p", room: "general" }),
+      }),
+    );
+    await handler(
+      new Request("http://x/rooms/general", {
+        method: "POST",
+        body: JSON.stringify({ from: "ana", text: "@dev hi", id: "1", lastSeen: 0 }),
+      }),
+    );
+    const a = stubIo(cwd, (u, init) => handler(new Request(u, init)));
+    const code = await main(["message", "check", "--as", "dev"], a.io);
+    expect(code).toBe(0);
+    expect(a.writes.length).toBeGreaterThan(0);
+    const cursor = JSON.parse(readFileSync(join(cwd, ".scramble", "cursor.json"), "utf8"));
+    expect(cursor.dev).toBeGreaterThan(0);
+    // second check: nothing new pending, prints nothing, still exits 0
+    const b = stubIo(cwd, (u, init) => handler(new Request(u, init)));
+    const code2 = await main(["message", "check", "--as", "dev"], b.io);
+    expect(code2).toBe(0);
+    expect(b.writes).toHaveLength(0);
+  });
+
+  test("a failure prints the status and exits 1", async () => {
+    const cwd = scratchDir("msgcheck-fail");
+    const { io, errs } = stubIo(cwd, async () => new Response("{}", { status: 500 }));
+    const code = await main(["message", "check", "--as", "dev"], io);
+    expect(code).toBe(1);
+    expect(errs[0]).toContain("500");
+  });
+});
+
+describe("message read (mirror of history)", () => {
+  test("--after and --since are the same cursor", async () => {
+    const cwd = scratchDir("msgread");
+    const seen: string[] = [];
+    const { io, writes } = stubIo(cwd, async (input) => {
+      const u = new URL(input);
+      seen.push(u.searchParams.get("since")!);
+      return new Response(
+        JSON.stringify([msg("r1", "bob", "one"), msg("r2", "ana", "two")]),
+        { status: 200 },
+      );
+    });
+    const codeAfter = await main(["message", "read", "--target", "general", "--after", "7"], io);
+    expect(codeAfter).toBe(0);
+    expect(seen[0]).toBe("7");
+    const codeSince = await main(["message", "read", "--target", "general", "--since", "9"], io);
+    expect(codeSince).toBe(0);
+    expect(seen[1]).toBe("9");
+    expect(writes.map((l) => JSON.parse(l).text)).toEqual(["one", "two", "one", "two"]);
+  });
+
+  test("a missing --target is reported", async () => {
+    const { io, errs } = stubIo(scratchDir("msgread-notarget"), async () => {
+      throw new Error("unreachable");
+    });
+    const code = await main(["message", "read"], io);
+    expect(code).toBe(1);
+    expect(errs[0]).toContain("--target");
+  });
+
+  test("a '#' target is rejected", async () => {
+    const { io, errs } = stubIo(scratchDir("msgread-hash"), async () => {
+      throw new Error("unreachable");
+    });
+    const code = await main(["message", "read", "--target", "#general"], io);
+    expect(code).toBe(1);
+    expect(errs[0]).toContain("'#'");
+  });
+});
+
+describe("message unknown verb", () => {
+  test("reports what it saw and exits nonzero", async () => {
+    const { io, errs } = stubIo(scratchDir("msgverb"), async () => {
+      throw new Error("unreachable");
+    });
+    const code = await main(["message", "bogus"], io);
+    expect(code).toBe(1);
+    expect(errs[0]).toContain("bogus");
+  });
+});
+
+describe("profile", () => {
+  test("show prints name + persona as one JSON line, empty persona when absent", async () => {
+    const withPersona = scratchDir("prof-show");
+    mkdirSync(join(withPersona, ".scramble"), { recursive: true });
+    writeFileSync(join(withPersona, ".scramble", "persona.md"), "I test quickly.\n");
+    const { io: io1, writes: w1 } = stubIo(withPersona, async () => {
+      throw new Error("unreachable");
+    });
+    await main(["profile", "show", "--as", "dev"], io1);
+    expect(JSON.parse(w1[0]!)).toEqual({ name: "dev", persona: "I test quickly.\n" });
+    const bare = scratchDir("prof-bare");
+    const { io: io2, writes: w2 } = stubIo(bare, async () => {
+      throw new Error("unreachable");
+    });
+    await main(["profile", "show", "--as", "dev"], io2);
+    expect(JSON.parse(w2[0]!)).toEqual({ name: "dev", persona: "" });
+  });
+
+  test("update writes persona.md, registers it, and exits 0", async () => {
+    const cwd = scratchDir("prof-update");
+    const sent: Array<{ url: string; init?: RequestInit }> = [];
+    const { io } = stubIo(cwd, async (u, init) => {
+      sent.push({ url: u, init });
+      return new Response("{}", { status: 200 });
+    });
+    const code = await main(["profile", "update", "--description", "i focus on gates", "--as", "dev"], io);
+    expect(code).toBe(0);
+    expect(readFileSync(join(cwd, ".scramble", "persona.md"), "utf8")).toBe("i focus on gates");
+    expect(sent[0]!.url).toContain("/agents/dev");
+    expect(JSON.parse(sent[0]!.init!.body as string)).toMatchObject({ persona: "i focus on gates" });
+  });
+
+  test("update with no description is an error", async () => {
+    const { io, errs } = stubIo(scratchDir("prof-node"), async () => {
+      throw new Error("unreachable");
+    });
+    const code = await main(["profile", "update", "--as", "dev"], io);
+    expect(code).toBe(1);
+    expect(errs[0]).toContain("--description");
+  });
+
+  test("update surfaces a registration failure", async () => {
+    const cwd = scratchDir("prof-fail");
+    const { io, errs } = stubIo(cwd, async () => new Response("{}", { status: 500 }));
+    const code = await main(["profile", "update", "--description", "x", "--as", "dev"], io);
+    expect(code).toBe(1);
+    expect(errs[0]).toContain("500");
+  });
+
+  test("an unknown profile verb is reported", async () => {
+    const { io, errs } = stubIo(scratchDir("prof-verb"), async () => {
+      throw new Error("unreachable");
+    });
+    const code = await main(["profile", "frob"], io);
+    expect(code).toBe(1);
+    expect(errs[0]).toContain("frob");
+  });
+});
+
+describe("channel join (mirror of join)", () => {
+  test("--target joins and registers", async () => {
+    const cwd = scratchDir("chan");
+    const { io } = stubIo(cwd, async () => new Response("{}", { status: 200 }));
+    const code = await main(["channel", "join", "--target", "general", "--as", "dev"], io);
+    expect(code).toBe(0);
+    expect(existsSync(join(cwd, ".scramble", "persona.md"))).toBe(true);
+  });
+
+  test("a '#' target is rejected with the sigil reason", async () => {
+    const { io, errs } = stubIo(scratchDir("chan-hash"), async () => {
+      throw new Error("unreachable");
+    });
+    const code = await main(["channel", "join", "--target", "#general"], io);
+    expect(code).toBe(1);
+    expect(errs[0]).toContain("#'");
+  });
+
+  test("a missing --target is reported", async () => {
+    const { io, errs } = stubIo(scratchDir("chan-notarget"), async () => {
+      throw new Error("unreachable");
+    });
+    const code = await main(["channel", "join"], io);
+    expect(code).toBe(1);
+    expect(errs[0]).toContain("--target");
+  });
+
+  test("an unknown channel verb is reported", async () => {
+    const { io, errs } = stubIo(scratchDir("chan-verb"), async () => {
+      throw new Error("unreachable");
+    });
+    const code = await main(["channel", "leave"], io);
+    expect(code).toBe(1);
+    expect(errs[0]).toContain("leave");
+  });
+});
+
+describe("message check under the slack backend", () => {
+  function slackCheckIo(cwd: string, over?: Partial<Io>): Io {
+    writeSlackConfig(cwd, { appToken: "xapp-1", token: "xoxb-1", channels: { general: "C1" }, agents: {} });
+    const base: Io = {
+      write: () => {},
+      writeErr: () => {},
+      fetch: async () => new Response("{}", { status: 200 }),
+      env: () => undefined,
+      cwd: () => cwd,
+      sleep: async () => {},
+      serve: async () => 0,
+      createTransport: () => ({ connect: () => {}, postMessage: async () => {} }),
+      createSocket: () =>
+        ({
+          send: () => {},
+          close: () => {},
+          onopen: null,
+          onmessage: null,
+          onclose: null,
+          onerror: null,
+        }),
+    };
+    return { ...base, ...over };
+  }
+
+  test("a valid slack config reports nothing pending and exits 0", async () => {
+    const io = slackCheckIo(scratchDir("mslack-ok"));
+    const code = await main(["message", "check", "--as", "dev", "--backend", "slack"], io);
+    expect(code).toBe(0);
+  });
+
+  test("a broken slack config is reported and exits nonzero", async () => {
+    const cwd = scratchDir("mslack-bad");
+    mkdirSync(join(cwd, ".scramble"), { recursive: true });
+    writeFileSync(join(cwd, ".scramble", "slack.json"), "not json");
+    const io: Io = {
+      write: () => {},
+      writeErr: () => {},
+      fetch: async () => new Response("{}", { status: 200 }),
+      env: () => undefined,
+      cwd: () => cwd,
+      sleep: async () => {},
+      serve: async () => 0,
+      createTransport: () => ({ connect: () => {}, postMessage: async () => {} }),
+    };
+    const errs: string[] = [];
+    io.writeErr = (l) => errs.push(l);
+    const code = await main(["message", "check", "--as", "dev", "--backend", "slack"], io);
+    expect(code).toBe(1);
+    expect(errs[0]).toContain("slack");
+  });
+});
+
 // --- the `scramble slack` verb ------------------------------
 // The bridge config lives at <workspace>/.scramble/slack.json, and the real
 // transport is created through io.createTransport so tests inject a fake.

@@ -160,8 +160,9 @@ export function createStore(dir: string): RoomStore {
   }
 
   function join(name: string, persona: string, room: string): void {
-    assertSafeRoom(room);
     personas.set(name, persona);
+    if (room === "") return;
+    assertSafeRoom(room);
     let set = memberRooms.get(name);
     if (!set) { set = new Set<string>(); memberRooms.set(name, set); }
     set.add(room);
