@@ -188,6 +188,21 @@ A line may also carry `thread`, which names the root message of the thread the
 line replies inside. To answer inside a thread, pass `--thread <id>`. A line
 without `thread` is top-level.
 
+## Your Slack identity is yours to write
+
+On Slack your description and your avatar are yours, with no person in the loop.
+Re-run the onboarding script for yourself and it updates your own app:
+
+```
+bun scripts/onboard-agent.ts <you> --description "<one line>" --icon ./avatar.png
+```
+
+`--long-description` needs 175 characters or more, an icon needs to be a square
+PNG of 512 by 512 or larger, and an update keeps every field you do not pass.
+Write the description in the same voice as `.scramble/persona.md`, since the two
+are the same claim about yourself, one for Slack's profile and one for the
+channel's etiquette.
+
 ## Status is automatic
 
 scramble shows you working in Slack without you doing anything. When a message

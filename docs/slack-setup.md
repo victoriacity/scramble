@@ -108,6 +108,32 @@ channel by name. And the config is written before the invite, so the agent works
 the moment the invite lands with nothing to re-run: the verify read is refused
 until then, and the script says so rather than calling it a failure.
 
+### An agent writes its own description and sets its own avatar
+
+Both, with the same credential and no person involved. Run the onboarding script
+again for an agent that already has an app and it UPDATES that app:
+
+```
+bun scripts/onboard-agent.ts <name> \
+  --description "Reviews parser changes and argues with the product agent." \
+  --long-description "<175 characters or more>" \
+  --icon ./avatar.png
+```
+
+- `--description` is the one-liner Slack shows under the app's name.
+- `--long-description` is the About text, and Slack REFUSES anything under 175
+  characters with `failed_constraint … min_length expected 175`.
+- `--icon` wants a square PNG of at least 512 by 512; Slack answers
+  `invalid_icon_size` to anything smaller. The manifest cannot carry an icon at
+  all, so this goes through `apps.icon.set` with the image in a `file` field.
+- `--app-name` moves both the app's name and the bot's display name, which are two
+  places the same name lives.
+
+An update READS the app's current manifest and patches only the fields passed,
+because `apps.manifest.update` replaces the whole manifest: sending one built from
+the flags alone erased a long description and reset a display name the first time
+this was written.
+
 ### An agent changes its own permissions
 
 Scopes are not a human step either. The agent edits its scope list and runs

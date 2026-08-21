@@ -2,7 +2,12 @@
 // Onboard THIS agent to Slack with no human in the loop.
 //
 //   bun scripts/onboard-agent.ts <agent-name> [--app-name <name>] [--channel <name|id>]
-//                                 [--team <T…>] [--print-manifest]
+//                                 [--description "…"] [--long-description "…"]
+//                                 [--icon <file.png>] [--team <T…>] [--print-manifest]
+//
+// Run it AGAIN for an agent that already has an app and it updates that app
+// rather than creating a second one, so an agent can rewrite its own description
+// or change its own avatar whenever it wants to.
 //
 // <agent-name> is what the agent is called in scramble (`--as`). `--app-name` is
 // what SLACK shows: the app's name and its bot display name, which is what
@@ -49,9 +54,25 @@ const SCOPES: Array<[string, string]> = [
 ];
 const BOT_EVENTS = ["message.channels", "message.groups", "message.im"];
 
-function manifestFor(name: string): Record<string, unknown> {
+/** Slack's own constraint, measured: a `long_description` under 175 characters
+ *  is rejected with
+ *  `failed_constraint … min_length expected 175`, so a short one is padded out
+ *  by the caller rather than silently dropped. */
+const LONG_DESCRIPTION_MIN = 175;
+
+function manifestFor(
+  name: string,
+  description?: string,
+  longDescription?: string,
+): Record<string, unknown> {
   return {
-    display_information: { name },
+    display_information: {
+      name,
+      ...(description !== undefined && description !== "" ? { description } : {}),
+      ...(longDescription !== undefined && longDescription.length >= LONG_DESCRIPTION_MIN
+        ? { long_description: longDescription }
+        : {}),
+    },
     features: { bot_user: { display_name: name, always_online: false } },
     oauth_config: { scopes: { bot: SCOPES.map(([s]) => s) } },
     settings: {
@@ -200,7 +221,7 @@ const flag = (n: string): string | undefined => {
 };
 // A positional that is not some flag's value. Written out rather than clever,
 // because a wrong guess here creates a real Slack app under the wrong name.
-const VALUED_FLAGS = new Set(["--channel", "--team", "--app-name"]);
+const VALUED_FLAGS = new Set(["--channel", "--team", "--app-name", "--description", "--long-description", "--icon"]);
 const agent = (() => {
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
@@ -211,6 +232,9 @@ const agent = (() => {
   return undefined;
 })();
 const appName = flag("app-name") ?? agent;
+const description = flag("description");
+const longDescription = flag("long-description");
+const iconPath = flag("icon");
 
 if (argv.includes("--print-manifest")) {
   console.log(JSON.stringify(manifestFor(appName ?? agent ?? "scramble-agent"), null, 2));
@@ -226,9 +250,100 @@ if (agent === undefined || appName === undefined) {
 const { token } = configToken();
 const team = await resolveTeam(token, flag("team"));
 
+/** Upload the app's avatar. `apps.icon.set` takes the image in a `file` form
+ *  field, and the manifest cannot carry an icon at all: measured, a manifest with
+ *  an `icon` property is rejected as an `invalid additional property`, and Slack
+ *  answers `invalid_icon_size` to anything under 512 by 512. */
+async function setIcon(appId: string, path: string): Promise<void> {
+  if (!existsSync(path)) die(`no icon file at ${path}`);
+  const form = new FormData();
+  form.set("app_id", appId);
+  form.set("file", new Blob([readFileSync(path)]), path.split("/").pop() ?? "icon.png");
+  const res = await fetch("https://slack.com/api/apps.icon.set", {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}` },
+    body: form,
+  });
+  const j = (await res.json()) as { ok?: boolean; error?: string };
+  if (j.ok !== true) {
+    die(
+      `apps.icon.set answered ${String(j.error)}. Slack wants a square PNG of at least ` +
+        `512 by 512; anything smaller answers invalid_icon_size.`,
+    );
+  }
+  console.log(`onboard: avatar set from ${path}`);
+}
+
+// AN AGENT THAT ALREADY HAS AN APP UPDATES IT. Running this again to change a
+// description or an avatar must not create a second Slack app, so the appId in
+// the agent's own config entry decides between update and create.
+const existingCfg: { agents?: Record<string, { appId?: string }> } = existsSync(
+  process.env.SCRAMBLE_SLACK_CONFIG ?? join(process.env.HOME ?? ".", ".config", "scramble", "slack.json"),
+)
+  ? (JSON.parse(
+      readFileSync(
+        process.env.SCRAMBLE_SLACK_CONFIG ?? join(process.env.HOME ?? ".", ".config", "scramble", "slack.json"),
+        "utf8",
+      ),
+    ) as { agents?: Record<string, { appId?: string }> })
+  : {};
+const existingAppId = existingCfg.agents?.[agent]?.appId;
+if (existingAppId !== undefined && existingAppId !== "") {
+  console.log(`onboard: agent "${agent}" already owns app ${existingAppId}, updating it`);
+  if (description !== undefined || longDescription !== undefined) {
+    if (longDescription !== undefined && longDescription.length < LONG_DESCRIPTION_MIN) {
+      die(
+        `--long-description is ${longDescription.length} characters and Slack requires at ` +
+          `least ${LONG_DESCRIPTION_MIN}. Say more, or leave it out.`,
+      );
+    }
+    // READ THE MANIFEST BEFORE WRITING IT. apps.manifest.update REPLACES the
+    // whole manifest, so sending one built from the flags alone wipes whatever
+    // the flags did not mention: the first version of this code reset the app's
+    // display name to the agent name and erased a long_description that was
+    // already there. Export, patch only what was asked for, send that back.
+    const exported = await api(token, "apps.manifest.export", { app_id: existingAppId });
+    const current = (exported.manifest ?? {}) as Record<string, unknown>;
+    const info = { ...((current.display_information ?? {}) as Record<string, unknown>) };
+    // The bot's display_name is a SECOND place the name lives, and it is the one
+    // that shows beside every message, so --app-name has to move both or the two
+    // drift apart in exactly the way a reader notices.
+    const features = { ...((current.features ?? {}) as Record<string, unknown>) };
+    if (flag("app-name") !== undefined) {
+      info.name = appName;
+      features.bot_user = {
+        ...((features.bot_user ?? {}) as Record<string, unknown>),
+        display_name: appName,
+      };
+    }
+    if (description !== undefined) info.description = description;
+    if (longDescription !== undefined) info.long_description = longDescription;
+    await api(token, "apps.manifest.update", {
+      app_id: existingAppId,
+      manifest: { ...current, display_information: info, features },
+    });
+    console.log(
+      `onboard: updated${description !== undefined ? " description" : ""}` +
+        `${longDescription !== undefined ? " long_description" : ""}, ` +
+        `keeping the name and every field not passed`,
+    );
+  }
+  if (iconPath !== undefined) await setIcon(existingAppId, iconPath);
+  if (description === undefined && longDescription === undefined && iconPath === undefined) {
+    console.log("onboard: nothing to change. Pass --description, --long-description or --icon.");
+  }
+  process.exit(0);
+}
+
 console.log(`onboard: creating the app "${appName}" as a WORKSPACE app for agent "${agent}"`);
+if (longDescription !== undefined && longDescription.length < LONG_DESCRIPTION_MIN) {
+  die(
+    `--long-description is ${longDescription.length} characters and Slack requires at least ` +
+      `${LONG_DESCRIPTION_MIN}. Say more, or leave it out.`,
+  );
+}
 const created = await api(token, "apps.manifest.create", {
-  manifest: manifestFor(appName),
+  manifest: manifestFor(appName, description, longDescription),
   team_id: team,
 });
 const appId = String(created.app_id);
@@ -245,6 +360,7 @@ const appToken = tokens?.app_level;
 if (botToken === undefined || botToken === "") die("developerInstall returned no bot token");
 console.log(`onboard: installed to ${team}, bot token and app-level token received`);
 
+if (iconPath !== undefined) await setIcon(appId, iconPath);
 const who = await get(botToken, "auth.test");
 console.log(`onboard: the bot is @${String(who.user)} (${String(who.bot_id)})`);
 
