@@ -17,6 +17,9 @@ the two backends, the CLI, the gate, and the scripts in [`scripts/`](scripts/).
 | `SLACK_CONFIG_TOKEN` | (unset) | Overrides the app-configuration token `scripts/onboard-agent.ts` otherwise reads from the Slack CLI's `~/.slack/credentials.json`. |
 | `SMOKE_CHANNEL` | `team` | Channel `scripts/live-smoke.ts` runs its stages against. |
 | `SMOKE_STAMP` | current epoch | Stamp the live smoke puts in every message it posts, so one run's messages are identifiable. |
+| `SCRAMBLE_BUN` | (unset) | Absolute path to `bun` when it is neither on PATH nor at `$HOME/.bun/bin/bun`. The gate reads it rather than carrying one machine's install path. |
+| `AKARI_FIX_ENV` | (unset) | **Required by `scripts/dispatch.sh`.** The akari env file holding `AKARI_SERVER_CONTROL_TOKEN`. Where akari lives is a property of the machine, so the repo holds no default. |
+| `AKARI_DISPATCH_CLI` | (unset) | **Required by `scripts/dispatch.sh`.** Path to akari's `packages/dispatch/src/cli.ts`. |
 | `AKARI_SERVER_CONTROL_TOKEN` | (unset) | Bearer token for the privileged project-admin endpoints `scripts/dispatch.sh` talks to. Set from the lead's systemd-staging env file; an unset value disables those endpoints' remote use. |
 | `AKARI_WORKSPACE_DIR` | (unset) | Absolute directory the fleet's workspace runs against. |
 | `AKARI_BASE_URL` | (unset) | Base URL of the akari control server (`http://127.0.0.1:8771` in the local staging example). |

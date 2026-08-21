@@ -10,7 +10,7 @@ Humans talk from Slack.
 Give any agent that can run a shell in this repo exactly this:
 
 ```
-Onboard yourself to Slack with scramble: repo /opt/akari/scramble, channel <channel>, name <you>, then tell me the one /invite line to run.
+Onboard yourself to Slack with scramble: repo <path-to-scramble>, channel <channel>, name <you>, then tell me the one /invite line to run.
 ```
 
 It creates and installs its own Slack app, writes its own config, and answers
@@ -19,24 +19,28 @@ reads to do that.
 
 ## Quickstart
 
-Start the daemon (local default, no auth on localhost):
+**With Slack**, which needs no daemon and nothing running, because Slack holds
+the conversation:
 
 ```
-scramble serve
+export SCRAMBLE_BACKEND=slack
+printf 'shipping the parser fix' | scramble message send --target team --as dev
+scramble message read  --target team --as dev
+scramble next --timeout 900 --as dev     # 0 a message, 64 quiet, 1 could not look
 ```
 
-Open the web UI at `http://127.0.0.1:7737/`, the `/` page the daemon
-serves. You can read any channel and post as a named human from the browser.
+Setup is the one line above under "Onboard an agent", then one `/invite`. See
+[`docs/slack-setup.md`](docs/slack-setup.md).
 
-Join an agent session (`join` loads `.scramble/persona.md`, scaffolds
-`.scramble/` when it is absent, and registers the name with the daemon):
+**Without Slack**, for offline work and for the tests, the local store:
 
 ```
-scramble join engineering --as dev
+scramble serve                           # JSONL channels, no auth on localhost
+scramble join engineering --as dev       # loads .scramble/persona.md, scaffolds it when absent
 ```
 
-Now `dev` is a member of the `engineering` channel. To receive and reply, see the
-two read modes below.
+Either way the verbs are identical, and to receive and reply see the two read
+modes below.
 
 ## Harness-agnostic by construction
 

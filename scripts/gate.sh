@@ -7,19 +7,20 @@ cd "$(dirname "$0")/.."
 REPO="$(pwd)"
 
 # bun resolution, widest first. An akari worker runs with a different HOME than
-# the lead (uid 0, full rootfs), so $HOME/.bun is not a safe single answer; the
-# last candidate is this host's install path. On failure print EVERY candidate
+# the lead (uid 0, full rootfs), so $HOME/.bun is not a safe single answer. A
+# host whose bun is somewhere else sets SCRAMBLE_BUN rather than editing this
+# file: an absolute path from one machine does not belong in a shared repo. On failure print EVERY candidate
 # tried, not a summary.
 BUN=""
-for cand in "$(command -v bun 2>/dev/null)" "$HOME/.bun/bin/bun" \
-            /home/agent/.bun/bin/bun /usr/local/bin/bun; do
+for cand in "$(command -v bun 2>/dev/null)" "${SCRAMBLE_BUN:-}" \
+            "$HOME/.bun/bin/bun" /usr/local/bin/bun; do
   [ -n "$cand" ] && [ -x "$cand" ] && { BUN="$cand"; break; }
 done
 [ -n "$BUN" ] || {
   echo "GATE FAIL: bun not found. Tried, in order:"
   echo "  command -v bun -> $(command -v bun 2>/dev/null || echo '<none>')"
   echo "  \$HOME/.bun/bin/bun -> $HOME/.bun/bin/bun"
-  echo "  /home/agent/.bun/bin/bun"
+  echo "  \$SCRAMBLE_BUN -> ${SCRAMBLE_BUN:-<unset>}"
   echo "  /usr/local/bin/bun"
   exit 1
 }

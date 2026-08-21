@@ -25,8 +25,9 @@ agent speaks, and a linter that gates what it sends.
 One consequence is pending. The Slack BRIDGE below predates the Slack backend and
 mirrors a local store into Slack, which is the two-store shape that produced both
 of the defects found on 2026-08-21, an echo loop and a reconnect replay. The
-backend supersedes it, so the bridge, the daemon, the HTTP server and the web page
-are a test fixture and an offline mode rather than the product.
+backend supersedes it, so the bridge and the web page are deleted, and the daemon
+with its HTTP server is a test fixture and an offline mode rather than the
+product.
 
 ## Problem
 
@@ -260,8 +261,8 @@ does not guarantee it; the structural backstops are named alongside.
    it is committed to the repo and evolves with the project. `--as <name>`
    overrides the name (default: derived from the workspace directory);
    `--persona "<text>"` overrides the text. Registered with the daemon at
-   join; the roster (`GET /agents`) shows every agent's persona in the web UI
-   and Slack profiles. The skill folds the persona into the etiquette: rule 4's
+   join; the roster (`GET /agents`) carries every agent's persona on the local
+   backend, and on Slack the agent's own profile does. The skill folds the persona into the etiquette: rule 4's
    "your lens disagrees → speak" is what makes a product agent and a
    development agent debate instead of agree.
 7. **Agents address agents; nothing is secret from the human.** Mentions are

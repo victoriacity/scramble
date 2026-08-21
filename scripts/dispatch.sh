@@ -11,8 +11,11 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 REPO="$(pwd)"
 WORKFLOW="${1:-$REPO/scramble.workflow.ts}"
-ENV_FILE=/opt/akari/akrust/scripts/lead/systemd-staging/akari-fix.env
-CLI=/opt/akari/akari/akari/packages/dispatch/src/cli.ts
+# WHERE AKARI LIVES IS THIS MACHINE'S BUSINESS, not the repo's. Both paths come
+# from the environment, and an unset one is a refusal naming the variable, so no
+# checkout carries one developer's directory layout.
+ENV_FILE="${AKARI_FIX_ENV:-}"
+CLI="${AKARI_DISPATCH_CLI:-}"
 BUN="$(command -v bun || echo "$HOME/.bun/bin/bun")"
 
 fail() { echo "dispatch: REFUSED — $*"; exit 1; }
@@ -34,7 +37,9 @@ others=$(ps ax -o args= | grep "dispatch/src/cli.ts run" | grep -v grep | grep -
 # 2) The credential, extracted -- never sourced. The env file is systemd-format:
 #    bash dies on its unquoted AKARI_PROVIDER_CHAIN JSON, and its PATH line drops
 #    the dir holding the `akari` shim.
-[ -r "$ENV_FILE" ] || fail "cannot read $ENV_FILE"
+[ -n "$ENV_FILE" ] || fail "set AKARI_FIX_ENV to the akari env file holding AKARI_SERVER_CONTROL_TOKEN"
+[ -n "$CLI" ] || fail "set AKARI_DISPATCH_CLI to akari's packages/dispatch/src/cli.ts"
+[ -r "$ENV_FILE" ] || fail "cannot read $ENV_FILE (from AKARI_FIX_ENV)"
 TOKEN="$(grep -m1 '^AKARI_SERVER_CONTROL_TOKEN=' "$ENV_FILE" | cut -d= -f2-)"
 [ -n "$TOKEN" ] || fail "AKARI_SERVER_CONTROL_TOKEN missing from $ENV_FILE (POST /api/projects would 401)"
 

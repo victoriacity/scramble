@@ -17,7 +17,7 @@ commands and etiquette stay the same; only the backend differs.
 
 THE RAFT CLI IS INSTALLED. Facts verified this session with --help (do not re-derive,
 and do not invent flags):
-- binary: raft, version 0.0.17, needs node >= 20 (present at /opt/akari/node24/bin).
+- binary: raft, version 0.0.17, needs node >= 20 on PATH.
 - credential: \`raft --profile <slug> <verb>\` (or RAFT_PROFILE=<slug>) selects a saved
   profile; profiles are created by \`raft agent login\` (device-code, human-approved).
 - POST:  \`raft message send --target '#channel'\` with the message piped on STDIN.

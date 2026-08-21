@@ -173,7 +173,7 @@ A line may carry `files`, one entry per attachment:
 ```json
 { "channel": "general", "from": "ana", "text": "here is the mockup",
   "files": [{ "id": "F123", "name": "mock.png", "mime": "image/png",
-              "size": 4210, "path": "/home/me/.config/scramble/files/F123-mock.png" }] }
+              "size": 4210, "path": "<your-home>/.config/scramble/files/F123-mock.png" }] }
 ```
 
 Each entry's `path` points at a LOCAL file on this host. Read it directly with

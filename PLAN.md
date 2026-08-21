@@ -7,7 +7,7 @@ the existing TS toolchain). Single package, no framework: `Bun.serve` + `fetch`.
 ## Repo layout (fixed by the lead in phase 0, workers fill it)
 
 ```
-/opt/akari/scramble
+<repo>
   DESIGN.md  PLAN.md  README.md
   package.json  tsconfig.json
   src/store.ts      # channel log, global seq, membership, dedup
@@ -27,7 +27,7 @@ the existing TS toolchain). Single package, no framework: `Bun.serve` + `fetch`.
 
 ## Phase 0: lead hand-work (leverage: spec + trust-root infra, ~30 min)
 
-1. `git init` /opt/akari/scramble, bun scaffold, `scripts/gate.sh`, empty module
+1. `git init` the repo, bun scaffold, `scripts/gate.sh`, empty module
    files with exported type signatures for the seams (Message, Store interface,
    daemon route table) so parallel units compose without negotiation.
 2. `.akari/` scaffold on the scramble repo so lanes/fleets target it.
@@ -38,18 +38,18 @@ the existing TS toolchain). Single package, no framework: `Bun.serve` + `fetch`.
 Units run as akari workers against this repo via laneless dispatch:
 
 ```
-cd /opt/akari/scramble
+cd "$REPO"
 export AKARI_SERVER_CONTROL_TOKEN="$(grep -m1 '^AKARI_SERVER_CONTROL_TOKEN=' \
-  /opt/akari/akrust/scripts/lead/systemd-staging/akari-fix.env | cut -d= -f2-)"
-export AKARI_WORKSPACE_DIR=/opt/akari/scramble
+  $AKARI_FIX_ENV | cut -d= -f2-)"
+export AKARI_WORKSPACE_DIR="$REPO"
 export AKARI_BASE_URL=http://127.0.0.1:8771
-nohup akari run /opt/akari/scramble/scramble.workflow.ts > run.log 2>&1 &
+nohup akari run $REPO/scramble.workflow.ts > run.log 2>&1 &
 ```
 
 Four things that cost a round when learned the hard way:
 
 1. **A worker runs in a lane overlay rather than in this directory.** The server seeds
-   `/opt/akari/akari/.akari/lanes/lane-NN-default` from this repo, runs the
+   `akari's `.akari/lanes/lane-NN-default`` from this repo, runs the
    worker there, gates it, then reconciles the writes back here as a
    green-gated commit. So `/api/workers` showing a `lane_id` and a `merge` tool
    call is NORMAL rather than a misdispatch. Do not cancel on that evidence.
@@ -95,13 +95,23 @@ deviation from this table is a defect in the deviating unit rather than a new co
 
 | command | flags | behavior | exit |
 |---|---|---|---|
-| `post <channel> <text>` | `--as <name>` | posts; prints the crossings returned, one JSON line each | 0 |
-| `listen [<channel>...]` | `--as <name>` | streams; one JSON line per message, channel-tagged, `mentioned` stamped, own messages excluded; reconnects resuming at the last seq. No channel argument = every channel the agent is in | 0 on clean stop |
-| `next [<channel>...]` | `--as <name>`, `--timeout <secs>` (default 300) | BLOCKS for ONE message, prints it as one JSON line, exits. Same line format as `listen` | 0 message, 64 timeout |
-| `history <channel>` | `--since <n>` | prints messages, one JSON line each | 0 |
-| `join <channel>` | `--as <name>`, `--persona <text>` | resolves the workspace, reads `.scramble/persona.md`, scaffolds `.scramble/` when absent, registers with the daemon | 0 |
-| `serve` | `--bind <addr>`, `--token <t>`, `--data <dir>` | runs the daemon | none |
-| `slack` | `--url`, `--token`, `--dry-run` | runs the Slack bridge: reads `.scramble/slack.json`, connects Socket Mode, publishes every firehose channel message to Slack, routes inbound Slack messages into channels. `--dry-run` prints the wired Slack calls it WOULD make (channel map + identity tiers) without connecting | 0; 1 on missing/invalid config |
+| `message send` | `--target <channel>`, `--as <name>`, `--thread <id>`, `--attach <path>` (repeatable), `--mime-type <t>`, `--backend <name>` | the message text on STDIN; posts it, prints each crossing as one JSON line. `--thread` replies inside that thread; each `--attach` uploads the file first and the message carries it | 0; 1 on a refused post or upload |
+| `message check` | `--as <name>`, `--backend <name>` | drains what has arrived for this agent since its stored cursor, one JSON line each, and advances the cursor. Own messages excluded | 0 |
+| `message read` | `--target <channel>`, `--after <cursor>`, `--as <name>`, `--backend <name>` | prints the conversation, one JSON line each, including your own lines and thread replies | 0; 1 on an unreachable store |
+| `attachment upload` | `--path <file>`, `--target <channel>`, `--mime-type <t>`, `--as <name>` | uploads one file and prints its id | 0; 1 on a refused upload |
+| `attachment view` | `<attachmentId>`, `--path <out>` | resolves an attachment id to a local path | 0; 1 when unknown |
+| `profile show` / `profile update` | `--description <text>`, `--as <name>` | reads or writes `.scramble/persona.md` | 0 |
+| `channel join` | `--target <channel>`, `--as <name>`, `--backend <name>` | on Slack, reports whether the invite has landed and prints the `/invite` line when it has not. On the local store, registers with the daemon | 0 joined; 1 not joined |
+| `listen [<channel>...]` | `--as <name>`, `--backend <name>` | streams; one JSON line per message, channel-tagged, `mentioned` stamped, own messages excluded; reconnects resuming at the last cursor. No channel argument = every channel the agent is in | 0 on clean stop; 1 when the connection was never established |
+| `next [<channel>...]` | `--as <name>`, `--timeout <secs>` (default 300), `--backend <name>` | BLOCKS for ONE message, prints it as one JSON line, exits. Same line format as `listen` | 0 message, 64 quiet, 1 could not look |
+| `post <channel> <text>` | `--as <name>`, `--thread <id>`, `--backend <name>` | the alias for `message send` with the text as arguments | 0 |
+| `history <channel>` | `--since <cursor>`, `--as <name>`, `--backend <name>` | the alias for `message read` | 0 |
+| `join <channel>` | `--as <name>`, `--persona <text>` | reads `.scramble/persona.md`, scaffolds `.scramble/` when absent, registers with the daemon | 0 |
+| `serve` | `--bind <addr>`, `--token <t>`, `--data <dir>` | runs the local JSONL store's daemon | none |
+
+Global on every command: `--backend <local|slack>`, and `--url` / `--token` for
+the local backend. There is no `slack` verb: the bridge it ran was deleted when
+the Slack BACKEND made Slack the store.
 
 Global: `SCRAMBLE_URL` / `SCRAMBLE_TOKEN` env win over the workspace
 `.scramble/config.json`, which wins over `http://127.0.0.1:7737`. Every
