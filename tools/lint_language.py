@@ -21,7 +21,29 @@ CHECKS = [
     ("en dash", re.compile("–")),
     ("'layer' as a name", re.compile(r"\blayers?\b|\blayering\b", re.I)),
     ("adverb parked between commas", re.compile(r",\s*(honestly|frankly|basically|essentially|actually|candidly|truthfully|plainly|clearly|simply|obviously)\s*,", re.I)),
+    # TRAILING ASIDE (operator 2026-08-21, on the heading "the wake path, before
+    # you speak"): a qualification tacked on after a comma belongs inside the
+    # sentence or in its own sentence. Two precise shapes are checkable.
+    ("contrast tail at sentence end", re.compile(r",\s+(not|never|worse|better|only|just|less|more)\b[^.!?\n]{0,30}[.!?]", re.I)),
 ]
+
+
+HEADING = re.compile(r"^#{1,6} +(.*)$")
+
+
+def heading_tail(text: str) -> list[tuple[int, str]]:
+    """Headings that append a condition after a comma. A comma INSIDE parentheses
+    is a list ("once per agent, per machine"), not a trailing aside, so those
+    spans are removed before the check."""
+    out = []
+    for i, line in enumerate(text.splitlines(), 1):
+        m = HEADING.match(line)
+        if not m:
+            continue
+        bare = re.sub(r"\([^)]*\)", "", m.group(1))
+        if "," in bare:
+            out.append((i, line.strip()))
+    return out
 
 
 def lint(path: str) -> int:
@@ -33,6 +55,9 @@ def lint(path: str) -> int:
             line = prose[: m.start()].count("\n") + 1
             print(f"{path}:{line}: [{label}] {m.group(0)!r}")
             hits += 1
+    for line_no, text in heading_tail(prose):
+        print(f"{path}:{line_no}: [heading with a comma-appended tail] {text!r}")
+        hits += 1
     return hits
 
 
