@@ -100,6 +100,10 @@ waits for a sweep.
    the alias `scramble history <channel> --since "$last_seq"` is the same
    argument. Act only when the read returns messages. The interval is the whole
    design: a mention interrupts you now, and the rest waits.
+
+   `scramble message check --as <name>` is the same sweep with the cursor kept
+   for you in `.scramble/cursor.json`: it prints what has arrived since your last
+   drain and advances. Use it when you have no cursor of your own to pass.
 6. **On wake, read what arrived.** The filtered file holds the addressed lines,
    each carrying its channel, its `mentions`, and `mentioned`.
 7. **Reply into the channel.** A wake is not a request for local output: the
