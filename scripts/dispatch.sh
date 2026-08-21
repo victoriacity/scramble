@@ -88,6 +88,47 @@ if bad:
 sys.exit(0)
 PYEOF
 
+# 4d) CROSS-WORKFLOW FILE CONFLICT. On 2026-08-21 I ran four units at once. One
+#     deleted src/slack.ts and src/raft.ts while another was writing the thread
+#     feature INTO those files, so the merge cliffed the feature: the spec commits
+#     survived and the implementation did not. Prose in a prompt ("port before
+#     deleting") did not hold. A workflow that DELETES a path may not run while a
+#     live workflow names that same path.
+#     Postmortem: akrust log/postmortems/2026-08-21-parallel-delete-cliffed-a-feature.md
+python3 - "$WORKFLOW" <<'PYEOF' || fail "see the cross-workflow conflict above"
+import re, subprocess, sys
+new = open(sys.argv[1]).read()
+def paths(text):
+    return set(re.findall(r"src/[A-Za-z0-9_-]+\.ts", text))
+def deleted(text):
+    # A DELETE heading sits on its own line with the paths BELOW it, so a
+    # line-scoped scan found nothing and let a conflicting dispatch through on the
+    # first attempt. Coarse and safe instead: a workflow that speaks of deleting
+    # treats every src path it names as a deletion candidate. A false refusal
+    # costs a wait; a false pass costs another unit's work.
+    return paths(text) if re.search(r"(?i)\bdelet", text) else set()
+ps = subprocess.run(["ps", "ax", "-o", "args="], capture_output=True, text=True).stdout
+live = [ln.split(" run ")[-1].strip() for ln in ps.splitlines()
+        if "dispatch/src/cli.ts run" in ln and ".workflow.ts" in ln]
+live = [f for f in live if f.endswith(".workflow.ts") and f != sys.argv[1]]
+conflicts = []
+for f in live:
+    try:
+        other = open(f).read()
+    except OSError:
+        continue
+    for p in (deleted(new) & paths(other)) | (deleted(other) & paths(new)):
+        conflicts.append((p, f))
+if conflicts:
+    print("dispatch: REFUSED -- a live workflow names a path this one deletes (or the reverse):")
+    for p, f in sorted(set(conflicts)):
+        print(f"  {p}  also named by {f}")
+    print("Run the deletion alone, or let the live unit finish first: a concurrent")
+    print("delete-versus-add drops the added work and keeps only the spec commit.")
+    sys.exit(1)
+sys.exit(0)
+PYEOF
+
 [ -r "$WORKFLOW" ] || fail "workflow not readable: $WORKFLOW"
 
 # 5) The daemon must answer before we claim a launch.
