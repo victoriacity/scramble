@@ -11,6 +11,8 @@ import type { Message, PostResult } from "./types";
 import type { ServeOptions } from "./server";
 import { createBridge, type SlackConfig, type SlackTransport } from "./slack";
 import { RaftBackend, type RunFn } from "./raft";
+import { SlackBackend, type SlackBackendConfig } from "./slack-backend";
+import type { SlackSocket } from "./slack-transport";
 
 const DEFAULT_URL = "http://127.0.0.1:7737";
 const MAX_BACKOFF = 2000; // ms cap on reconnect delay
@@ -31,6 +33,10 @@ export interface Io {
    *  network bind live in src/bin.ts; tests inject a fake transport so main()
    *  needs no network. */
   createTransport(cfg: SlackConfig): SlackTransport;
+  /** The socket factory for the slack BACKEND's Socket Mode stream. The real
+   *  wiring (bun's WebSocket) lives in src/bin.ts; tests inject a fake so
+   *  next/listen touch no socket. */
+  createSocket?(url: string): SlackSocket;
   /** The process seam for the raft backend: shell out to a command, piping
    *  stdin, returning its exit and output. The real spawn lives in src/bin.ts
    *  so tests inject a fake run and need no raft binary, no network, and no
@@ -663,16 +669,28 @@ function printBridgeSummary(cfg: SlackConfig, base: string, io: Io): void {
   io.writeErr(`dry-run OK: no transport was connected`);
 }
 
-/** Which transport this run uses: the local daemon backend (the default, so
- *  nothing currently working changes) or the raft backend. Selected by the
- *  `--backend raft` flag (highest precedence) or the `SCRAMBLE_BACKEND` env. */
-export function selectBackend(argv: string[], io: Io): "local" | "raft" {
+/** Which backend this run uses: the local daemon (the default, so nothing
+ *  currently working changes), the raft backend, or the slack backend. Selected
+ *  by the `--backend <name>` flag (highest precedence) or `SCRAMBLE_BACKEND`.
+ *  An unknown flag value is treated as raft (a toggle, matching the pre-slack
+ *  contract); `SCRAMBLE_BACKEND` likewise picks local/raft/slack and defaults
+ *  to local. */
+export function selectBackend(argv: string[], io: Io): "local" | "raft" | "slack" {
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
-    if (a === "--backend") return argv[i + 1] === "local" ? "local" : "raft";
-    if (a.startsWith("--backend=")) return a === "--backend=local" ? "local" : "raft";
+    if (a === "--backend") {
+      const v = argv[i + 1];
+      return v === "slack" ? "slack" : v === "local" ? "local" : "raft";
+    }
+    if (a.startsWith("--backend=")) {
+      const v = a.slice("--backend=".length);
+      return v === "slack" ? "slack" : v === "local" ? "local" : "raft";
+    }
   }
-  return io.env("SCRAMBLE_BACKEND") === "raft" ? "raft" : "local";
+  const env = io.env("SCRAMBLE_BACKEND");
+  if (env === "local") return "local";
+  if (env === "slack") return "slack";
+  return env === "raft" ? "raft" : "local";
 }
 
 /** Build the raft backend with the injected run seam (io.run) so tests need no
@@ -741,17 +759,125 @@ async function raftCmdHistory(argv: string[], io: Io): Promise<number> {
   return 0;
 }
 
+/** Build the slack BACKEND with the io seams. The config is the bridge config
+ *  (loadSlackConfig), and every outbound call/socket goes through io.fetch and
+ *  io.createSocket, so tests need no token, network or socket. Returns an
+ *  error string instead of a backend when the config or seams are missing. */
+function slackBackend(io: Io): { backend?: SlackBackend; error?: string } {
+  const cfg = loadSlackConfig(io);
+  if (cfg === null) return { error: `${slackConfigPath(io)} is missing or malformed` };
+  if (!cfg.token) return { error: "slack backend requires a bot token (xoxb-) in the config" };
+  if (!io.createSocket) return { error: "no socket factory seam is bound for the slack backend" };
+  const backend = new SlackBackend(
+    {
+      token: cfg.token,
+      appToken: cfg.appToken,
+      channels: cfg.channels,
+      agents: cfg.agents,
+      roster: cfg.roster,
+      dmChannels: cfg.dmChannels,
+      botIds: cfg.botIds ?? [],
+    },
+    { fetch: io.fetch, createSocket: io.createSocket, sleep: io.sleep },
+  );
+  return { backend };
+}
+
+async function slackCmdPost(argv: string[], io: Io): Promise<number> {
+  const { flags, positionals } = parseArgs(argv);
+  const room = positionals[0];
+  const text = positionals.slice(1).join(" ");
+  if (room === undefined || !text) {
+    io.writeErr("usage: scramble post <room> <text> [--as <name>]");
+    return 1;
+  }
+  const from = nameFor(flags, io);
+  const s = slackBackend(io);
+  if (s.error !== undefined || s.backend === undefined) {
+    io.writeErr(s.error ?? "slack backend unavailable");
+    return 1;
+  }
+  const r = await s.backend.post(room, text, from);
+  if (!r.ok) {
+    io.writeErr(`post failed: ${r.error}`);
+    return 1;
+  }
+  return 0;
+}
+
+async function slackCmdNext(argv: string[], io: Io): Promise<number> {
+  const { flags, positionals } = parseArgs(argv);
+  const name = nameFor(flags, io);
+  const timeoutSec = intFlag(flags, "timeout", 300);
+  const s = slackBackend(io);
+  if (s.error !== undefined || s.backend === undefined) {
+    io.writeErr(s.error ?? "slack unavailable");
+    return 1;
+  }
+  const r = await s.backend.next(positionals, name, timeoutSec, (p) => io.writeErr(`slack: ${p}`));
+  if (r.code === 64) return 64;
+  if (r.line !== undefined) io.write(JSON.stringify(r.line));
+  return 0;
+}
+
+async function slackCmdListen(argv: string[], io: Io): Promise<number> {
+  const { flags, positionals } = parseArgs(argv);
+  const name = nameFor(flags, io);
+  const s = slackBackend(io);
+  if (s.error !== undefined || s.backend === undefined) {
+    io.writeErr(s.error ?? "slack unavailable");
+    return 1;
+  }
+  await s.backend.listen(
+    positionals,
+    name,
+    (d) => io.write(JSON.stringify(d)),
+    (p) => io.writeErr(`slack: ${p}`),
+  );
+  return 0;
+}
+
+async function slackCmdHistory(argv: string[], io: Io): Promise<number> {
+  const { flags, positionals } = parseArgs(argv);
+  const room = positionals[0];
+  if (room === undefined) {
+    io.writeErr("history requires a room");
+    return 1;
+  }
+  const since = flags.get("since");
+  const s = slackBackend(io);
+  if (s.error !== undefined || s.backend === undefined) {
+    io.writeErr(s.error ?? "slack unavailable");
+    return 1;
+  }
+  const r = await s.backend.history(room, since);
+  if (r.code !== 0) {
+    io.writeErr(`history failed: ${r.error}`);
+    return 1;
+  }
+  for (const m of r.messages) io.write(JSON.stringify(m));
+  return 0;
+}
+
 export async function main(argv: string[], io: Io): Promise<number> {
-  const raft = selectBackend(argv, io) === "raft";
+  const backend: "local" | "raft" | "slack" = selectBackend(argv, io);
   switch (argv[0]) {
     case "post":
-      return raft ? raftCmdPost(argv.slice(1), io) : cmdPost(argv.slice(1), io);
+      if (backend === "raft") return raftCmdPost(argv.slice(1), io);
+      if (backend === "slack") return slackCmdPost(argv.slice(1), io);
+      return cmdPost(argv.slice(1), io);
     case "listen":
-      return raft ? raftCmdListen(argv.slice(1), io) : cmdListen(argv.slice(1), io);
+      if (backend === "raft") return raftCmdListen(argv.slice(1), io);
+      if (backend === "slack") return slackCmdListen(argv.slice(1), io);
+      return cmdListen(argv.slice(1), io);
     case "next":
-      return raft ? raftCmdNext(argv.slice(1), io) : cmdNext(argv.slice(1), io);
+      if (backend === "raft") return raftCmdNext(argv.slice(1), io);
+      if (backend === "slack") return slackCmdNext(argv.slice(1), io);
+      return cmdNext(argv.slice(1), io);
     case "history":
-      return raft ? raftCmdHistory(argv.slice(1), io) : cmdHistory(argv.slice(1), io);
+      if (backend === "raft") return raftCmdHistory(argv.slice(1), io);
+      if (backend === "slack") return slackCmdHistory(argv.slice(1), io);
+      return cmdHistory(argv.slice(1), io);
     case "join":
       return cmdJoin(argv.slice(1), io);
     case "serve":
