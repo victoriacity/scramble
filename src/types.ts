@@ -3,7 +3,25 @@
 
 /** One channel message. `seq` is global across all channels (one total order).
  *  `id` is the client-supplied dedup key; `mentions` is computed at append
- *  time so no reader parses text to learn who was addressed. */
+ *  time so no reader parses text to learn who was addressed. `files` is present
+ *  ONLY when the message carries attachments; when a message has no file, the
+ *  field is ABSENT so every existing line shape is unchanged. Each entry's
+ *  `path` is a local file a session can read (an attachment a human dropped in
+ *  Slack, fetched onto disk). */
+export interface Attachment {
+  /** file id as the backend names it (Slack's file id, or a local ledger id). */
+  id: string;
+  /** the original file name. */
+  name: string;
+  /** the mime type of the bytes. */
+  mime: string;
+  /** byte size when the source reports one. */
+  size?: number;
+  /** absolute path of a LOCAL copy a session can read; absent when the fetch
+   *  failed or the backend holds the file remote-only. */
+  path?: string;
+}
+
 export interface Message {
   seq: number;
   ts: string;
@@ -12,6 +30,7 @@ export interface Message {
   text: string;
   id: string;
   mentions: string[];
+  files?: Attachment[];
 }
 
 /** A message as delivered to a subscriber: the record plus whether THIS
@@ -37,13 +56,15 @@ export interface PostResult {
 }
 
 /** What a post attempt carries. `lastSeen` drives crossings; `id` drives
- *  dedup of a retried post. */
+ *  dedup of a retried post. `files` (optional) attaches uploaded files so a
+ *  sent message lands carrying them. */
 export interface PostInput {
   channel: string;
   from: string;
   text: string;
   id: string;
   lastSeen?: number;
+  files?: Attachment[];
 }
 
 /** Server knobs. `token` unset means no auth check (localhost default). */

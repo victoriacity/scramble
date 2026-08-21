@@ -1,39 +1,70 @@
-# scramble × Slack setup (the Slack backend)
+# scramble × Slack setup
 
-`SCRAMBLE_BACKEND=slack` makes Slack the source of truth: every scramble verb
-(`message send`, `message check`, `message read`, `post`, `history`, `listen`,
-`next`) talks to Slack directly over its REST + Socket Mode transports. There is
-no local bridge, no stitched mirror, and no web page — Slack is the store. The
-config lives at `~/.config/scramble/slack.json` (or where
-`SCRAMBLE_SLACK_CONFIG` points, or the workspace `.scramble/slack.json`).
+The Slack bridge (`scramble slack`) connects one internal Slack app to the
+scramble channels over **Socket Mode**, with no public URL and no inbound webhook. Each
+agent appears as a distinct "user" in the channel through one of two identity
+tiers:
 
-## Identity model: one app per agent
+- **Persona (default, zero marginal setup)**: `chat:write.customize` lets the
+  single app post each agent's messages under that agent's display name and
+  avatar. Display-only identity: not in @-mention autocomplete, no presence, no
+  DM channel.
+- **Real bot user (optional, per agent)**: configure a per-agent bot token
+  (one tiny app per agent). The agent becomes a genuine Slack user: @-mention
+  autocomplete, profile, DMs, its own rate budget.
 
-Each agent is its own Slack app (a bot user). A per-agent bot token (`xoxb-`)
-under `agents.<name>.token` makes the agent a genuine Slack user: @-mention
-autocomplete, a profile, its own rate budget. Under `agents`, an agent with no
-token falls back to the config's main `token` for posting, so a single shared
-bot token can stand in for a persona-tier agent that only posts.
+**DMs to an individual agent require the real-bot-user tier.** A *persona* is
+not a Slack user entity, so Slack has nothing to open a DM with; only a real
+bot token gives the agent both an `@mention` and a DM channel.
 
-The app scopes and events each per-agent (and the shared) app needs:
+## Step-by-step
 
-- **Scopes**: `chat:write` (post), `chat:write.customize` (persona display
-  name/avatar), `channels:history` `groups:history` `im:history` (read the
-  channel history the backend maps), `users:read` (resolve `<@U…>` mention ids
-  to names the app does not already know from the roster).
-- **Events** (Socket Mode): `message.channels`, `message.groups`, `message.im`.
-- **Socket Mode** enabled, with an app-level token (`xapp-`, scope
-  `connections:write`) for `apps.connections.open`.
+1. **Create the app** from the bundled manifest:
 
-Everything ships in `docs/slack-manifest.yaml`; a fresh app install is "Create
-New App" → "From an app manifest" → paste the file.
+   - Open [api.slack.com/apps](https://api.slack.com/apps) → **Create New App**
+     → **From an app manifest**.
+   - Paste the contents of `docs/slack-manifest.yaml` (`chat:write`,
+     `chat:write.customize`, `channels:history`, `im:history`; events
+     `message.channels`, `message.im`; socket mode enabled).
 
-## Config: `~/.config/scramble/slack.json`
+2. **Generate the app-level token** (`connections:write`):
+
+   - App settings → **Basic Information** → **App-Level Tokens** → **Generate**.
+   - Scope: `connections:write`. The result is the `appToken` (starts `xapp-`).
+
+3. **Install the app** for the bot token:
+
+   - **Install App** → **Install to Workspace** → copy the **Bot User OAuth
+     Token** (`xoxb-`), which is the `token` used for persona-tier posts.
+   - The socket event stream needs the bot in the workspaces you bridge:
+     **invite the bot to each channel** (`/invite @scramble`). The bridge
+     only echoes text from channels whose Slack channel it is present in.
+
+4. **Write `.scramble/slack.json`** in the workspace the bridge runs from.
+   Every key is documented below with a real example.
+
+5. **Verify the config before going live**:
+
+   ```
+   scramble slack --dry-run
+   ```
+
+   This prints the wired channel→Slack-channel map and each agent's identity tier, and
+   exits 0 when the config is valid; it never connects to Slack.
+
+6. **Go live** with the daemon running:
+
+   ```
+   scramble serve   # the daemon (channel store + firehose)
+   scramble slack   # the bridge in another terminal
+   ```
+
+## `.scramble/slack.json`: every key
 
 ```json
 {
   "appToken": "xapp-1-A...your-socket-mode-app-token...",
-  "token": "xoxb-1234567890-...the-main-bot-token...",
+  "token": "xoxb-1234567890-...your-app-bot-token...",
 
   "channels": {
     "general": "C0EXAMPLE004",
@@ -41,57 +72,64 @@ New App" → "From an app manifest" → paste the file.
   },
 
   "agents": {
-    "alice": { "token": "xoxb-2222-...alice's-own-bot-token..." },
-    "bob":   {}
+    "alice": { "token": "xoxb-2222-...alice's-own-bot-token...", "icon": ":robot:" },
+    "bob":   { "icon": ":hammer_and_wrench:" },
+    "carol": {}
   },
+
+  "dmChannels": { "D0EXAMPLE008": "alice" },
 
   "roster": { "U0123456789": "ana" },
 
-  "botIds": ["B0123456789", "B0987654321"]
+  "botIds": ["B0123456789", "B0987654321"],
+
+  "dmMirrorChannel": "#scramble-dms"
 }
 ```
 
-| Key | Meaning |
-|---|---|
-| `appToken` | App-level token (`xapp-`, scope `connections:write`) for the Socket Mode connect. |
-| `token` | The main bot token (`xoxb-`), the fallback for every post. |
-| `channels` | scramble channel name → Slack channel id. Every group channel the agent talks in. |
-| `agents` | name → identity. `token` present = that agent posts with its own bot token; absent = the main `token`. |
-| `roster` | Slack user id → name, for `<@U…>` → `@name` normalization. Unknown ids resolve through `users.info`. |
-| `botIds` | The backend's own bot user ids, self-filtered so it never delivers its own replies back to itself. |
-
-## How to add a channel
-
-1. Invite the agent's bot into the Slack channel (`/invite @scramble`); a bot
-   can read only channels it is a member of. The app keeps the `groups:history`
-   scope and `message.groups` event so private channels work too.
-2. Get the channel id: open the channel in a browser and take the `C…` id from
-   the URL, or use **View channel details** → bottom of the About tab.
-3. Add a row to `channels`: `"my-channel": "C1234ABCDEF"`.
-4. Restart the watchers — `listen`/`next` read the config at startup — and
-   verify with:
-
-```
-SCRAMBLE_BACKEND=slack scramble message read --target 'my-channel'
-```
-
-A connection error or a non-zero exit means the channel or a token is wrong;
-the message reads what an agent in that channel would see.
+| Key | Meaning | Example |
+|---|---|---|
+| `appToken` | **Required.** App-level token (`xapp-`), scope `connections:write`. Used for Socket Mode connect. | `"xapp-1-A1B2..."` |
+| `token` | **Required.** The app's bot OAuth token (`xoxb-`), used for every persona-tier post. | `"xoxb-123-456..."` |
+| `channels` | Channel name → Slack channel id. Every group channel you want mirrored. | `"general": "C012..."` |
+| `agents` | Name → identity. `token` present = real-bot-user tier (post with that token); absent = persona tier (post with the app token under the agent's name). `icon` is the persona avatar emoji. | `"bob": { "icon": ":hammer_and_wrench:" }` |
+| `dmChannels` | Slack DM conversation id → agent. Only the **real-bot-user** tier's agent can have an inbound DM; map its DM id to the agent. | `"D012...": "alice"` |
+| `roster` | Slack user id → human/agent name, used to normalize `<@U…>` mentions to `@name` and to label inbound messages. | `"U0123456789": "ana"` |
+| `botIds` | The bridge's own bot user ids, self-filtered so the bridge never re-posts its own output and never loops. | `[ "B012..." ]` |
+| `dmMirrorChannel` | Read-only channel where agent↔agent DMs are mirrored (`[a↔b] prefix`). | `"#scramble-dms"` |
 
 ## Private channels
 
-A private channel needs the bot invited from inside the channel and the
-`groups:history` scope + `message.groups` event (both already in the manifest).
-A scope added after install takes effect only on reinstall: update the app and
-reinstall it.
+A private channel works exactly like a public one on scramble's side: add it to
+`channels` as `channel name -> Slack channel id`. The bridge routes on the channel id, not
+on the channel's type (proved by the private-channel tests in
+`test/slack.test.ts`).
 
-## The two backends
+Slack is the part that differs, so two operational notes:
 
-| Backend | Switch | Store |
-|---|---|---|
-| local | default | JSONL channels under `~/.scramble`, served by `scramble serve` |
-| Slack | `SCRAMBLE_BACKEND=slack` | Slack itself, config at `~/.config/scramble/slack.json` |
+- **The scope and event are already in the manifest** (`groups:history` and
+  `message.groups` alongside the public pair), so a FRESH install needs nothing
+  extra. An app you installed BEFORE those were added must be updated and then
+  **reinstalled**, because a new scope takes effect only on reinstall. Without it a
+  private channel the bot sits in is simply silent, with no error anywhere.
+- **A member must invite the bot from inside the channel**: open the private
+  channel and `/invite @scramble`. An app cannot add itself to a private
+  conversation.
 
-`scramble serve` (the offline daemon and local store) ships as a test fixture
-and the offline backend. Slack and local are the two backends; an unknown
-backend name is rejected, naming both.
+To get a private channel's id: open the channel in a browser and take the `C…`
+(or `G…`) id from the URL, or use the channel's **View channel details** →
+bottom of the About tab.
+
+## Identity-tier summary
+
+- **Persona tier** (an agent with **no** `token` under `agents`): the single app
+  posts under the agent's display name + `icon_emoji`. No @-mention
+  autocomplete, no presence, no DMs.
+- **Real bot-user tier** (an agent with a per-agent `agent.token`): the bridge
+  posts with that agent's own bot token, so it is a genuine Slack user.
+  Only this tier can receive **DMs** (`im:history` + `message.im` from the
+  manifest). Give the per-agent app the `im:*` scopes it needs to DM.
+
+**A persona is not a user entity**; Slack has nothing to open a DM with, so
+DMing a persona-tier agent is impossible. To take a DM from a human, the agent
+must be a real bot user.

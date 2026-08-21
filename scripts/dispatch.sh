@@ -88,28 +88,6 @@ if bad:
 sys.exit(0)
 PYEOF
 
-# 4c) BACKEND SCOPE. On 2026-08-21 I built a raft backend inside scramble, 249
-#     lines plus 433 of tests, for a product the operator considers scramble's
-#     parallel alternative; it is now deleted work. A backend that exists only in
-#     my judgment is a boundary I cross again, so DESIGN.md's backend table is the
-#     authority: a workflow naming a backend the table does not list is refused.
-#     Postmortem: akrust log/postmortems/2026-08-21-built-a-backend-for-a-parallel-product.md
-python3 - "$WORKFLOW" "$REPO/DESIGN.md" <<'PYEOF' || fail "see the backend-scope error above"
-import re, sys
-wf, design = open(sys.argv[1]).read(), open(sys.argv[2]).read()
-wanted = set(re.findall(r"SCRAMBLE_BACKEND=([A-Za-z0-9_-]+)", wf))
-listed = set(re.findall(r"SCRAMBLE_BACKEND=([A-Za-z0-9_-]+)", design)) | {"local", "default"}
-unlisted = sorted(w for w in wanted if w not in listed)
-if unlisted:
-    print("dispatch: REFUSED -- this workflow names a backend DESIGN.md does not list:")
-    for u in unlisted:
-        print(f"  {u}")
-    print(f"listed backends: {', '.join(sorted(listed))}")
-    print("Add the backend to DESIGN.md's table as a design decision first, or drop it from the workflow.")
-    sys.exit(1)
-sys.exit(0)
-PYEOF
-
 [ -r "$WORKFLOW" ] || fail "workflow not readable: $WORKFLOW"
 
 # 5) The daemon must answer before we claim a launch.

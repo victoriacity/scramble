@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>scramble</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #ffffff;
+    --fg: #1c1c1c;
+    --panel: #f2f2f2;
+    --border: #d0d0d0;
+    --accent: #0b5cff;
+    --muted: #666666;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #181818;
+      --fg: #ececec;
+      --panel: #242424;
+      --border: #3a3a3a;
+      --accent: #6ea0ff;
+      --muted: #9a9a9a;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: system-ui, -apple-system, sans-serif;
+    display: grid;
+    grid-template-columns: 240px 1fr;
+    grid-template-rows: 1fr auto;
+    height: 100vh;
+    overflow: hidden;
+    min-width: 0;
+  }
+  #sidebar {
+    grid-row: 1 / 3;
+    border-right: 1px solid var(--border);
+    padding: 12px;
+    overflow-y: auto;
+    min-width: 0;
+  }
+  #sidebar h1 { font-size: 18px; margin: 0 0 12px; }
+  #channels { list-style: none; margin: 0; padding: 0; }
+  #channels li { margin: 2px 0; }
+  #channels button {
+    width: 100%;
+    text-align: left;
+    background: transparent;
+    color: var(--fg);
+    border: none;
+    padding: 6px 8px;
+    border-radius: 6px;
+    cursor: pointer;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  #channels button:hover { background: var(--panel); }
+  #channels button.active { background: var(--accent); color: #fff; }
+  main { display: flex; flex-direction: column; min-width: 0; }
+  #channel-title { padding: 12px; border-bottom: 1px solid var(--border); margin: 0; font-size: 16px; }
+  #messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 0;
+  }
+  .msg {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 10px;
+    max-width: 100%;
+  }
+  .msg .meta { font-size: 12px; color: var(--muted); }
+  .msg .from { font-weight: 600; color: var(--accent); margin-right: 8px; }
+  .msg .text { margin-top: 4px; white-space: pre-wrap; word-break: break-word; }
+  #composer {
+    display: flex;
+    gap: 8px;
+    padding: 12px;
+    border-top: 1px solid var(--border);
+    min-width: 0;
+  }
+  #composer input, #composer textarea {
+    background: var(--panel);
+    color: var(--fg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px;
+    font: inherit;
+  }
+  #name { width: 130px; flex: none; }
+  #text { flex: 1; min-width: 0; }
+  #send {
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    padding: 8px 14px;
+    cursor: pointer;
+  }
+  #notice { padding: 8px 12px; font-size: 13px; color: var(--muted); display: none; }
+  @media (max-width: 640px) {
+    body { grid-template-columns: 1fr; grid-template-rows: auto 1fr auto; }
+    #sidebar { grid-row: auto; border-right: none; border-bottom: 1px solid var(--border); }
+  }
+</style>
+</head>
+<body>
+<header id="sidebar">
+  <h1>scramble</h1>
+  <ul id="channels"></ul>
+</header>
+<main>
+  <h2 id="channel-title">Select a channel</h2>
+  <div id="messages"></div>
+  <div id="notice"></div>
+  <form id="composer">
+    <input id="name" placeholder="Your name" autocomplete="off">
+    <textarea id="text" placeholder="Type a message" rows="1"></textarea>
+    <button id="send" type="submit">Send</button>
+  </form>
+</main>
+<script>
+(function () {
+  var channelsEl = document.getElementById("channels");
+  var titleEl = document.getElementById("channel-title");
+  var messagesEl = document.getElementById("messages");
+  var noticeEl = document.getElementById("notice");
+  var composer = document.getElementById("composer");
+  var nameEl = document.getElementById("name");
+  var textEl = document.getElementById("text");
+  var active = null;
+  var latestSeq = 0;
+  var streamReader = null;
+
+  nameEl.value = localStorage.getItem("scramble-name") || "";
+  nameEl.addEventListener("input", function () {
+    localStorage.setItem("scramble-name", nameEl.value);
+  });
+
+  function showNotice(msg) {
+    noticeEl.style.display = "block";
+    noticeEl.textContent = msg;
+    clearTimeout(showNotice._t);
+    showNotice._t = setTimeout(function () { noticeEl.style.display = "none"; }, 4000);
+  }
+
+  function render(m) {
+    var div = document.createElement("div");
+    div.className = "msg";
+    var meta = document.createElement("div");
+    meta.className = "meta";
+    var from = document.createElement("span");
+    from.className = "from";
+    from.textContent = m.from || "?";
+    meta.appendChild(from);
+    meta.appendChild(document.createTextNode(new Date(m.ts).toLocaleTimeString()));
+    var body = document.createElement("div");
+    body.className = "text";
+    body.textContent = m.text;
+    div.appendChild(meta);
+    div.appendChild(body);
+    messagesEl.appendChild(div);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
+
+  // GET /channels — the channel list (every channel, dm/* included)
+  function loadChannels() {
+    return fetch("/channels")
+      .then(function (res) {
+        if (!res.ok) throw new Error("channel list failed");
+        return res.json();
+      })
+      .then(function (channels) {
+        channelsEl.textContent = "";
+        channels.forEach(function (channel) {
+          var li = document.createElement("li");
+          var btn = document.createElement("button");
+          btn.textContent = channel;
+          btn.addEventListener("click", function () { selectChannel(channel); });
+          li.appendChild(btn);
+          channelsEl.appendChild(li);
+        });
+      });
+  }
+
+  // GET /channels/:channel/stream?since=N — live stream for the selected channel
+  function openStream() {
+    if (streamReader) streamReader.cancel();
+    latestSeq = 0;
+    return fetch("/channels/" + encodeURIComponent(active) + "/stream?since=0")
+      .then(function (res) {
+        if (!res.ok) throw new Error("stream failed");
+        return res.body.getReader();
+      })
+      .then(function (reader) {
+        streamReader = reader;
+        var dec = new TextDecoder();
+        function pump() {
+          return reader.read().then(function (r) {
+            if (r.done) return;
+            var lines = dec.decode(r.value, { stream: true }).split("\n");
+            for (var i = 0; i < lines.length; i++) {
+              var line = lines[i].trim();
+              if (!line) continue;
+              var m;
+              try { m = JSON.parse(line); } catch (e) { continue; }
+              if (m.seq > latestSeq) {
+                render(m);
+                latestSeq = m.seq;
+              }
+            }
+            return pump();
+          });
+        }
+        return pump();
+      });
+  }
+
+  function selectChannel(channel) {
+    active = channel;
+    titleEl.textContent = channel;
+    var btns = channelsEl.querySelectorAll("button");
+    btns.forEach(function (b) { b.classList.toggle("active", b.textContent === channel); });
+    // catch-up history, then live stream
+    messagesEl.textContent = "";
+    latestSeq = 0;
+    // GET /channels/:channel?since=0 — catch-up history
+    fetch("/channels/" + encodeURIComponent(channel) + "?since=0")
+      .then(function (res) {
+        if (!res.ok) throw new Error("history failed");
+        return res.json();
+      })
+      .then(function (msgs) {
+        msgs.forEach(function (m) { render(m); });
+        return openStream();
+      })
+      .catch(function (e) { showNotice("Channel load failed: " + e); });
+  }
+
+  // POST /channels/:channel — send a message
+  composer.addEventListener("submit", function (ev) {
+    ev.preventDefault();
+    var from = nameEl.value.trim();
+    var text = textEl.value.trim();
+    if (!from) return showNotice("Enter your name first");
+    if (!text) return;
+    var channel = active;
+    fetch("/channels/" + encodeURIComponent(channel), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ from: from, text: text, id: Date.now().toString(36) + Math.random().toString(36).slice(2) })
+    })
+      .then(function (res) {
+        if (!res.ok) return res.json().then(function (e) { throw e; });
+        return res;
+      })
+      .then(function () { textEl.value = ""; })
+      .catch(function (e) { showNotice("Post rejected: " + (e.error || e.message || e)); });
+  });
+
+  loadChannels().catch(function (e) { showNotice("Channel list failed: " + e); });
+})();
+</script>
+</body>
+</html>

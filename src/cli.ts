@@ -4,13 +4,21 @@
 // in-process handler from src/server.ts as fetch — no child process, no
 // socket, no real delay. Process argv and the real daemon bind live in
 // src/bin.ts, which no test imports.
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { createStore, type ChannelStore } from "./store";
 import type { Message, PostResult } from "./types";
 import type { ServeOptions } from "./server";
 import { SlackBackend, type SlackBackendConfig } from "./slack-backend";
 import type { SlackSocket } from "./slack-transport";
+import {
+  findLocalRecord,
+  guessMime,
+  recordLocalUpload,
+  uploadToSlack,
+  sizeOf,
+  type Attachment,
+} from "./attachments";
 
 const DEFAULT_URL = "http://127.0.0.1:7737";
 const MAX_BACKOFF = 2000; // ms cap on reconnect delay
@@ -243,20 +251,25 @@ async function cmdPost(argv: string[], io: Io): Promise<number> {
   return postText(channel, text, flags, io, backend);
 }
 
-/** Local-backend post: one JSON line per crossing, nothing on a clean send with
- *  no crossing. The `--as`/name and config come from the flags. */
+/** Local-backend: one message posted through the daemon. One JSON line per
+ *  crossing, nothing on a clean send with no crossing. When `files` are given
+ *  (from `--attach`), they ride the POST body so the stored message carries
+ *  them. */
 async function postLocalCore(
   channel: string,
   text: string,
   flags: Map<string, string>,
   io: Io,
+  files?: Attachment[],
 ): Promise<number> {
   const { url, token } = resolveConfig(flags, io);
   const from = nameFor(flags, io);
+  const payload: Record<string, unknown> = { from, text, id: newMessageId() };
+  if (files !== undefined && files.length > 0) payload.files = files;
   const res = await io.fetch(`${url}/channels/${encodeURIComponent(channel)}`, {
     method: "POST",
     headers: { "content-type": "application/json", ...authHeader(token) },
-    body: JSON.stringify({ from, text, id: newMessageId() }),
+    body: JSON.stringify(payload),
   });
   if (!res.ok) {
     io.writeErr(`post failed (${res.status})`);
@@ -269,13 +282,17 @@ async function postLocalCore(
 
 /** Post one message under whichever backend the run selects. The mirrored verb
  *  (`message send`) and the alias (`post <channel> <text>`) share this path so
- *  the backend switch sits below the verb parsing. */
+ *  the backend switch sits below the verb parsing. `files` rides the local
+ *  store's message when `message send --attach` produced them; the slack
+ *  backend attaches by its own upload flow (files are uploaded to the target
+ *  before the text send). */
 async function postText(
   channel: string,
   text: string,
   flags: Map<string, string>,
   io: Io,
   backend: "local" | "slack",
+  files?: Attachment[],
 ): Promise<number> {
   if (backend === "slack") {
     const from = nameFor(flags, io);
@@ -291,7 +308,7 @@ async function postText(
     }
     return 0;
   }
-  return postLocalCore(channel, text, flags, io);
+  return postLocalCore(channel, text, flags, io, files);
 }
 
 function streamUrls(base: string, name: string, channels: string[], since: number): string[] {
@@ -477,6 +494,7 @@ async function historyRead(
       return 1;
     }
     const r = await s.backend.history(channel, since > 0 ? String(since) : undefined);
+    for (const p of r.problems) io.writeErr(`slack: ${p}`);
     if (r.code !== 0) {
       io.writeErr(`read failed: ${r.error}`);
       return 1;
@@ -592,10 +610,21 @@ export function loadSlackConfig(io: Io): SlackBackendConfig | null {
       botIds: (j.botIds as string[]) ?? [],
       token: typeof j.token === "string" ? j.token : "",
       appToken: typeof j.appToken === "string" ? j.appToken : undefined,
+      filesDir: typeof j.filesDir === "string" ? j.filesDir : "",
     };
   } catch {
     return null;
   }
+}
+
+/** The directory Slack attachments are downloaded into (and the local ledger
+ *  lives in). The config's `filesDir` wins; the default keeps files OUT of the
+ *  repo (public-bound), mirroring how the config keeps tokens out of the tree. */
+function slackFilesDir(io: Io): string {
+  const cfg = loadSlackConfig(io);
+  if (cfg !== null && cfg.filesDir !== "") return cfg.filesDir;
+  const home = io.env("HOME");
+  return home ? join(home, ".config", "scramble", "files") : join(io.cwd(), ".scramble", "files");
 }
 
 /** Build the slack BACKEND with the io seams. The config is read from the slack
@@ -616,6 +645,7 @@ function slackBackend(io: Io): { backend?: SlackBackend; error?: string } {
       roster: cfg.roster,
       dmChannels: cfg.dmChannels,
       botIds: cfg.botIds,
+      filesDir: slackFilesDir(io),
     },
     { fetch: io.fetch, createSocket: io.createSocket, sleep: io.sleep },
   );
@@ -699,6 +729,107 @@ async function cmdMessageCheck(argv: string[], io: Io, backend: "local" | "slack
 
 /** The mirrored `message` family: `send`, `check`, `read`. Each dispatches to
  *  the selected backend below the verb parsing, and reports an unknown verb. */
+/** Collect every value passed for a REPEATABLE flag (`--attach a --attach b`),
+ *  supporting both `--flag value` and `--flag=value` spellings. */
+function collectValues(args: string[], flag: string): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]!;
+    if (a === flag) {
+      const v = args[i + 1];
+      if (v !== undefined && !v.startsWith("--")) out.push(v);
+    } else if (a.startsWith(`${flag}=`)) {
+      out.push(a.slice(flag.length + 1));
+    }
+  }
+  return out;
+}
+
+type AttachResult = { ok: true; id: string } | { ok: false; error: string };
+
+/** Upload one local file under the selected backend and return the file id the
+ *  backend assigned (Slack's file id or a local ledger id). The `path` carries
+ *  through so a session can read the bytes. */
+async function attachmentUpload(
+  path: string,
+  targetChannel: string,
+  mimeOverride: string | undefined,
+  io: Io,
+  backend: "local" | "slack",
+): Promise<AttachResult> {
+  if (backend === "slack") {
+    const cfg = loadSlackConfig(io);
+    if (cfg === null || !cfg.token) return { ok: false, error: "slack backend requires a bot token" };
+    const slackId = cfg.channels[targetChannel];
+    if (!slackId) return { ok: false, error: `no Slack channel for channel ${targetChannel}` };
+    const r = await uploadToSlack(io.fetch, cfg.token, path, slackId, mimeOverride);
+    return r.ok ? { ok: true, id: r.out.id } : { ok: false, error: r.error };
+  }
+  const r = recordLocalUpload(slackFilesDir(io), path, mimeOverride);
+  if (!r.ok) return { ok: false, error: r.error };
+  return { ok: true, id: r.record.id };
+}
+
+/** Resolve an attachment id to a local path, for `attachment view`: the local
+ *  backend finds it in the filesDir ledger; the slack backend finds the file
+ *  recorded there (inbound downloads land in filesDir under the file id). */
+async function attachmentView(
+  id: string,
+  out: string | undefined,
+  io: Io,
+  backend: "local" | "slack",
+): Promise<{ ok: true; path: string } | { ok: false; error: string }> {
+  void backend;
+  const dir = slackFilesDir(io);
+  const rec = findLocalRecord(dir, id);
+  if (!rec) return { ok: false, error: `no recorded attachment ${id}` };
+  const finalPath = out !== undefined ? out : rec.path;
+  if (out !== undefined) copyFileSync(rec.path, out);
+  return { ok: true, path: finalPath };
+}
+
+/** The mirrored `attachment` verbs: `upload` and `view`, mirroring raft's
+ *  grammar. `upload` prints the file id as one JSON line; `view` prints the
+ *  path written. */
+async function cmdAttachment(args: string[], io: Io): Promise<number> {
+  const { flags, positionals } = parseArgs(args);
+  const sub = positionals[0];
+  const backend = selectBackend(args, io);
+  if (backend === null) return 1;
+  if (sub === "upload") {
+    const path = flags.get("path");
+    if (!path) {
+      io.writeErr("attachment upload requires --path <file>");
+      return 1;
+    }
+    const req = requireTarget(flags, io);
+    if (!req.ok) return 1;
+    const r = await attachmentUpload(path, req.channel, flags.get("mime-type"), io, backend);
+    if (!r.ok) {
+      io.writeErr(r.error);
+      return 1;
+    }
+    io.write(JSON.stringify({ id: r.id }));
+    return 0;
+  }
+  if (sub === "view") {
+    const id = positionals[1];
+    if (!id) {
+      io.writeErr("attachment view requires <attachmentId>");
+      return 1;
+    }
+    const v = await attachmentView(id, flags.get("path"), io, backend);
+    if (!v.ok) {
+      io.writeErr(v.error);
+      return 1;
+    }
+    io.write(JSON.stringify({ path: v.path }));
+    return 0;
+  }
+  io.writeErr(`unknown attachment verb: ${sub ?? "(none)"}`);
+  return 1;
+}
+
 async function cmdMessage(args: string[], io: Io, backend: "local" | "slack"): Promise<number> {
   const { flags, positionals } = parseArgs(args);
   const sub = positionals[0];
@@ -711,7 +842,23 @@ async function cmdMessage(args: string[], io: Io, backend: "local" | "slack"): P
         io.writeErr("message send requires the message on stdin");
         return 1;
       }
-      return postText(req.channel, text, flags, io, backend);
+      // `--attach <path>` is repeatable: upload each file to the TARGET before
+      // sending, so the message and its files arrive together, then send the
+      // text carrying the uploaded file metadata (the id + local path).
+      const attachPaths = collectValues(args, "--attach");
+      let files: Attachment[] | undefined;
+      if (attachPaths.length > 0) {
+        for (const p of attachPaths) {
+          const up = await attachmentUpload(p, req.channel, flags.get("mime-type"), io, backend);
+          if (!up.ok) {
+            io.writeErr(up.error);
+            return 1;
+          }
+          files = files ?? [];
+          files.push({ id: up.id, name: basename(p), mime: guessMime(p), size: sizeOf(p), path: p });
+        }
+      }
+      return postText(req.channel, text, flags, io, backend, files);
     }
     case "check":
       return cmdMessageCheck(args, io, backend);
@@ -826,6 +973,8 @@ export async function main(argv: string[], io: Io): Promise<number> {
       return cmdHistory(argv.slice(1), io);
     case "message":
       return cmdMessage(argv.slice(1), io, backend);
+    case "attachment":
+      return cmdAttachment(argv.slice(1), io);
     case "profile":
       return cmdProfile(argv.slice(1), io);
     case "channel":
