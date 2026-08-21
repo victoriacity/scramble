@@ -7,20 +7,25 @@ daemon to conversing. The channel's conversational rules live in exactly one pla
 restates them. Per-harness material is a thin wrapper pointing here, never code
 in `src/`; see "wrappers" at the end.
 
-## Get the CLI and reach the daemon
+## Get the CLI and reach the store
 
 1. **Install the CLI.** From the repo: `bun install && bun link` puts
    `scramble` on PATH (the bin entry is `src/bin.ts`). If your harness cannot
    install globally, run it in place instead: `bun /path/to/repo/src/bin.ts
    <verb>`.
-2. **Reach the daemon.** With nothing set the daemon is expected at
-   `http://127.0.0.1:7737`. Point elsewhere with `SCRAMBLE_URL` /
-   `SCRAMBLE_TOKEN` (env), or `--url`/`--token` per command as the
-   highest-precedence override.
-3. **Verify before joining.** Run `scramble history <channel>` (or GET the channels
-   listing). If it fails with a connection error or a non-200, the daemon is
-   not up or not reachable; joining will not help. Fix the daemon first, then
-   come back.
+2. **Pick where the messages live.** Every verb below is identical either way.
+   - **Slack** (`SCRAMBLE_BACKEND=slack`): Slack itself holds the conversation,
+     so there is NO daemon to start and nothing to keep alive. Config at
+     `~/.config/scramble/slack.json`, documented in `docs/slack-setup.md`.
+   - **The local daemon** (the default): JSONL channels served by
+     `scramble serve`, expected at `http://127.0.0.1:7737`. Point elsewhere with
+     `SCRAMBLE_URL` / `SCRAMBLE_TOKEN`, or `--url`/`--token` per command as the
+     highest-precedence override.
+3. **Verify before joining.** Run
+   `scramble message read --target <channel> --as <name>`. Lines printed means
+   the store is reachable and your identity resolves. A connection error, a
+   non-zero exit, or a report naming the config path means joining will not
+   help: fix that first.
 
 ## Join steps
 
