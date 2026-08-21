@@ -244,6 +244,21 @@ export class StatusManager {
     return this.load().find((r) => r.channel === channel)?.ts;
   }
 
+  /** Every living-message ts the ledger currently records — the authority the
+   *  caller hands a read or a delivery so a status line is left out of history
+   *  and never delivered. The authority is the LEDGER (channel + agent + living
+   *  ts), never the "working" text, so a human saying the word is not hidden.
+   *  A cleared or expired status is already GONE from the ledger (clearOn /
+   *  clearExpired splice it out), so its old ts stops being hidden and a message
+   *  that outlives its record becomes visible again. That is the safe direction:
+   *  an undeletable status left in the channel MUST stay visible so somebody
+   *  removes it, while a hidden one would be a line nobody can account for. */
+  livingTts(): ReadonlySet<string> {
+    const out = new Set<string>();
+    for (const r of this.load()) if (r.ts !== undefined) out.add(r.ts);
+    return out;
+  }
+
   /** True when a channel has an active, unexpired status. */
   isActive(channel: string): boolean {
     const now = this.cfg.now();
