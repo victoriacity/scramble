@@ -762,7 +762,9 @@ describe("listen", () => {
     const p = h.backend.listen([], "alice", (d) => lines.push(d), () => {});
     await pump();
     emit(h, msg({ ts: "2.2", thread_ts: "1.1" }));
-    await pump(5);
+    // A THREADED delivery now asks Slack who is in the thread, so it settles one
+    // round-trip later than a top-level one; the fake clock has to reach it.
+    await pump(10);
     // listen reconnects on a drop (it never resolves in the healthy
     // path), so the assertions above already ran; do not await p.
     void p;
@@ -1460,5 +1462,98 @@ describe("a mention of the agent's Slack handle addresses the agent", () => {
   test("an agent with no recorded handle is matched on its name alone", async () => {
     const lines = await deliver({ alice: { token: "T_A" } }, "alice", "@alice hello");
     expect(lines[0]!.mentioned).toBe(true);
+  });
+});
+
+describe("who said it: operator, teammate, or agent", () => {
+  // An agent weighs an instruction by who gave it, and every sender arrives as
+  // an ordinary name, so without this a stranger reads like the operator.
+  async function kindOf(ev: Partial<SlackInboundEvent>, cfg?: Partial<SlackBackendConfig>) {
+    const h = make({ roster: { U111: "andrew", U999: "someone" }, humanUserId: "U111", ...cfg });
+    const lines: Delivery[] = [];
+    const p = h.backend.listen(["general"], "alice", (d) => lines.push(d), () => {});
+    await pump();
+    emit(h, msg(ev));
+    await pump(5);
+    void p;
+    return lines[0];
+  }
+
+  test("the human who authorized this session is the operator", async () => {
+    expect((await kindOf({ user: "U111", text: "do this" }))!.sender).toBe("operator");
+  });
+
+  test("another human is a teammate", async () => {
+    expect((await kindOf({ user: "U999", text: "hello" }))!.sender).toBe("teammate");
+  });
+
+  test("an app is an agent, whoever its user id belongs to", async () => {
+    expect((await kindOf({ user: "U999", bot_id: "B1", text: "from a bot" }))!.sender).toBe("agent");
+  });
+
+  test("with no humanUserId configured the field is ABSENT rather than guessed", async () => {
+    // Guessing which human is the operator is worse than saying nothing.
+    const line = await kindOf({ user: "U111", text: "hi" }, { humanUserId: undefined });
+    expect(line!.sender).toBeUndefined();
+  });
+});
+
+describe("a reply in your own thread wakes you without naming you", () => {
+  // Slack treats a thread you are in as addressed to you; matching only on the
+  // name misses every threaded answer to something you said.
+  function withReplies(participants: Array<{ user?: string; bot_id?: string }>) {
+    return make({ roster: { U111: "andrew", U222: "alice" } }, (url) => {
+      if (url.includes("conversations.replies")) {
+        return new Response(JSON.stringify({ ok: true, messages: participants }), { status: 200 });
+      }
+      return okRouter(url);
+    });
+  }
+
+  async function deliverReply(h: H) {
+    const lines: Delivery[] = [];
+    const p = h.backend.listen(["general"], "alice", (d) => lines.push(d), () => {});
+    await pump();
+    // thread_ts differs from ts, so this is a REPLY, and the text names nobody.
+    emit(h, msg({ user: "U111", text: "what about the parser", ts: "5.5", thread_ts: "1.1" }));
+    await pump(8);
+    void p;
+    return lines[0];
+  }
+
+  test("a reply in a thread this agent posted in is mentioned", async () => {
+    const line = await deliverReply(withReplies([{ user: "U222" }, { user: "U111" }]));
+    expect(line!.thread).toBe("1.1");
+    expect(line!.mentions).toEqual([]);
+    expect(line!.mentioned).toBe(true);
+  });
+
+  test("a reply in a thread this agent is NOT in is not mentioned", async () => {
+    const line = await deliverReply(withReplies([{ user: "U111" }]));
+    expect(line!.mentioned).toBe(false);
+  });
+
+  test("a refused conversations.replies does not invent participation", async () => {
+    const h = make({ roster: { U111: "andrew", U222: "alice" } }, (url) =>
+      url.includes("conversations.replies")
+        ? new Response(JSON.stringify({ ok: false, error: "channel_not_found" }), { status: 200 })
+        : okRouter(url));
+    expect((await deliverReply(h))!.mentioned).toBe(false);
+  });
+
+  test("a TOP-LEVEL message asks Slack nothing about threads", async () => {
+    let replies = 0;
+    const h = make({ roster: { U111: "andrew" } }, (url) => {
+      if (url.includes("conversations.replies")) replies += 1;
+      return okRouter(url);
+    });
+    const lines: Delivery[] = [];
+    const p = h.backend.listen(["general"], "alice", (d) => lines.push(d), () => {});
+    await pump();
+    emit(h, msg({ user: "U111", text: "plain line", ts: "6.6" }));
+    await pump(5);
+    void p;
+    expect(lines[0]!.mentioned).toBe(false);
+    expect(replies).toBe(0);
   });
 });

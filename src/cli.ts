@@ -636,6 +636,7 @@ export function loadSlackConfig(io: Io): SlackBackendConfig | null {
       token: typeof j.token === "string" ? j.token : "",
       appToken: typeof j.appToken === "string" ? j.appToken : undefined,
       filesDir: typeof j.filesDir === "string" ? j.filesDir : "",
+      humanUserId: typeof j.humanUserId === "string" ? j.humanUserId : undefined,
     };
   } catch {
     return null;
@@ -707,6 +708,7 @@ function slackBackend(io: Io): { backend?: SlackBackend; error?: string } {
       roster: cfg.roster,
       dmChannels: cfg.dmChannels,
       filesDir: slackFilesDir(io),
+      humanUserId: cfg.humanUserId,
     },
     { fetch: io.fetch, createSocket: io.createSocket, sleep: io.sleep },
   );

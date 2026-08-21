@@ -42,6 +42,15 @@ export interface Message {
  *  subscriber was addressed (channel mention, or any message in a dm/ channel). */
 export interface Delivery extends Message {
   mentioned: boolean;
+  /** WHO said it, in the only three kinds that change how a line is weighed:
+   *  `operator` is the human who authorized this agent's session, `teammate` is
+   *  any other human, `agent` is another app. Without it every sender is just a
+   *  name and an instruction from a stranger reads like one from the operator.
+   *  One field rather than a flag per kind: a boolean `operator` would have
+   *  needed a second flag the first time human-versus-agent mattered. Absent when
+   *  the config records no `humanUserId`, since operator cannot be told apart
+   *  from teammate then. */
+  sender?: "operator" | "teammate" | "agent";
 }
 
 /** A joined participant. `persona` is the 2-4 sentence goal+lens text read

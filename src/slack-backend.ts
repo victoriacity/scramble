@@ -85,6 +85,8 @@ export interface SlackBackendConfig {
   channels: Record<string, string>;
   /** agent name -> { token?: per-agent bot token, appToken?: per-agent app-level token }. */
   agents: Record<string, { token?: string; appToken?: string; handle?: string; appId?: string }>;
+  /** Slack user id of the human who authorized this machine's session. */
+  humanUserId?: string;
   /** slack user id -> name, for <@U…> -> @name normalization. */
   roster: Record<string, string>;
   /** DM channel id -> agent whose bot that DM belongs to. */
@@ -188,6 +190,9 @@ export class SlackBackend {
   private readonly channelById: Record<string, string>;
   private readonly channels: Record<string, string>;
   private readonly agents: Record<string, { token?: string; appToken?: string; handle?: string; appId?: string }>;
+  private readonly humanUserId?: string;
+  /** `<channel>/<root>/<agent>` -> is that agent in that thread. */
+  private readonly threadCache = new Map<string, boolean>();
   private readonly roster: Record<string, string>;
   private readonly filesDir: string;
   /** Cache of users.info answers so a repeat unknown id never re-queries. The
@@ -204,6 +209,7 @@ export class SlackBackend {
     this.token = cfg.token;
     this.appToken = cfg.appToken;
     this.agents = cfg.agents;
+    this.humanUserId = cfg.humanUserId;
     this.roster = cfg.roster;
     this.filesDir = cfg.filesDir;
     this.dmChannels = cfg.dmChannels;
@@ -240,6 +246,16 @@ export class SlackBackend {
    *  `mentioned:false` and the tier-one wake path, which filters on
    *  `"mentioned":true`, slept through it. The handle recorded on the agent's
    *  config entry is an ALIAS for its name. */
+  /** operator, teammate, or agent. A `bot_id` on the event is Slack telling us
+   *  an app spoke; among humans the configured `humanUserId` is the one who
+   *  authorized this session. Undefined when no humanUserId is configured,
+   *  because guessing which human is the operator is worse than saying nothing. */
+  private senderKind(ev: SlackInboundEvent): "operator" | "teammate" | "agent" | undefined {
+    if (ev.bot_id !== undefined && ev.bot_id !== "") return "agent";
+    if (this.humanUserId === undefined || this.humanUserId === "") return undefined;
+    return ev.user === this.humanUserId ? "operator" : "teammate";
+  }
+
   /** Every name this agent answers to: its scramble name and, when recorded,
    *  its Slack handle. PUBLIC because `message check` in the CLI does its own
    *  delivery filtering and needs the same answer; two copies of "who is this
@@ -251,6 +267,37 @@ export class SlackBackend {
 
   private addressesAgent(mentions: string[], agent: string): boolean {
     return this.identities(agent).some((id) => mentions.includes(id));
+  }
+
+  /** Is this agent IN that thread? A reply inside a thread you started, or
+   *  answered in, is addressed to you whether or not it names you: that is how
+   *  Slack treats a thread for a human, and matching only on the name misses
+   *  every threaded answer to something you said (operator, 2026-08-21).
+   *
+   *  Answered from Slack's own record rather than a local ledger, so it stays
+   *  right across restarts, across machines, and for threads that predate this
+   *  code. Cached per root, since a busy thread asks the same question repeatedly. */
+  private async inThread(token: string, channelId: string, root: string, agent: string): Promise<boolean> {
+    const key = `${channelId}/${root}/${agent}`;
+    const cached = this.threadCache.get(key);
+    if (cached !== undefined) return cached;
+    const r = await readOk<{ messages?: Array<{ user?: string; username?: string; bot_id?: string }> }>(
+      this.fetch,
+      `${REPLIES_URL}?channel=${encodeURIComponent(channelId)}&ts=${encodeURIComponent(root)}&limit=200`,
+      { headers: { authorization: `Bearer ${token}` } },
+    );
+    if (!r.ok) return false;
+    const ids = this.identities(agent);
+    let mine = false;
+    for (const m of r.data.messages ?? []) {
+      const who = await this.resolveSender(token, { type: "message", user: m.user, username: m.username });
+      if (ids.includes(who)) {
+        mine = true;
+        break;
+      }
+    }
+    this.threadCache.set(key, mine);
+    return mine;
   }
 
   private appTokenFor(agent: string): string {
@@ -392,6 +439,11 @@ export class SlackBackend {
     ev: SlackInboundEvent,
     as: string,
     token: string,
+    // Ask Slack who is in the thread ONLY on the delivery path. `history` runs
+    // this same converter over every row and then discards `mentioned` (a
+    // transcript has no per-recipient state), so doing it there would spend one
+    // conversations.replies per threaded row to compute a value nobody reads.
+    wantThreadWake = false,
   ): Promise<{ delivery: Delivery | undefined; problems: string[] }> {
     if (ev.type !== "message" || !ev.text || ev.text === "") return { delivery: undefined, problems: [] };
     const channel = ev.channel;
@@ -417,8 +469,11 @@ export class SlackBackend {
       text,
       id: ts,
       mentions,
-      mentioned: this.addressesAgent(mentions, as),
+      mentioned:
+        this.addressesAgent(mentions, as) ||
+        (wantThreadWake && thread !== undefined && (await this.inThread(token, channel, thread, as))),
       ...(thread !== undefined ? { thread } : {}),
+      ...(this.senderKind(ev) !== undefined ? { sender: this.senderKind(ev) } : {}),
     };
     if (dl.files.length > 0) delivery.files = dl.files;
     return { delivery, problems: dl.problems };
@@ -494,7 +549,7 @@ export class SlackBackend {
     onLine: (d: Delivery) => void,
     onProblem: (p: string) => void,
   ): void {
-    void this.toDelivery(ev, as, token).then(({ delivery, problems }) => {
+    void this.toDelivery(ev, as, token, true).then(({ delivery, problems }) => {
       for (const p of problems) onProblem(p);
       if (delivery === undefined) return;
       // An agent never delivers its own posts (it would otherwise answer itself).
