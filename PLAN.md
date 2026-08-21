@@ -1,4 +1,4 @@
-# scramble — implementation plan (akari-worker execution)
+# scramble: implementation plan (akari-worker execution)
 
 Date: 2026-08-20. Companion to DESIGN.md (the contract; workers cite it, never
 re-derive it). Stack: TypeScript on bun (typed, `bun test`, no build step, matches
@@ -25,7 +25,7 @@ the existing TS toolchain). Single package, no framework: `Bun.serve` + `fetch`.
   scripts/gate.sh   # tsc --noEmit && bun test  (the merge gate)
 ```
 
-## Phase 0 — lead hand-work (leverage: spec + trust-root infra, ~30 min)
+## Phase 0: lead hand-work (leverage: spec + trust-root infra, ~30 min)
 
 1. `git init` /opt/akari/scramble, bun scaffold, `scripts/gate.sh`, empty module
    files with exported type signatures for the seams (Message, Store interface,
@@ -33,7 +33,7 @@ the existing TS toolchain). Single package, no framework: `Bun.serve` + `fetch`.
 2. `.akari/` scaffold on the scramble repo so lanes/fleets target it.
 3. File the epic + the unit tasks below in tt (dispatch is automatic).
 
-## Dispatch (how the units actually run)
+## Dispatch (how the units run)
 
 Units run as akari workers against this repo via laneless dispatch:
 
@@ -48,11 +48,11 @@ nohup akari run /opt/akari/scramble/scramble.workflow.ts > run.log 2>&1 &
 
 Four things that cost a round when learned the hard way:
 
-1. **A worker runs in a lane overlay, not in this directory.** The server seeds
+1. **A worker runs in a lane overlay rather than in this directory.** The server seeds
    `/opt/akari/akari/.akari/lanes/lane-NN-default` from this repo, runs the
    worker there, gates it, then reconciles the writes back here as a
    green-gated commit. So `/api/workers` showing a `lane_id` and a `merge` tool
-   call is NORMAL, not a misdispatch. Do not cancel on that evidence.
+   call is NORMAL rather than a misdispatch. Do not cancel on that evidence.
 2. **The control token is required** (POST /api/projects is 401 without it) and
    `akari-fix.env` is systemd-format: `source` dies on its unquoted
    AKARI_PROVIDER_CHAIN JSON, and its PATH line drops the dir holding the
@@ -73,7 +73,7 @@ Four things that cost a round when learned the hard way:
 ### Why scramble's gate is NOT the per-unit merge step
 
 `.akari/gate.toml` can declare `[[gate.steps]]` with a `name`/`cmd`, which would
-make akari run `bash scripts/gate.sh` before each unit's merge — attractive,
+make akari run `bash scripts/gate.sh` before each unit's merge: attractive,
 since it would enforce tsc-clean + 100% coverage at merge time instead of only
 at the lead's final check. It stays undeclared for one concrete reason: a lane
 overlay is a git worktree, and `node_modules/` is gitignored, so it is ABSENT
@@ -91,7 +91,7 @@ overlay (vendor it, or split a `gate.sh --tests-only` step that skips tsc).
 `src/cli.ts` exports `main(argv: string[], io): Promise<number>`. This surface is
 fixed here so the cli unit, the join-docs unit and the readme unit can be written
 in PARALLEL instead of each waiting to read the previous one's output. A
-deviation from this table is a defect in the deviating unit, not a new contract.
+deviation from this table is a defect in the deviating unit rather than a new contract.
 
 | command | flags | behavior | exit |
 |---|---|---|---|
@@ -100,7 +100,7 @@ deviation from this table is a defect in the deviating unit, not a new contract.
 | `next [<channel>...]` | `--as <name>`, `--timeout <secs>` (default 300) | BLOCKS for ONE message, prints it as one JSON line, exits. Same line format as `listen` | 0 message, 64 timeout |
 | `history <channel>` | `--since <n>` | prints messages, one JSON line each | 0 |
 | `join <channel>` | `--as <name>`, `--persona <text>` | resolves the workspace, reads `.scramble/persona.md`, scaffolds `.scramble/` when absent, registers with the daemon | 0 |
-| `serve` | `--bind <addr>`, `--token <t>`, `--data <dir>` | runs the daemon | — |
+| `serve` | `--bind <addr>`, `--token <t>`, `--data <dir>` | runs the daemon | none |
 | `slack` | `--url`, `--token`, `--dry-run` | runs the Slack bridge: reads `.scramble/slack.json`, connects Socket Mode, publishes every firehose channel message to Slack, routes inbound Slack messages into channels. `--dry-run` prints the wired Slack calls it WOULD make (channel map + identity tiers) without connecting | 0; 1 on missing/invalid config |
 
 Global: `SCRAMBLE_URL` / `SCRAMBLE_TOKEN` env win over the workspace
@@ -170,7 +170,7 @@ because a target may be a channel or a DM and the flag names either.
 
 ## Coverage rules (read before writing any module)
 
-The gate is `bun test --coverage` with `coverageThreshold = 1` — 100% of lines
+The gate is `bun test --coverage` with `coverageThreshold = 1`: 100% of lines
 and functions in every file a test loads. Two consequences that decide how you
 structure a module:
 
@@ -190,14 +190,14 @@ structure a module:
 inline-table form and exits 0 at partial coverage (verified 57% -> rc=1 scalar,
 rc=0 table).
 
-## Units (akari AGENT tasks — goal + deliverable + invariants, not steps)
+## Units (akari AGENT tasks: goal + deliverable + invariants, not steps)
 
 Dependency DAG; width bounded by the lane pool. Units in the same round fire
 concurrently; same-file overlap is acceptable, the lead merges.
 
 **Round 1**
 
-- **U1 store** — `src/store.ts` + tests. Append-only JSONL channels under a data
+- **U1 store**: `src/store.ts` + tests. Append-only JSONL channels under a data
   dir; ONE global monotonically increasing `seq` across all channels (persisted,
   crash-safe: rebuilt by scanning maxima on boot); membership derived from
   post/listen events plus `dm/<name>/*` auto-membership; client-supplied message
@@ -206,7 +206,7 @@ concurrently; same-file overlap is acceptable, the lead merges.
 
 **Round 2** (after U1's interface lands)
 
-- **U2 daemon** — `src/daemon.ts` + tests. Endpoints per DESIGN.md: post,
+- **U2 daemon**: `src/daemon.ts` + tests. Endpoints per DESIGN.md: post,
   channel catch-up, channel stream, agent stream, `GET /` static page passthrough,
   `GET /agents` roster (name, persona, channels), `GET /channels` listing (all channels
   including `dm/*`), and a firehose stream (`GET /stream`, every channel) for the
@@ -218,11 +218,11 @@ concurrently; same-file overlap is acceptable, the lead merges.
   channel-level agent-sender pause that never pauses humans); optional
   bearer-token check active only when `--token` is set; binds `127.0.0.1`
   default, `--bind` to widen. Invariant: a guard that trips reports what it dropped in
-  the response and the daemon log, never silently.
+  the response and the daemon log rather than silently.
 
 **Round 3** (after U2; four units in parallel)
 
-- **U3 cli** — `src/cli.ts` + tests (tests spawn a real daemon on an ephemeral
+- **U3 cli**: `src/cli.ts` + tests (tests spawn a real daemon on an ephemeral
   port). `post` (client message id, retry-safe, prints the crossings from the
   response), `listen` (multi-channel and agent-scoped, channel-tagged lines each
   carrying a computed `mentioned` flag for this agent, reconnect with backoff
@@ -232,28 +232,28 @@ concurrently; same-file overlap is acceptable, the lead merges.
   `.scramble/` with a persona stub and empty `knowledge/INDEX.md` when
   absent), `serve`. Config resolution: `SCRAMBLE_URL`/`SCRAMBLE_TOKEN` env
   over the workspace's `.scramble/config.json` over localhost default. Invariant: `listen` output is machine-stable one-JSON-line
-  per message — it is the monitor-attach contract.
-- **U4 web ui** — BUILT, then DELETED with the bridge. `web/index.html` and the
+  per message: it is the monitor-attach contract.
+- **U4 web ui**: BUILT, then DELETED with the bridge. `web/index.html` and the
   `GET /` route are gone: the page existed as the no-Slack human frontend, and
   once Slack became the store the page displayed a second conversation nobody
   read. `scramble serve` still runs the local JSONL store for offline work and
   the tests, serving no page.
-- **U5 slack bridge** — BUILT, then DELETED and replaced by the Slack BACKEND
+- **U5 slack bridge**: BUILT, then DELETED and replaced by the Slack BACKEND
   (`src/slack-backend.ts` + `src/slack-transport.ts`). The bridge mirrored a
   local store into Slack, so Slack displayed the conversation instead of holding
   it, and the echo loop plus the reconnect replay were both defects of that
   mirroring. The backend makes Slack the store: `conversations.history` to read,
   `chat.postMessage` to write, Socket Mode for the live wake. The persona tier
   went with it, since one app per agent gives each agent a real `@mention` and a
-  DM channel. Live-workspace smoke is a lead step, not the worker's gate.
-- **U6 codex driver** — CUT. Superseded by the `next` verb in the CLI contract:
+  DM channel. Live-workspace smoke is a lead step rather than the worker's gate.
+- **U6 codex driver**: CUT. Superseded by the `next` verb in the CLI contract:
   a codex agent parks a turn on `scramble next` and answers with `scramble post`,
   so no driver, no app-server client, and no vendor flags ship. See DESIGN.md
   "Harness-agnostic by construction".
 
 **Round 4** (after U3)
 
-- **U7 join skill** — `skills/scramble/`. ONE skill (one trigger: join a
+- **U7 join skill**: `skills/scramble/`. ONE skill (one trigger: join a
   channel), self-contained: `CONTRACT.md` was merged into `SKILL.md` and deleted,
   because a second file holding the rules is a second thing to keep in step with
   the first. The monitor-attach
@@ -275,12 +275,12 @@ concurrently; same-file overlap is acceptable, the lead merges.
   `.scramble/hooks/` scripts + the settings entries the skill installs on
   first join. Hook scripts get their own tests: the post gate runs against
   known-bad and known-good messages (positive control), the Stop backstop
-  against fixtures for both checks — pending vs drained seqs, and
+  against fixtures for both checks: pending vs drained seqs, and
   addressed-and-answered vs addressed-and-silent (plus not-addressed-and-
   silent, which must pass). Also the codex TUI recipe
   (notify + Stop hook) as a documented section. Gate: skill lints against the
   CLI's real flags (a script greps SKILL.md commands against `cli.ts`).
-- **U8 e2e** — `test/e2e.test.ts`. Spawns daemon + scripted listeners: group
+- **U8 e2e**: `test/e2e.test.ts`. Spawns daemon + scripted listeners: group
   channel multi-mention fan-out, DM channel isolation, reconnect mid-stream with no
   gap/dup (kill and resume a listener), cross-machine simulation (daemon on
   `0.0.0.0` + token, client via `SCRAMBLE_URL` with wrong-then-right token),
@@ -289,7 +289,7 @@ concurrently; same-file overlap is acceptable, the lead merges.
 
 **Round 5**
 
-- **U9 readme** — README.md: quickstart (daemon, join a Claude session, web
+- **U9 readme**: README.md: quickstart (daemon, join a Claude session, web
   UI), Slack app manifest + setup for both tiers, DM setup, cross-machine
   setup (SCRAMBLE_URL, token, ssh -L alternative), codex sections. Gate:
   every command in the README runs against the built tree (doc-test script).
@@ -301,7 +301,7 @@ concurrently; same-file overlap is acceptable, the lead merges.
   cited.
 - **M2** after M1: a Claude session on a second machine joins via
   `SCRAMBLE_URL` and exchanges mentions with a local one; channel JSONL cited.
-- **M3** after U5: Slack channel live — operator creates the one bridge app
+- **M3** after U5: Slack channel live: operator creates the one bridge app
   (10-15 min, manifest from U9), personas converse, one agent promoted to a
   real bot user and DM'd; Slack permalinks cited.
 - **M4** after U6: a codex participant answers a mention in the channel.

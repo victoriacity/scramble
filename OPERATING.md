@@ -1,33 +1,64 @@
 # Operate scramble: the operating reference
 
-scramble is a chat channel for already-running agent sessions and humans (see
-[`DESIGN.md`](DESIGN.md)). This is the operating reference for the daemon, the
-CLI, and the operator-facing dispatch/packaging scripts in
-[`scripts/`](scripts/).
+scramble is the interface an already-running agent session uses to take part in a
+messaging app (see [`DESIGN.md`](DESIGN.md)). This is the operating reference for
+the two backends, the CLI, the gate, and the scripts in [`scripts/`](scripts/).
 
 ## Environment variables
 
-The control-plane scripts that dispatch a scramble fleet reference these
-env vars. Any `AKARI_*` variable must be documented here (the engine's
-`env_vars_documented` structural check enforces it).
-
 | variable | default | meaning |
 |----------|---------|---------|
-| `AKARI_SERVER_CONTROL_TOKEN` | (unset) | Bearer token for the privileged project-admin endpoints the dispatch script talks to. Set from the lead's systemd-staging env file; an unset/empty value disables those endpoints' remote use. |
+| `SCRAMBLE_BACKEND` | `local` | Where the conversation lives: `slack` makes Slack the store, `local` uses the JSONL store served by `scramble serve`. `--backend <name>` overrides it per command. |
+| `SCRAMBLE_SLACK_CONFIG` | `~/.config/scramble/slack.json` | Path to the Slack config holding the bot tokens. Deliberately outside this repo, which is public-bound. With `HOME` unset the fallback is `.scramble/slack.json` in the working directory. |
+| `SCRAMBLE_STATUS` | on | `off` disables every automatic working-status call. |
+| `SCRAMBLE_STATUS_TTL` | `120` | Seconds before an unfinished status expires and is cleared by the next invocation. |
+| `SCRAMBLE_URL` | `http://127.0.0.1:7737` | Local-backend daemon URL. Env wins over the workspace `.scramble/config.json`; `--url` wins over both. |
+| `SCRAMBLE_TOKEN` | (unset) | Shared secret for a non-localhost local-backend daemon. `--token` wins over it. |
+| `SLACK_CONFIG_TOKEN` | (unset) | Overrides the app-configuration token `scripts/onboard-agent.ts` otherwise reads from the Slack CLI's `~/.slack/credentials.json`. |
+| `SMOKE_CHANNEL` | `team` | Channel `scripts/live-smoke.ts` runs its stages against. |
+| `SMOKE_STAMP` | current epoch | Stamp the live smoke puts in every message it posts, so one run's messages are identifiable. |
+| `AKARI_SERVER_CONTROL_TOKEN` | (unset) | Bearer token for the privileged project-admin endpoints `scripts/dispatch.sh` talks to. Set from the lead's systemd-staging env file; an unset value disables those endpoints' remote use. |
 | `AKARI_WORKSPACE_DIR` | (unset) | Absolute directory the fleet's workspace runs against. |
 | `AKARI_BASE_URL` | (unset) | Base URL of the akari control server (`http://127.0.0.1:8771` in the local staging example). |
 
 ## Layout
 
-- `src/`: the channel store (`store.ts`), the typed seams (`types.ts`), the
-  daemon, the CLI, the drivers.
-- `test/`: per-unit bun test suites.
-- `scripts/gate.sh`: the merge gate (`tsc --noEmit`, `bun test --coverage`).
-- `scripts/dispatch.sh`: the operator one-shot that launches a scramble fleet.
+`src/`, nine files, no runtime dependencies:
+
+- `store.ts` the local JSONL store, `server.ts` its HTTP surface and streams,
+  `types.ts` the typed seams, `cli.ts` every verb, `bin.ts` the only entrypoint.
+- `slack-backend.ts` Slack AS the store: history, post, mention resolution,
+  thread expansion. `slack-transport.ts` the Socket Mode connection.
+- `attachments.ts` upload, inbound download, the local file ledger.
+  `status.ts` the automatic working status.
+
+`test/`: one suite per unit, all seams injected, so no test needs a token or the
+network.
+
+## Scripts
+
+| script | what it is for |
+|---|---|
+| `scripts/gate.sh` | the merge gate: a self-test that a partial-coverage fixture FAILS, then `tsc --noEmit`, then `bun test --coverage` |
+| `scripts/live-smoke.ts` | the real CLI against a real Slack workspace, one stage per feature. Run it before claiming any Slack behavior works |
+| `scripts/onboard-agent.ts` | an agent creates and installs its OWN Slack app, joins a public channel, writes the config, verifies with a read |
+| `scripts/cli-api-trace.sh` | prints every API method a vendor CLI calls, so a "there is no API" claim has a falsifier |
+| `scripts/land.sh` | the only way to commit by hand here: it takes the paths first and commits with `git commit -- <paths>`, so a stale index cannot revert a lane merge |
+| `scripts/dispatch.sh` | the single dispatch path for worker units, every precondition a refusal rather than a warning |
 
 ## Gate
 
-The gate is `bun test --coverage` with `coverageThreshold = 1` (100% of lines
-and functions in every loaded file). Run a single unit's tests with
-`bun test test/<file>.test.ts`; never run the full suite while other units are
-mid-write.
+`bash scripts/gate.sh`. Three stages, in order:
+
+1. **The gate tests itself.** A fixture with deliberately partial coverage is run
+   with this repo's own bunfig and must exit NONZERO. It exists because bun
+   1.3.14 silently ignores an inline-table `coverageThreshold`, so the gate once
+   passed at 57% coverage.
+2. `tsc --noEmit` over the project.
+3. `bun test --coverage` with a SCALAR `coverageThreshold = 1`: 100% of lines and
+   functions in every loaded file.
+
+Run one unit's tests with `bun test test/<file>.test.ts`. A green gate is not a
+claim that the product works against Slack; `scripts/live-smoke.ts` is what
+answers that, and it records the commit it ran against in
+`.scramble/last-live-smoke.json`.

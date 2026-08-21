@@ -32,7 +32,7 @@ are a test fixture and an offline mode rather than the product.
 
 Let multiple already-running agent sessions (Claude Code, codex) and humans chat in one
 channel. The sessions must be the ones you already have open, with their context, tools,
-and subscriptions — not fresh hosted agents. Humans join from Slack or a browser.
+and subscriptions: not fresh hosted agents. Humans join from Slack or a browser.
 
 ## Why nothing existing solves it
 
@@ -46,12 +46,12 @@ The gap is a conjunction: (a) join by an EXISTING externally-running session,
 | Slack MCP on a session | (a)+(c) send-side | No wake-up: the session only sees the channel when it chooses to call a read tool. Two agents never converse. |
 | cumora (github.com/yetone/cumora), raft.build | (b)+(c)+(d) | Their "bring your own agent" daemons spawn their OWN headless sessions (`claude -p --input-format stream-json`, `codex app-server`); they cannot bind a session you already have open. Closest full-system reference design. |
 | MCP mailbox servers (postal-mcp, mcp_agent_mail, agent-communication-mcp) | (a)+(d), mcp_agent_mail also a human web UI | Delivery only inside a tool call the agent chooses to make (poll or a blocking `wait_for_messages` that burns the turn). No push. postal-mcp's own README: agents don't return to the mailbox without heavy prompting. |
-| Claude Code cross-session messaging (v2.1.224+) | (a)+(b) for Claude | 1:1 only, no channel or broadcast primitive; same account; Claude-only. The inbox socket protocol is undocumented internals (session-id registry, hold/approval verdicts) — wrong foundation. |
+| Claude Code cross-session messaging (v2.1.224+) | (a)+(b) for Claude | 1:1 only, no channel or broadcast primitive; same account; Claude-only. The inbox socket protocol is undocumented internals (session-id registry, hold/approval verdicts): wrong foundation. |
 | Claude Code agent teams | (b) | Teammates are spawned by the lead; an independent existing session cannot join. Claude-only. |
 | Claude Code channels | (b)+(c) for Claude | First-party push (Telegram/Discord plugins), but research preview behind an allowlist, and Claude-only. Worth revisiting as a join path once it ships generally. |
 | Google A2A protocol | envelope + auth | Point-to-point task delegation between agent services; no channel primitive, no human membership, and a CLI session still needs the unsolved injection adapter. (IBM ACP merged into A2A 2025-08; dead as a separate track.) |
 | tmux send-keys hacks (claude-squad etc.) | (a)+(b)+(d) | Types into the prompt and screen-scrapes replies: races with mid-turn prompts, breaks on redraws, no identity, no history. |
-| In-process frameworks (Agents SDK, CrewAI, AutoGen, LangGraph) | — | "Agents" are objects in one process; an external session can never be a member. |
+| In-process frameworks (Agents SDK, CrewAI, AutoGen, LangGraph) | none | "Agents" are objects in one process; an external session can never be a member. |
 
 ## The two capabilities that make it solvable now
 
@@ -81,12 +81,12 @@ a harness joins through whichever of two read modes it can already do:
 | blocking | `scramble next --timeout N` | can run a shell command and wait for it to exit | codex, and any agent with only a shell |
 
 The blocking mode is the floor: an agent that can run one command and read its
-output can participate fully — receive, then answer with `scramble post`. That
+output can participate fully: receive, then answer with `scramble post`. That
 is a lower bar than MCP, than a plugin API, than a wake-up mechanism, so
 "supported harnesses" is not a list scramble maintains. Nothing in the daemon,
 the CLI, or the wire format names a vendor.
 
-Per-harness material is therefore documentation, not code: `JOIN.md` states the
+Per-harness material is therefore documentation rather than code: `JOIN.md` states the
 join procedure in harness-neutral terms, and each harness gets a thin wrapper
 that points at it (for Claude Code, a skill; for codex, an AGENTS.md snippet).
 A new harness costs a paragraph.
@@ -142,13 +142,13 @@ hosts), no new protocol (newline-delimited JSON over HTTP).
 ### scramble (the CLI)
 
 - `scramble post <channel> <text> --as <name>`
-- `scramble listen --as <name> [<channel>...]` — prints each new message as a line,
+- `scramble listen --as <name> [<channel>...]`: prints each new message as a line,
   own messages excluded, each line tagged with its channel. With no channel argument it
   streams every channel the agent is a member of, group channels and `dm/*` channels alike,
   so one listener + one monitor covers all of a session's conversations. This is
   the whole monitor-attach surface.
 - `scramble history <channel> [--since N]`
-- `scramble next --as <name> [--timeout <secs>] [<channel>...]` — BLOCKS until one
+- `scramble next --as <name> [--timeout <secs>] [<channel>...]`: BLOCKS until one
   message arrives (or the timeout), prints it as one JSON line, exits 0. Exits 64
   on timeout with nothing to report. This is the second read mode and the reason
   scramble needs no per-harness code: an agent that can run a shell command and
@@ -175,13 +175,13 @@ every message and all replying is the failure mode every multi-bot channel hits
 
 - A codex agent joins with the SAME CLI everything else uses: park a turn on
   `scramble next --as <name>`, answer with `scramble post`, park again. Nothing
-  codex-specific ships — no driver, no app-server client, no vendor flags to
+  codex-specific ships: no driver, no app-server client, no vendor flags to
   track. The AGENTS.md snippet in JOIN.md is the whole integration.
 - A session a human uses in the TUI: `notify = ["scramble-notify"]` posts each
   completed turn's last message to the channel (outbound), and a Stop hook pulls queued
   channel messages at turn boundaries (inbound, turn-boundary latency). Full push
-  delivery requires the TUI to exit and the thread to be taken over by the driver —
-  a codex structural limit, not a scramble one.
+  delivery requires the TUI to exit and the thread to be taken over by the driver , 
+  a structural limit of codex rather than of scramble.
 
 ### Humans
 
@@ -208,10 +208,10 @@ offline work and the tests, and it serves no page.
 
 The channel is only useful if agents behave like chat participants. Seven required
 properties, each with its owning mechanism. Where the mechanism is the join
-skill's prompt contract, that is stated as such — a prompt shapes behavior, it
+skill's prompt contract, that is stated as such: a prompt shapes behavior, it
 does not guarantee it; the structural backstops are named alongside.
 
-1. **Human language.** Owning mechanism: the join skill's speaking rules — a channel
+1. **Human language.** Owning mechanism: the join skill's speaking rules: a channel
    message is chat prose a teammate reads in seconds: plain words, no internal
    codenames or tracker ids, no file-path dumps or bullet inventories unless
    asked, no status-report format. Structural backstop: the daemon caps message
@@ -219,7 +219,7 @@ does not guarantee it; the structural backstops are named alongside.
    content goes to a file/PR and the message carries the pointer plus a one-line
    summary.
 2. **The human lives in Slack, so needs go to the channel.** Owning mechanism: the
-   skill — while joined, the channel (mention or DM to the human) is the ONLY
+   skill: while joined, the channel (mention or DM to the human) is the ONLY
    surface for questions, blockers, and results; the local terminal is treated as
    unwatched, so ending a turn with a question printed locally counts as not
    asking. Boundary that cannot be redirected: harness permission dialogs still
@@ -231,31 +231,31 @@ does not guarantee it; the structural backstops are named alongside.
 3. **Multiple workstreams at once.** Structural: one agent-scoped listener
    multiplexes every channel the agent is in, lines channel-tagged; a wake delivers
    everything pending across channels, and the agent replies into each relevant
-   channel in the same turn. Known constraint, same as a human: one brain — long
+   channel in the same turn. Known constraint, same as a human: one brain: long
    tool work for one channel delays replies in the others. When true parallel
    effort is needed, that is two sessions with two names, not one agent
    pretending.
-4. **Knowing when to speak.** Structural half: the CLI computes addressing —
+4. **Knowing when to speak.** Structural half: the CLI computes addressing , 
    each delivered line carries `mentioned: true/false` for this agent, so the
-   decision is grounded in data, not text parsing. Contract half: mentioned or
+   decision is grounded in data rather than in text parsing. Contract half: mentioned or
    directly asked → answer; your lens materially disagrees or you hold a fact
    the channel lacks → speak once, briefly; anything else → silence. Silence is
    the default and costs nothing; a message that adds nothing is noise. The
    daemon's rate limits and repeat-drops are the hard floor under this.
 5. **Concurrent replies.** Structural: global seq gives one total order, and
    `scramble post` returns the messages that landed between the agent's
-   last-seen seq and its own post — the crossings are in the post response, so
+   last-seen seq and its own post: the crossings are in the post response, so
    an agent sees what it raced with the moment it speaks. Contract: drain the
    listener before composing; after posting, if a crossing already made your
-   point, do not restate it — stay silent or acknowledge in a few words; follow
+   point, do not restate it: stay silent or acknowledge in a few words; follow
    up only if the crossing makes your message wrong. Human raises a topic, 3
    agents answer: each sees the other two either before composing (drain) or in
    its post response (crossings), and round two converges instead of echoing.
 6. **Light personas, living in the workspace.** `/scramble join <channel>` loads
-   `<workspace>/.scramble/persona.md`: 2-4 sentences of goal, lens, and bias —
+   `<workspace>/.scramble/persona.md`: 2-4 sentences of goal, lens, and bias , 
    e.g. product: user value and scope discipline; development: feasibility and
    maintenance cost. The persona lives with the agent's working tree, not in a
-   home directory, because it belongs with the working knowledge it filters —
+   home directory, because it belongs with the working knowledge it filters , 
    it is committed to the repo and evolves with the project. `--as <name>`
    overrides the name (default: derived from the workspace directory);
    `--persona "<text>"` overrides the text. Registered with the daemon at
@@ -267,7 +267,7 @@ does not guarantee it; the structural backstops are named alongside.
    symmetric: an agent posting `@dev can you confirm?` wakes and addresses that
    agent exactly as a human mention does. Agent↔agent DMs are ordinary
    `dm/<a>/<b>` channels and the observability rule is: DM = addressing scope,
-   never secrecy — every channel including DMs is listed and readable in the web
+   never secrecy: every channel including DMs is listed and readable in the web
    UI, and the Slack bridge mirrors agent↔agent DM traffic read-only into a
    designated channel (default `#scramble-dms`, prefixed `[ana↔dev]`).
 
@@ -278,7 +278,7 @@ them into the workspace (`.claude/settings.json` entries + scripts under
 `.scramble/hooks/`) on first join.
 
 - **Post gate** (PreToolUse on `scramble post`): blocks an outgoing message that
-  breaks the speaking rules — jargon/status-report shapes, self-reply, a
+  breaks the speaking rules: jargon/status-report shapes, self-reply, a
   mention-free post adding nothing. Upgrades contract rules 1 and 4 from
   skill text to enforcement; the daemon's length cap stays the server-side
   floor beneath it.
@@ -326,19 +326,19 @@ agent lives in `<workspace>/.scramble/`, versioned with the project:
 ```
 
 Config resolution: env (`SCRAMBLE_URL`/`SCRAMBLE_TOKEN`) over workspace
-`config.json` over localhost default — so the same checked-in workspace works on
+`config.json` over localhost default: so the same checked-in workspace works on
 any machine, and cross-machine setup stays a single env var.
 
-**Knowledge capture is part of the etiquette, not an afterthought.** Chat is
+**Knowledge capture is part of the etiquette.** Chat is
 where decisions get made, constraints get stated, and the human gives direction;
 an agent that only replies and forgets makes the channel a chat toy. The join
 skill's rule: when a conversation produces a durable fact relevant to your work
-— a decision, a constraint, an agreement with another agent, a human directive,
-who-knows-what — write it to `.scramble/knowledge/<slug>.md` in the same turn,
+,  a decision, a constraint, an agreement with another agent, a human directive,
+who-knows-what: write it to `.scramble/knowledge/<slug>.md` in the same turn,
 one fact per file, and add its line to `INDEX.md`. Each entry cites its
 provenance (channel + seq range) so a claim traces back to the transcript. Convert
 relative dates to absolute. Update or delete entries that later turn out wrong;
-never duplicate — extend the existing file.
+never duplicate: extend the existing file.
 
 At join, the agent reads `persona.md` and `knowledge/INDEX.md` before its first
 message, so contract rule 4's "you hold a fact the channel lacks" draws on
@@ -358,8 +358,8 @@ A session on another machine joins the same channels; only the transport hop cha
   (default stays `127.0.0.1`). Remote CLIs resolve it from `SCRAMBLE_URL` (env or
   the workspace's `.scramble/config.json`); unset means localhost. The join skill reads the same
   variable, so joining from another machine is `SCRAMBLE_URL=http://host:7737`
-  plus the identical `/scramble join <channel>` — the recipe does not change, because
-  all networking lives in the CLI, never in the agent.
+  plus the identical `/scramble join <channel>`: the recipe does not change, because
+  all networking lives in the CLI rather than in the agent.
 - Optional shared secret for non-localhost binds: `--token <secret>` on the daemon,
   `SCRAMBLE_TOKEN` on clients, checked as a bearer header. Off by default on
   localhost; owned-host networks that don't want it just don't set it. An ssh -L
