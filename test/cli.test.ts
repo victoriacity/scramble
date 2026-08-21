@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import type { ChannelStore } from "../src/store";
 import { createStore } from "../src/store";
 import { createHandler } from "../src/server";
-import { main, parseBind, loadSlackConfig, slackConfigPath, type Io } from "../src/cli";
+import { main, parseBind, loadSlackConfig, slackConfigPath, staleConfigWarning, type Io } from "../src/cli";
 
 function scratchDir(name: string): string {
   const d = join(tmpdir(), `zz-${name}-${process.pid}-${Math.random().toString(36).slice(2)}`);
@@ -1425,6 +1425,100 @@ describe("message check across a config several agents share", () => {
     const { io, errs } = checkIo(cwd, async () => new Response(JSON.stringify({ ok: false, error: "channel_not_found" }), { status: 200 }));
     expect(await main(["message", "check", "--as", "dev", "--backend", "slack"], io)).toBe(1);
     expect(errs.join(" ")).toContain("none of the 2 configured channel(s)");
+  });
+});
+
+describe("doctor, and the warning an agent gets without asking", () => {
+  // An agent onboarded before a fix keeps running and silently lacks it. Nothing
+  // else tells a RUNNING agent its own config went out of date, which is what
+  // this verb and this warning exist for.
+  function docIo(cwd: string, headers: Record<string, string>, body: Record<string, unknown>) {
+    const writes: string[] = [];
+    const errs: string[] = [];
+    const io: Io = {
+      write: (l) => writes.push(l),
+      writeErr: (l) => errs.push(l),
+      fetch: async () => new Response(JSON.stringify(body), { status: 200, headers }),
+      env: () => undefined,
+      cwd: () => cwd,
+      sleep: async () => {},
+      serve: async () => 0,
+      createSocket: () => ({ send: () => {}, close: () => {}, onopen: null, onmessage: null, onclose: null, onerror: null }),
+    };
+    return { io, writes, errs };
+  }
+  const ALL = "chat:write,channels:history,groups:history,im:history,im:read,im:write,users:read,channels:read,groups:read,files:write,files:read,assistant:write";
+
+  test("a healthy agent reports ok with its handle", async () => {
+    const cwd = scratchDir("doc-ok");
+    writeSlackConfig(cwd, { token: "xoxb-d", channels: {}, agents: { dev: { token: "T", handle: "dev_bot" } } });
+    const { io, writes } = docIo(cwd, { "x-oauth-scopes": ALL }, { ok: true, user: "dev_bot" });
+    expect(await main(["doctor", "--as", "dev", "--backend", "slack"], io)).toBe(0);
+    expect(JSON.parse(writes[0]!)).toMatchObject({ doctor: "ok", agent: "dev", handle: "dev_bot" });
+  });
+
+  test("a missing handle is REPAIRED into the config, not merely reported", async () => {
+    const cwd = scratchDir("doc-fix");
+    writeSlackConfig(cwd, { token: "xoxb-d", channels: {}, agents: { dev: { token: "T" } } });
+    const { io, writes } = docIo(cwd, { "x-oauth-scopes": ALL }, { ok: true, user: "dev_bot" });
+    expect(await main(["doctor", "--as", "dev", "--backend", "slack"], io)).toBe(0);
+    expect(writes[0]).toContain("fixed");
+    const after = JSON.parse(readFileSync(join(cwd, ".scramble", "slack.json"), "utf8")) as {
+      agents: Record<string, { handle?: string }>;
+    };
+    expect(after.agents.dev!.handle).toBe("dev_bot");
+  });
+
+  test("an app that predates a scope is reported with the command that fixes it", async () => {
+    const cwd = scratchDir("doc-scope");
+    writeSlackConfig(cwd, { token: "xoxb-d", channels: {}, agents: { dev: { token: "T", handle: "dev_bot" } } });
+    const { io, errs } = docIo(cwd, { "x-oauth-scopes": "chat:write,channels:history" }, { ok: true, user: "dev_bot" });
+    expect(await main(["doctor", "--as", "dev", "--backend", "slack"], io)).toBe(1);
+    const said = errs.join(" ");
+    expect(said).toContain("groups:read");
+    expect(said).toContain("onboard-agent.ts dev");
+  });
+
+  test("an unusable token is reported rather than read as healthy", async () => {
+    const cwd = scratchDir("doc-badtok");
+    writeSlackConfig(cwd, { token: "xoxb-d", channels: {}, agents: { dev: { token: "T" } } });
+    const { io, errs } = docIo(cwd, {}, { ok: false, error: "invalid_auth" });
+    expect(await main(["doctor", "--as", "dev", "--backend", "slack"], io)).toBe(1);
+    expect(errs.join(" ")).toContain("invalid_auth");
+  });
+
+  test("a missing config, an unknown agent and a tokenless agent each name themselves", async () => {
+    // Three refusals rather than one, because "doctor said no" is useless: the
+    // fix differs for a config that is not there, a name that is not in it, and
+    // an entry with no token.
+    const nowhere = scratchDir("doc-nocfg");
+    const a1 = docIo(nowhere, {}, { ok: true });
+    expect(await main(["doctor", "--as", "dev", "--backend", "slack"], a1.io)).toBe(1);
+    expect(a1.errs.join(" ")).toContain("slack.json");
+
+    const cwd = scratchDir("doc-unknown");
+    writeSlackConfig(cwd, { token: "xoxb-d", channels: {}, agents: { other: { token: "T" } } });
+    const a2 = docIo(cwd, {}, { ok: true });
+    expect(await main(["doctor", "--as", "dev", "--backend", "slack"], a2.io)).toBe(1);
+    expect(a2.errs.join(" ")).toContain('no agent "dev"');
+
+    const cwd3 = scratchDir("doc-notoken");
+    writeSlackConfig(cwd3, { channels: {}, agents: { dev: {} } });
+    const a3 = docIo(cwd3, {}, { ok: true });
+    expect(await main(["doctor", "--as", "dev", "--backend", "slack"], a3.io)).toBe(1);
+    expect(a3.errs.join(" ")).toContain("no bot token");
+  });
+
+  test("staleConfigWarning names the repair when a handle is absent, and is silent when it is not", () => {
+    const base = { token: "t", appToken: "a", channels: {}, agents: {}, roster: {}, dmChannels: {}, filesDir: "/tmp" };
+    const missing = { ...base, agents: { dev: { token: "T" } } };
+    expect(staleConfigWarning(missing, "dev")).toContain("scramble doctor --as dev");
+    const present = { ...base, agents: { dev: { token: "T", handle: "dev_bot" } } };
+    expect(staleConfigWarning(present, "dev")).toBe("");
+    // An agent absent from the config, and a missing config, say nothing here:
+    // the verb itself reports those with its own error.
+    expect(staleConfigWarning(present, "nobody")).toBe("");
+    expect(staleConfigWarning(null, "dev")).toBe("");
   });
 });
 

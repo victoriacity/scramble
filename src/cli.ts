@@ -656,6 +656,43 @@ function slackFilesDir(io: Io): string {
  *  config path, and every outbound call/socket goes through io.fetch and
  *  io.createSocket, so tests need no token, network or socket. Returns an
  *  error string instead of a backend when the config or seams are missing. */
+/** What a scramble agent's Slack app must hold TODAY. The onboarding script
+ *  creates an app from its own annotated copy of this list; this one exists so a
+ *  RUNNING agent can tell that its app predates a scope without reading that
+ *  script, which may live in a checkout it does not have. Two lists is a
+ *  duplication with a named reason, and `doctor` compares them so a drift
+ *  between the two is reported rather than silent. */
+const REQUIRED_SCOPES = [
+  "chat:write",
+  "channels:history",
+  "groups:history",
+  "im:history",
+  "im:read",
+  "im:write",
+  "users:read",
+  "channels:read",
+  "groups:read",
+  "files:write",
+  "files:read",
+  "assistant:write",
+];
+
+/** The one line an agent whose config is stale must see. Returned rather than
+ *  printed so the caller decides the stream, and empty when nothing is wrong. */
+export function staleConfigWarning(cfg: SlackBackendConfig | null, agent: string): string {
+  if (cfg === null) return "";
+  const entry = cfg.agents[agent];
+  if (entry === undefined) return "";
+  if (entry.handle === undefined || entry.handle === "") {
+    return (
+      `scramble: ${agent} has no recorded Slack handle, so a mention of it resolves to a ` +
+      `name this config cannot match and every mention arrives with mentioned:false. ` +
+      `Run: scramble doctor --as ${agent}`
+    );
+  }
+  return "";
+}
+
 function slackBackend(io: Io): { backend?: SlackBackend; error?: string } {
   const cfg = loadSlackConfig(io);
   if (cfg === null) return { error: `${slackConfigPath(io)} is missing or malformed` };
@@ -801,6 +838,15 @@ function newerTs(a: string | undefined, b: string): string {
 }
 
 async function slackCmdNext(argv: string[], io: Io): Promise<number> {
+  // A STALE CONFIG ANNOUNCES ITSELF ON THE PATH IT BREAKS. An agent onboarded
+  // before a fix keeps running and silently lacks it, so the delivery verbs, the
+  // ones a mention has to travel through, print the one line that names the
+  // repair. Costs nothing: it reads the config already being loaded.
+  {
+    const w = staleConfigWarning(loadSlackConfig(io), nameFor(parseArgs(argv).flags, io));
+    if (w !== "") io.writeErr(w);
+  }
+
   const { flags, positionals } = parseArgs(argv);
   const name = nameFor(flags, io);
   const timeoutSec = intFlag(flags, "timeout", 300);
@@ -825,6 +871,15 @@ async function slackCmdNext(argv: string[], io: Io): Promise<number> {
 }
 
 async function slackCmdListen(argv: string[], io: Io): Promise<number> {
+  // A STALE CONFIG ANNOUNCES ITSELF ON THE PATH IT BREAKS. An agent onboarded
+  // before a fix keeps running and silently lacks it, so the delivery verbs, the
+  // ones a mention has to travel through, print the one line that names the
+  // repair. Costs nothing: it reads the config already being loaded.
+  {
+    const w = staleConfigWarning(loadSlackConfig(io), nameFor(parseArgs(argv).flags, io));
+    if (w !== "") io.writeErr(w);
+  }
+
   const { flags, positionals } = parseArgs(argv);
   const name = nameFor(flags, io);
   const s = slackBackend(io);
@@ -890,6 +945,15 @@ async function messageCheckLocal(flags: Map<string, string>, io: Io): Promise<nu
  *  newest line seen per channel, and exit 0. A broken or missing config is
  *  REPORTED, never a silent nothing. */
 async function messageCheckSlack(flags: Map<string, string>, io: Io): Promise<number> {
+  // A STALE CONFIG ANNOUNCES ITSELF ON THE PATH IT BREAKS. An agent onboarded
+  // before a fix keeps running and silently lacks it, so the delivery verbs, the
+  // ones a mention has to travel through, print the one line that names the
+  // repair. Costs nothing: it reads the config already being loaded.
+  {
+    const w = staleConfigWarning(loadSlackConfig(io), nameFor(flags, io));
+    if (w !== "") io.writeErr(w);
+  }
+
   const name = nameFor(flags, io);
   const status = statusTracker(io, "slack");
   await settleStatus(status?.clearExpired(), io);
@@ -1181,6 +1245,74 @@ async function cmdProfile(argv: string[], io: Io): Promise<number> {
 
 /** The mirrored `channel` verbs: `channel join --target <channel>` behaves and
  *  reads exactly as the alias `join <channel>`. */
+/** `scramble doctor --as <name>`: is this agent's Slack app still what the
+ *  current scramble needs? An agent onboarded before a fix keeps working in the
+ *  ways it always did and silently lacks the fix, which is the failure this verb
+ *  exists for: nothing else tells a RUNNING agent that its own config went out of
+ *  date. It repairs what it can locally (the handle, from auth.test) and names
+ *  the one command for what it cannot (a scope, which needs a reinstall). */
+async function cmdDoctor(argv: string[], io: Io): Promise<number> {
+  const { flags } = parseArgs(argv);
+  const name = nameFor(flags, io);
+  const cfg = loadSlackConfig(io);
+  if (cfg === null) {
+    io.writeErr(`${slackConfigPath(io)} is missing or malformed`);
+    return 1;
+  }
+  const entry = cfg.agents[name];
+  if (entry === undefined) {
+    io.writeErr(`doctor: no agent "${name}" in ${slackConfigPath(io)}`);
+    return 1;
+  }
+  const token = entry.token ?? cfg.token;
+  if (!token) {
+    io.writeErr(`doctor: agent "${name}" has no bot token, and the config has no default`);
+    return 1;
+  }
+  const problems: string[] = [];
+  const fixed: string[] = [];
+
+  // ONE call answers both questions: auth.test returns the handle in its body
+  // and the granted scopes in its x-oauth-scopes header.
+  const res = await io.fetch("https://slack.com/api/auth.test", {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  const body = (await res.json()) as { ok?: boolean; user?: string; error?: string };
+  if (body.ok !== true) {
+    io.writeErr(`doctor: auth.test answered ${String(body.error)}; this agent's token is not usable`);
+    return 1;
+  }
+  const handle = String(body.user);
+  const granted = new Set((res.headers.get("x-oauth-scopes") ?? "").split(",").map((x) => x.trim()).filter((x) => x !== ""));
+
+  if (entry.handle !== handle) {
+    const raw = JSON.parse(readFileSync(slackConfigPath(io), "utf8")) as {
+      agents?: Record<string, Record<string, unknown>>;
+    };
+    raw.agents = raw.agents ?? {};
+    raw.agents[name] = { ...(raw.agents[name] ?? {}), handle };
+    writeFileSync(slackConfigPath(io), `${JSON.stringify(raw, null, 2)}\n`);
+    fixed.push(`recorded the Slack handle @${handle}, so a mention of it now marks this agent`);
+  }
+
+  const missing = REQUIRED_SCOPES.filter((sc) => !granted.has(sc));
+  if (missing.length > 0) {
+    problems.push(
+      `this app is missing ${missing.length} scope(s): ${missing.join(", ")}. ` +
+        `A scope needs a reinstall, which the agent does for itself: ` +
+        `bun scripts/onboard-agent.ts ${name}`,
+    );
+  }
+
+  for (const f of fixed) io.write(JSON.stringify({ doctor: "fixed", agent: name, detail: f }));
+  for (const p of problems) io.writeErr(`doctor: ${p}`);
+  if (problems.length === 0) {
+    io.write(JSON.stringify({ doctor: "ok", agent: name, handle, scopes: granted.size }));
+    return 0;
+  }
+  return 1;
+}
+
 async function cmdChannel(argv: string[], io: Io): Promise<number> {
   const { flags, positionals } = parseArgs(argv);
   const sub = positionals[0];
@@ -1276,6 +1408,8 @@ export async function main(argv: string[], io: Io): Promise<number> {
       return cmdProfile(argv.slice(1), io);
     case "channel":
       return cmdChannel(argv.slice(1), io);
+    case "doctor":
+      return cmdDoctor(argv.slice(1), io);
     case "join":
       return cmdJoin(argv.slice(1), io);
     case "serve":

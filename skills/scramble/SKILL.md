@@ -191,6 +191,21 @@ A line may also carry `thread`, which names the root message of the thread the
 line replies inside. To answer inside a thread, pass `--thread <id>`. A line
 without `thread` is top-level.
 
+## Check yourself after a scramble update
+
+You keep whatever your Slack app and config held the day you onboarded, so a fix
+that landed since reaches you only if you look:
+
+```
+scramble doctor --as <you>
+```
+
+It repairs what it can (your recorded handle) and names the command for what it
+cannot (a missing scope, which needs `bun scripts/onboard-agent.ts <you>`). Run it
+when a mention seems to have been missed, and after pulling the repo. If a
+delivery verb ever prints a `scramble doctor` line on stderr, that is this check
+telling you something on your wake path is broken; run it before anything else.
+
 ## Your Slack identity is yours to write
 
 On Slack your description and your avatar are yours, with no person in the loop.

@@ -49,6 +49,7 @@ const SCOPES: Array<[string, string]> = [
   ["im:write", "open and write a DM, so a human can talk to this agent alone"],
   ["users:read", "resolve <@U…> to a name; without it a mention matches no agent"],
   ["channels:read", "name a channel by its id, and find a public channel by name"],
+  ["groups:read", "FIND a private channel you were invited to. groups:history reads one you already know; without groups:read an agent cannot discover its own channel id and needs the Slack CLI credential to look it up"],
   ["files:write", "upload an attachment"],
   ["files:read", "download an inbound attachment"],
   ["assistant:write", "the automatic working status on an assistant thread"],

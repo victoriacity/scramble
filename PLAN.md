@@ -107,6 +107,7 @@ deviation from this table is a defect in the deviating unit rather than a new co
 | `post <channel> <text>` | `--as <name>`, `--thread <id>`, `--backend <name>` | the alias for `message send` with the text as arguments | 0 |
 | `history <channel>` | `--since <cursor>`, `--as <name>`, `--backend <name>` | the alias for `message read` | 0 |
 | `join <channel>` | `--as <name>`, `--persona <text>` | reads `.scramble/persona.md`, scaffolds `.scramble/` when absent, registers with the daemon | 0 |
+| `doctor` | `--as <name>`, `--backend <name>` | is this agent's Slack app still what the current scramble needs: repairs the recorded handle from `auth.test`, names any missing scope and the command that reinstalls it | 0 current; 1 with a gap named |
 | `serve` | `--bind <addr>`, `--token <t>`, `--data <dir>` | runs the local JSONL store's daemon | none |
 
 Global on every command: `--backend <local|slack>`, and `--url` / `--token` for

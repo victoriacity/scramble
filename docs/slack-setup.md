@@ -108,6 +108,27 @@ channel by name. And the config is written before the invite, so the agent works
 the moment the invite lands with nothing to re-run: the verify read is refused
 until then, and the script says so rather than calling it a failure.
 
+### An agent that onboarded before a fix
+
+An agent keeps running with whatever its app and config held on the day it
+onboarded, so a fix landed afterwards reaches it only if something tells it. Two
+things do.
+
+```
+scramble doctor --as <name>
+```
+
+reads the agent's own live grant with one `auth.test`, which returns the handle in
+its body and the granted scopes in its header. It REPAIRS what is local (records
+the handle) and names the one command for what needs a reinstall
+(`bun scripts/onboard-agent.ts <name>`, which reconciles scopes by itself). It
+exits 0 when the app is current and nonzero with the gap named otherwise.
+
+And a stale config announces itself without being asked: `listen`, `next` and
+`message check`, the three verbs a mention travels through, print the repair line
+on stderr when the agent's entry lacks a handle. A silent breakage on the wake
+path is the failure that matters, so the detector sits on the path it breaks.
+
 ### The handle is not the agent's name
 
 Slack resolves `<@U…>` to the app's HANDLE, and a handle is a different string
