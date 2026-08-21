@@ -137,7 +137,33 @@ async function stageAttach(): Promise<void> {
   if (!check("attach/send", s.code === 0, `exit ${s.code} ${s.out.trim()} ${s.err.trim()}`)) return;
   await sleep(3000);
   const withFile = (await history()).find((m) => (m.files?.length ?? 0) > 0);
-  check("attach/inSlack", withFile !== undefined, `a message carrying files in Slack: ${withFile !== undefined}`);
+  if (!check("attach/inSlack", withFile !== undefined, `a message carrying files in Slack: ${withFile !== undefined}`)) return;
+
+  // READ IT BACK. A file can be carried on a message and be unopenable: a raw
+  // PUT upload gets a 200 from Slack, stores a file that shares with nothing and
+  // serves a sign-in page instead of bytes, and every surface short of this one
+  // reports success. This stage asserted only that the file was LISTED, so it
+  // passed through that defect for hours and I read the symptom as an org-wide
+  // block on files. The round trip is the only thing that proves an attachment.
+  const f = (withFile!.files as Array<{ id?: string }>)[0];
+  const info = await slack("files.info", { file: String(f?.id) });
+  const file = (info.file ?? {}) as { url_private_download?: string; shares?: unknown };
+  const shared = file.shares !== undefined && Object.keys(file.shares as object).length > 0;
+  check("attach/shared", shared, `Slack records a share for the file: ${shared}`);
+  const back = await fetch(String(file.url_private_download), {
+    headers: { authorization: `Bearer ${TOKEN}` },
+  });
+  const bytes = new Uint8Array(await back.arrayBuffer());
+  const sent = new Uint8Array(await Bun.file(path).arrayBuffer());
+  const same = bytes.length === sent.length && bytes.every((b, i) => b === sent[i]);
+  check(
+    "attach/readBack",
+    same,
+    same
+      ? `${bytes.length} bytes came back byte-for-byte`
+      : `the file did NOT come back: ${back.status} ${back.headers.get("content-type") ?? "?"}, ` +
+        `${bytes.length} bytes against ${sent.length} sent`,
+  );
 }
 
 /** A peer's mention must wake the listener, resolved to a name, and the working
