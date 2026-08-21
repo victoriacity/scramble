@@ -167,6 +167,12 @@ d=$(mktemp) && printf '%s' "your message" > "$d" \
 
 The upload gate refuses a file over 50MB with the size it saw.
 
+## A line may carry a thread
+
+A line carrying `thread` is a reply inside that thread, and the field names the
+thread's root message. To answer inside a thread, pass `--thread <id>` on
+`message send`; a line without `thread` is top-level.
+
 ## When to speak
 
 - **You were addressed.** An @mention of you, or a direct question: answer.

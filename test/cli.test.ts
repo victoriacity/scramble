@@ -670,6 +670,38 @@ describe("message send (mirrored)", () => {
     expect(code).toBe(1);
     expect(errs[0]).toContain("'#'");
   });
+
+  test("--thread records the thread on the stored message and round-trips through history", async () => {
+    const cwd = scratchDir("msgsend-thread");
+    const store = createStore(scratchDir("msgsend-thread-store"));
+    const handler = createHandler(store);
+    const { io } = stubIo(cwd, (u, init) => handler(new Request(u, init)));
+    io.readStdin = async () => "inside the thread";
+    const code = await main(["message", "send", "--target", "general", "--thread", "1787291684.717739", "--as", "ana"], io);
+    expect(code).toBe(0);
+    const msgs = store.read("general");
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0]!.thread).toBe("1787291684.717739");
+    // through the history verb it prints the thread back
+    const writes: string[] = [];
+    const { io: io2 } = stubIo(cwd, (u, init) => handler(new Request(u, init)));
+    io2.write = (l) => writes.push(l);
+    const code2 = await main(["history", "general"], io2);
+    expect(code2).toBe(0);
+    expect(JSON.parse(writes[0]!)).toMatchObject({ thread: "1787291684.717739" });
+  });
+
+  test("a plain send carries no thread field at all", async () => {
+    const cwd = scratchDir("msgsend-plain");
+    const store = createStore(scratchDir("msgsend-plain-store"));
+    const handler = createHandler(store);
+    const { io } = stubIo(cwd, (u, init) => handler(new Request(u, init)));
+    io.readStdin = async () => "top level";
+    const code = await main(["message", "send", "--target", "general", "--as", "ana"], io);
+    expect(code).toBe(0);
+    expect(store.read("general")[0]!.thread).toBeUndefined();
+    expect("thread" in store.read("general")[0]!).toBe(false);
+  });
 });
 
 describe("message check (local => cursor drain)", () => {

@@ -262,11 +262,13 @@ async function postLocalCore(
   flags: Map<string, string>,
   io: Io,
   files?: Attachment[],
+  thread?: string,
 ): Promise<number> {
   const { url, token } = resolveConfig(flags, io);
   const from = nameFor(flags, io);
   const payload: Record<string, unknown> = { from, text, id: newMessageId() };
   if (files !== undefined && files.length > 0) payload.files = files;
+  if (thread !== undefined) payload.thread = thread;
   const res = await io.fetch(`${url}/channels/${encodeURIComponent(channel)}`, {
     method: "POST",
     headers: { "content-type": "application/json", ...authHeader(token) },
@@ -295,6 +297,7 @@ async function postText(
   backend: "local" | "slack",
   files?: Attachment[],
 ): Promise<number> {
+  const thread = flags.get("thread") ?? undefined;
   const status = statusTracker(io, backend);
   void status?.clearExpired();
   if (backend === "slack") {
@@ -304,7 +307,7 @@ async function postText(
       io.writeErr(s.error ?? "slack backend unavailable");
       return 1;
     }
-    const r = await s.backend.post(channel, text, from);
+    const r = await s.backend.post(channel, text, from, thread);
     if (!r.ok) {
       io.writeErr(`post failed: ${r.error}`);
       return 1;
@@ -312,7 +315,7 @@ async function postText(
     if (status !== undefined) replyStatus(status, channel, from);
     return 0;
   }
-  const code = await postLocalCore(channel, text, flags, io, files);
+  const code = await postLocalCore(channel, text, flags, io, files, thread);
   if (code === 0 && status !== undefined) replyStatus(status, channel, nameFor(flags, io));
   return code;
 }

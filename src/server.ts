@@ -85,7 +85,7 @@ export function createHandler(store: ChannelStore, opts: ServerOptions = {}) {
   }
 
   async function postChannel(channelSeg: string, req: Request): Promise<Response> {
-    let body: { from?: string; text?: string; id?: string; lastSeen?: number; files?: Attachment[] };
+    let body: { from?: string; text?: string; id?: string; lastSeen?: number; files?: Attachment[]; thread?: string };
     try {
       body = (await req.json()) as typeof body;
     } catch {
@@ -114,6 +114,7 @@ export function createHandler(store: ChannelStore, opts: ServerOptions = {}) {
         id,
         lastSeen: body.lastSeen,
         ...(body.files !== undefined && body.files.length > 0 ? { files: body.files } : {}),
+        ...(body.thread !== undefined ? { thread: body.thread } : {}),
       });
     } catch {
       return json(400, { error: "invalid channel", channel });
