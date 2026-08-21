@@ -1004,6 +1004,114 @@ describe("message check under the slack backend", () => {
     expect(writes).toHaveLength(0);
   });
 
+  test("message check drains a peer's line and does NOT drain a line from the draining agent", async () => {
+    // The drain is a DELIVERY verb: it hands the agent what ARRIVED for it.
+    // Its own line (resolved sender name == the draining agent) is left out,
+    // exactly by the same name comparison listen/next use — and the cursor
+    // still advances over the skipped own-line (the peer line is newest).
+    const cwd = scratchDir("mslack-drain-noself");
+    const writes: string[] = [];
+    const io = slackCheckIo(cwd, {
+      write: (l) => writes.push(l),
+      fetch: async (u) => {
+        if (String(u).includes("conversations.history")) {
+          // newest-first: the agent's own line (ts 9.9) is the newest; the
+          // peer's line (ts 9.5) is older.
+          return new Response(
+            JSON.stringify({
+              ok: true,
+              messages: [
+                { type: "message", channel: "C1", user: "dev", username: "dev", text: "self-delivery probe", ts: "9.9" },
+                { type: "message", channel: "C1", user: "bob", username: "bob", text: "@dev a peer asks", ts: "9.5" },
+              ],
+            }),
+            { status: 200 },
+          );
+        }
+        return new Response(JSON.stringify({ ok: true, ts: "1.1" }), { status: 200 });
+      },
+    });
+    const code = await main(["message", "check", "--as", "dev", "--backend", "slack"], io);
+    expect(code).toBe(0);
+    // ONLY the peer's line drains; the agent's own is withheld.
+    expect(writes).toHaveLength(1);
+    const line = JSON.parse(writes[0]!) as { text: string; from: string };
+    expect(line.from).toBe("bob");
+    expect(line.text).toBe("@dev a peer asks");
+    // the cursor is the NEWEST line — which is the skipped OWN line (9.9), so
+    // the very next sweep does not re-read it.
+    const cursor = JSON.parse(readFileSync(join(cwd, ".scramble", "cursor.json"), "utf8"));
+    expect(cursor["slack:dev"]).toEqual({ general: "9.9" });
+  });
+
+  test("the cursor advances past a skipped own-line: second check empty, third returns only the new peer line", async () => {
+    const cwd = scratchDir("mslack-cursor-own");
+    // History rotates per sweep: sweep 1 returns only OWN lines, sweep 2 the
+    // same own lines again, sweep 3 a fresh peer line.
+    const batches: Array<Record<string, string | number>[]> = [
+      // sweep 1: two own-line posts, neither delivered but both before the cursor
+      [
+        { ts: "5.1", user: "dev", username: "dev", text: "own reply 2" },
+        { ts: "5.0", user: "dev", username: "dev", text: "own first" },
+      ],
+      // sweep 2: the same own lines (cursor already past them -> nothing)
+      [
+        { ts: "5.1", user: "dev", username: "dev", text: "own reply 2" },
+        { ts: "5.0", user: "dev", username: "dev", text: "own first" },
+      ],
+      // sweep 3: a fresh peer line after the own ones
+      [{ ts: "6.0", user: "bob", username: "bob", text: "@dev hi now" }],
+    ];
+    const writes1: string[] = [];
+    const first = slackCheckIo(cwd, {
+      write: (l) => writes1.push(l),
+      fetch: async (u) => {
+        if (String(u).includes("conversations.history")) {
+          const b = batches.shift()!;
+          return new Response(JSON.stringify({ ok: true, messages: b }), { status: 200 });
+        }
+        return new Response(JSON.stringify({ ok: true, ts: "1.1" }), { status: 200 });
+      },
+    });
+    // sweep 1: own lines are held (NOT drained) but the cursor passes them.
+    const c1 = await main(["message", "check", "--as", "dev", "--backend", "slack"], first);
+    expect(c1).toBe(0);
+    expect(writes1).toHaveLength(0);
+
+    // sweep 2: the same own lines are already behind the cursor => nothing.
+    const writes2: string[] = [];
+    const second2 = slackCheckIo(cwd, {
+      write: (l) => writes2.push(l),
+      fetch: async (u) => {
+        if (String(u).includes("conversations.history")) {
+          const b = batches.shift()!;
+          return new Response(JSON.stringify({ ok: true, messages: b }), { status: 200 });
+        }
+        return new Response(JSON.stringify({ ok: true, ts: "1.1" }), { status: 200 });
+      },
+    });
+    const c2 = await main(["message", "check", "--as", "dev", "--backend", "slack"], second2);
+    expect(c2).toBe(0);
+    expect(writes2).toHaveLength(0);
+
+    // sweep 3: a new peer line after the cursor drains, and ONLY it.
+    const writes3: string[] = [];
+    const third3 = slackCheckIo(cwd, {
+      write: (l) => writes3.push(l),
+      fetch: async (u) => {
+        if (String(u).includes("conversations.history")) {
+          const b = batches.shift()!;
+          return new Response(JSON.stringify({ ok: true, messages: b }), { status: 200 });
+        }
+        return new Response(JSON.stringify({ ok: true, ts: "1.1" }), { status: 200 });
+      },
+    });
+    const c3 = await main(["message", "check", "--as", "dev", "--backend", "slack"], third3);
+    expect(c3).toBe(0);
+    expect(writes3).toHaveLength(1);
+    expect(JSON.parse(writes3[0]!).text).toBe("@dev hi now");
+  });
+
   test("a pending message sets the reading agent's status, an unaddressed one sets nothing", async () => {
     const addressed = scratchDir("mslack-status-on");
     const writes: string[] = [];

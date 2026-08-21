@@ -504,8 +504,9 @@ describe("listen", () => {
     await pump();
     emit(h, msg({ text: "@alice check" }));
     await pump(5);
-    h.sockets[0]?.close();
-    await p;
+    // listen reconnects on a drop (it never resolves in the healthy
+    // path), so the assertions above already ran; do not await p.
+    void p;
     expect(lines).toHaveLength(1);
     const d = lines[0] as Record<string, unknown>;
     expect(d.channel).toBe("general");
@@ -523,8 +524,9 @@ describe("listen", () => {
     await pump();
     emit(h, msg({ bot_id: "B222", text: "@alice hello from another app" })); // U111 -> ana resolves, so from = ana
     await pump(8);
-    h.sockets[0]?.close();
-    await p;
+    // listen reconnects on a drop (it never resolves in the healthy
+    // path), so the assertions above already ran; do not await p.
+    void p;
     expect(lines).toHaveLength(1);
     expect(lines[0]!.from).toBe("ana");
     expect(lines[0]!.mentioned).toBe(true);
@@ -539,8 +541,9 @@ describe("listen", () => {
     await pump();
     emit(h, msg({ user: "U1000", bot_id: "B999", text: "my own post" })); // from == alice == as
     await pump(8);
-    h.sockets[0]?.close();
-    await p;
+    // listen reconnects on a drop (it never resolves in the healthy
+    // path), so the assertions above already ran; do not await p.
+    void p;
     expect(lines).toHaveLength(0);
   });
 
@@ -554,8 +557,9 @@ describe("listen", () => {
     emit(h, msg({ ts: "1.1", text: "working" })); // exactly the recorded status ts
     emit(h, msg({ ts: "1.2", text: "@alice real line" }));
     await pump(8);
-    h.sockets[0]?.close();
-    await p;
+    // listen reconnects on a drop (it never resolves in the healthy
+    // path), so the assertions above already ran; do not await p.
+    void p;
     expect(lines).toHaveLength(1);
     expect(lines[0]!.ts).toBe("1.2");
   });
@@ -569,8 +573,9 @@ describe("listen", () => {
     await pump();
     emit(h, msg({ ts: "1.1", text: "@alice hi" })); // 1.1 not a status
     await pump(8);
-    h.sockets[0]?.close();
-    await p;
+    // listen reconnects on a drop (it never resolves in the healthy
+    // path), so the assertions above already ran; do not await p.
+    void p;
     expect(lines).toHaveLength(1);
     expect(lines[0]!.ts).toBe("1.1");
   });
@@ -582,8 +587,9 @@ describe("listen", () => {
     await pump();
     emit(h, msg({ channel: "G_S" }));
     await pump(5);
-    h.sockets[0]?.close();
-    await p;
+    // listen reconnects on a drop (it never resolves in the healthy
+    // path), so the assertions above already ran; do not await p.
+    void p;
     expect(lines).toHaveLength(1);
     expect((lines[0] as Record<string, unknown>).channel).toBe("secret");
   });
@@ -596,8 +602,9 @@ describe("listen", () => {
     emit(h, { type: "reaction_added" });
     emit(h, msg({ text: "" }));
     await pump(5);
-    h.sockets[0]?.close();
-    await p;
+    // listen reconnects on a drop (it never resolves in the healthy
+    // path), so the assertions above already ran; do not await p.
+    void p;
     expect(lines).toHaveLength(0);
   });
 
@@ -608,8 +615,9 @@ describe("listen", () => {
     await pump();
     emit(h, msg({ channel: "C_NOPE" }));
     await pump(5);
-    h.sockets[0]?.close();
-    await p;
+    // listen reconnects on a drop (it never resolves in the healthy
+    // path), so the assertions above already ran; do not await p.
+    void p;
     expect(lines).toHaveLength(0);
   });
 
@@ -620,8 +628,9 @@ describe("listen", () => {
     await pump();
     emit(h, msg({ user: "notanid", username: "webby" }));
     await pump(5);
-    h.sockets[0]?.close();
-    await p;
+    // listen reconnects on a drop (it never resolves in the healthy
+    // path), so the assertions above already ran; do not await p.
+    void p;
     expect((lines[0] as Record<string, unknown>).from).toBe("webby");
   });
 
@@ -632,8 +641,9 @@ describe("listen", () => {
     h.sockets[0]?.onmessage?.(frame(msg({}), "E9"));
     expect(h.sockets[0]!.sent).toEqual([JSON.stringify({ envelope_id: "E9" })]);
     await pump(5);
-    h.sockets[0]?.close();
-    await p;
+    // listen reconnects on a drop (it never resolves in the healthy
+    // path), so the assertions above already ran; do not await p.
+    void p;
   });
 
   test("a disconnect frame closes the socket cleanly", async () => {
@@ -642,7 +652,10 @@ describe("listen", () => {
     await pump();
     h.sockets[0]?.onmessage?.(JSON.stringify({ type: "disconnect" }));
     expect(h.sockets[0]!.closed).toEqual([{ code: 1000, reason: "disconnect" }]);
-    await p;
+    // The disconnect closes the socket, which listen treats as a drop and would
+    // RECONNECT (it never resolves in the healthy path); the assertion above
+    // already ran, so do not await it.
+    void p;
   });
 
   test("non-JSON frames are ignored without events", async () => {
@@ -652,8 +665,9 @@ describe("listen", () => {
     await pump();
     h.sockets[0]?.onmessage?.("garbage");
     await pump(5);
-    h.sockets[0]?.close();
-    await p;
+    // listen reconnects on a drop (it never resolves in the healthy
+    // path), so the assertions above already ran; do not await p.
+    void p;
     expect(lines).toHaveLength(0);
   });
 
@@ -664,8 +678,9 @@ describe("listen", () => {
     await pump();
     emit(h, msg({ channel: "C1" })); // general, not requested
     await pump(5);
-    h.sockets[0]?.close();
-    await p;
+    // listen reconnects on a drop (it never resolves in the healthy
+    // path), so the assertions above already ran; do not await p.
+    void p;
     expect(lines).toHaveLength(0);
   });
 
@@ -679,8 +694,9 @@ describe("listen", () => {
     await pump();
     emit(h, msg({ text: "<@Z999> yo" }));
     await pump(12);
-    h.sockets[0]?.close();
-    await p;
+    // listen reconnects on a drop (it never resolves in the healthy
+    // path), so the assertions above already ran; do not await p.
+    void p;
     expect((lines[0] as Record<string, unknown>).text).toBe("@Z999 yo");
   });
 
@@ -690,9 +706,10 @@ describe("listen", () => {
     const p = h.backend.listen([], "alice", (d) => lines.push(d), () => {});
     await pump();
     emit(h, msg({ text: "<@U222> ping" })); // U222 not in roster -> users.info -> fromUsers
-    await pump(5);
-    h.sockets[0]?.close();
-    await p;
+    await pump(14);
+    // listen reconnects on a drop (it never resolves in the healthy
+    // path), so the assertions above already ran; do not await p.
+    void p;
     expect((lines[0] as Record<string, unknown>).text).toBe("@fromUsers ping");
   });
 
@@ -703,22 +720,41 @@ describe("listen", () => {
     await pump();
     emit(h, msg({ channel: "D1", text: "privately" }));
     await pump(5);
-    h.sockets[0]?.close();
-    await p;
+    // listen reconnects on a drop (it never resolves in the healthy
+    // path), so the assertions above already ran; do not await p.
+    void p;
     expect((lines[0] as Record<string, unknown>).channel).toBe("dm/alice/ana");
   });
 
-  test("listen resolves when the socket closes", async () => {
+  test("a connection that opened then drops RECONNECTS (backoff), staying alive", async () => {
+    // Once a connection has worked, a drop is retried: listen opens a second
+    // socket instead of giving up. Reachable under test because the injected
+    // sleep resolves immediately.
     const h = make();
-    let done = false;
-    const p = h.backend.listen([], "alice", () => {}, () => {}).then(() => {
-      done = true;
-    });
+    const lines: Delivery[] = [];
+    const p = h.backend.listen([], "alice", (d) => lines.push(d), () => {});
     await pump();
-    h.sockets[0]?.close();
-    await p;
-    expect(done).toBe(true);
+    expect(h.sockets).toHaveLength(1);
+    // Deliver an event, then drop the socket: the stream must REOPEN rather than
+    // end, and keep delivering on the new connection.
+    emit(h, msg({ text: "before drop" }));
+    await pump(8);
+    expect(lines).toHaveLength(1);
+    h.sockets[0]!.close();
+    await pump(12);
+    // a second connection was opened (the first dropped -> reconnect)
+    expect(h.sockets.length).toBeGreaterThan(1);
+    // the new socket still delivers
+    emit2(h, msg({ text: "after reconnect" }));
+    await pump(8);
+    expect(lines[1]!.text).toBe("after reconnect");
+    // never resolves in the healthy path; leave it pending on the new socket.
+    void p;
   });
+
+  function emit2(h: H, ev: SlackInboundEvent, socket?: number): void {
+    emit(h, ev, socket ?? h.sockets.length - 1);
+  }
 
   test("an inbound reply (thread_ts != ts) carries the thread id", async () => {
     const h = make();
@@ -727,8 +763,9 @@ describe("listen", () => {
     await pump();
     emit(h, msg({ ts: "2.2", thread_ts: "1.1" }));
     await pump(5);
-    h.sockets[0]?.close();
-    await p;
+    // listen reconnects on a drop (it never resolves in the healthy
+    // path), so the assertions above already ran; do not await p.
+    void p;
     expect(lines[0]!.thread).toBe("1.1");
   });
 
@@ -739,8 +776,9 @@ describe("listen", () => {
     await pump();
     emit(h, msg({ ts: "1.1", thread_ts: "1.1" }));
     await pump(5);
-    h.sockets[0]?.close();
-    await p;
+    // listen reconnects on a drop (it never resolves in the healthy
+    // path), so the assertions above already ran; do not await p.
+    void p;
     expect("thread" in lines[0]!).toBe(false);
   });
 
@@ -751,21 +789,26 @@ describe("listen", () => {
     await pump();
     emit(h, msg({ text: "anything" })); // no thread_ts, default ts=1.1
     await pump(5);
-    h.sockets[0]?.close();
-    await p;
+    // listen reconnects on a drop (it never resolves in the healthy
+    // path), so the assertions above already ran; do not await p.
+    void p;
     expect("thread" in lines[0]!).toBe(false);
   });
 
-  test("a listen socket-open failure reports a problem and still resolves", async () => {
+  test("the FIRST socket-open refusal fails listen with code 1 instead of retrying", async () => {
+    // A connection that has never once succeeded must FAIL OUT (code 1 —
+    // "scramble could not look"), not silently retry the same refusal into an
+    // unattended loop. The report names both Slack's error and the appToken key.
     const h = make({}, async (url) => {
-      if (url.includes(SOCKET_OPEN)) return new Response(JSON.stringify({ ok: false, error: "bad_app" }), { status: 200 });
+      if (url.includes(SOCKET_OPEN)) return new Response(JSON.stringify({ ok: false, error: "invalid_token" }), { status: 200 });
       return okRouter(url);
     });
     const problems: string[] = [];
-    const p = h.backend.listen([], "alice", () => {}, (pr) => problems.push(pr)).then(() => {});
+    const p = h.backend.listen([], "alice", () => {}, (pr) => problems.push(pr));
     await pump();
-    expect(problems.some((pr) => pr.includes("bad_app"))).toBe(true);
-    await p;
+    const code = await p;
+    expect(code).toBe(1);
+    expect(problems.some((pr) => pr.includes("invalid_token") && pr.includes("appToken"))).toBe(true);
   });
 });
 
@@ -794,16 +837,30 @@ describe("next", () => {
     expect(r).toEqual({ code: 64 });
   });
 
-  test("an open failure reports a problem and still times out", async () => {
-    const h = makeTimed({}, async (url) => {
-      if (url.includes(SOCKET_OPEN)) return new Response(JSON.stringify({ ok: false, error: "invalid_app" }), { status: 200 });
+  test("a refused append-to open exits 1 (could not look), not the quiet-channel 64, and names invalid_auth and appToken", async () => {
+    // A broken credential must not read as a silent channel: `next` against an
+    // invalid app token fails nonzero with both Slack's error and the config key.
+    // `make()` keeps the clock fixed so the open-refusal (a fast HTTP answer)
+    // settles before any timeout — exactly the ordering a real next() sees where
+    // the connection is refused in milliseconds against a seconds-long timeout.
+    const h = make({}, async (url) => {
+      if (url.includes(SOCKET_OPEN)) return new Response(JSON.stringify({ ok: false, error: "invalid_token" }), { status: 200 });
       return okRouter(url);
     });
     const problems: string[] = [];
     const q = await h.backend.next([], "alice", 1, (pr) => problems.push(pr));
     await pump(5);
-    expect(q).toEqual({ code: 64 });
-    expect(problems.some((pr) => pr.includes("invalid_app"))).toBe(true);
+    expect(q.code).toBe(1);
+    expect(problems.some((pr) => pr.includes("invalid_token") && pr.includes("appToken"))).toBe(true);
+  });
+
+  test("a live connection that then times out still exits 64 (quiet channel)", async () => {
+    // With the socket OPENED (a working app token), a no-message timeout is the
+    // honest quiet-channel result and stays 64.
+    const h = makeTimed(); // socket open succeeds (okRouter)
+    const p = h.backend.next([], "alice", 1, () => {});
+    const r = await p;
+    expect(r).toEqual({ code: 64 });
   });
 });
 
@@ -1004,9 +1061,13 @@ describe("slack commands through main", () => {
     expect(errs[0]).toContain("bot token");
   });
 
-  test("listen through the slack backend exits 0 after the socket closes", async () => {
+  test("listen through the slack backend streams a line and stays connected", async () => {
     const sockets: FakeSocket[] = [];
     const { io, writes } = configuredIo({
+      // disable the status-expiry ticker so the reconnecting listen (which never
+      // resolves) leaves no lingering timer behind; the delivered line already
+      // proves the stream works.
+      env: (n) => (n === "SCRAMBLE_STATUS" ? "off" : undefined),
       fetch: async (url) => {
         if (String(url).includes(SOCKET_OPEN)) {
           return new Response(JSON.stringify({ ok: true, url: "wss://s" }), { status: 200 });
@@ -1023,10 +1084,10 @@ describe("slack commands through main", () => {
     await pump(10);
     sockets[0]?.onmessage?.(frame({ type: "message", channel: "C1", user: "U111", text: "@alice yo", ts: "1" }));
     await pump(3);
-    sockets[0]?.close();
-    const code = await p;
-    expect(code).toBe(0);
+    // listen reconnects on a drop and never resolves in the healthy path; the
+    // delivered line is already written, so assert and leave main pending.
     expect(writes).toHaveLength(1);
+    void p;
   });
 
   test("a slack history with no channel exits 1", async () => {
@@ -1067,30 +1128,33 @@ describe("slack commands through main", () => {
     expect(errs[0]).toContain("missing or malformed");
   });
 
-  test("a slack listen socket-open failure reports on stderr and exits", async () => {
+  test("a slack listen socket-refusal reports on stderr and exits nonzero", async () => {
     const { io, errs } = configuredIo({
       fetch: async (url) => {
-        if (String(url).includes(SOCKET_OPEN)) return new Response(JSON.stringify({ ok: false, error: "bad_app" }), { status: 200 });
+        if (String(url).includes(SOCKET_OPEN)) return new Response(JSON.stringify({ ok: false, error: "invalid_token" }), { status: 200 });
         return okRouter(url);
       },
       createSocket: () => new FakeSocket(),
     });
     const code = await main(["listen", "--as", "alice", "--backend", "slack"], io);
-    expect(code).toBe(0);
-    expect(errs.some((l) => l.includes("bad_app"))).toBe(true);
+    expect(code).toBe(1);
+    expect(errs.some((l) => l.includes("invalid_token") && l.includes("appToken"))).toBe(true);
   });
 
-  test("a slack next socket-open failure reports on stderr and exits 64", async () => {
+  test("a slack next socket-refusal exits 1 (could not look), not the quiet-channel 64", async () => {
+    // A broken credential must surface as "scramble could not look" (code 1),
+    // never as 64 (a quiet channel): the stderr names both the Slack error and
+    // the appToken config key.
     const { io, errs } = configuredIo({
       fetch: async (url) => {
-        if (String(url).includes(SOCKET_OPEN)) return new Response(JSON.stringify({ ok: false, error: "bad_token" }), { status: 200 });
+        if (String(url).includes(SOCKET_OPEN)) return new Response(JSON.stringify({ ok: false, error: "invalid_auth" }), { status: 200 });
         return okRouter(url);
       },
       createSocket: () => new FakeSocket(),
     });
     const code = await main(["next", "--as", "alice", "--backend", "slack", "--timeout", "1"], io);
-    expect(code).toBe(64);
-    expect(errs.some((l) => l.includes("bad_token"))).toBe(true);
+    expect(code).toBe(1);
+    expect(errs.some((l) => l.includes("invalid_auth") && l.includes("appToken"))).toBe(true);
   });
 });
 
@@ -1129,8 +1193,9 @@ describe("inbound file downloads", () => {
     await pump();
     emit(h, msg({ text: "see the screenshot", files: [{ id: "F1", name: "shot cat.png", url_private: "https://files.slack.com/v1/F1", mimetype: "image/png", size: 21 }] }));
     await pump(20);
-    h.sockets[0]?.close();
-    await p;
+    // listen reconnects on a drop (it never resolves in the healthy
+    // path), so the assertions above already ran; do not await p.
+    void p;
     expect(lines).toHaveLength(1);
     const file = lines[0]!.files![0]!;
     expect(file.id).toBe("F1");
@@ -1155,8 +1220,9 @@ describe("inbound file downloads", () => {
     await pump();
     emit(h, msg({ text: "file", files: [{ id: "F2", name: "x.html", url_private: "https://files.slack.com/x", mimetype: "text/html" }] }));
     await pump(20);
-    h.sockets[0]?.close();
-    await p;
+    // listen reconnects on a drop (it never resolves in the healthy
+    // path), so the assertions above already ran; do not await p.
+    void p;
     expect(lines).toHaveLength(1);
     expect(lines[0]!.files![0]!.id).toBe("F2");
     expect(lines[0]!.files![0]!.path).toBeUndefined();
@@ -1171,8 +1237,9 @@ describe("inbound file downloads", () => {
     await pump();
     emit(h, msg({ text: "no file here" }));
     await pump(8);
-    h.sockets[0]?.close();
-    await p;
+    // listen reconnects on a drop (it never resolves in the healthy
+    // path), so the assertions above already ran; do not await p.
+    void p;
     expect(lines).toHaveLength(1);
     expect("files" in lines[0]!).toBe(false);
   });
