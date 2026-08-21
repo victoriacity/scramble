@@ -1690,3 +1690,75 @@ describe("a peer's status is not a message either", () => {
     expect(isStatusLine({})).toBe(false);
   });
 });
+
+describe("a channel the agent was invited to but the config does not name", () => {
+  // Inviting an agent somewhere used to deliver NOTHING: an unmapped channel id
+  // had no name, and the message was dropped silently with nothing reported.
+  async function deliverFrom(channelId: string, router?: (u: string) => Response) {
+    const h = make({ channels: { general: "C1" }, roster: { U1: "andrew" } }, (url) => {
+      if (router && url.includes("conversations.info")) return router(url);
+      if (url.includes("conversations.info")) {
+        return new Response(JSON.stringify({ ok: true, channel: { name: "new-room" } }), { status: 200 });
+      }
+      return okRouter(url);
+    });
+    const lines: Delivery[] = [];
+    const p = h.backend.listen([], "alice", (d) => lines.push(d), () => {});
+    await pump();
+    emit(h, msg({ channel: channelId, user: "U1", text: "hello somewhere new" }));
+    await pump(10);
+    void p;
+    return { lines, h };
+  }
+
+  test("the message ARRIVES, under the name Slack gives the channel", async () => {
+    const { lines } = await deliverFrom("C_NEW");
+    expect(lines).toHaveLength(1);
+    expect(lines[0]!.channel).toBe("new-room");
+    expect(lines[0]!.text).toBe("hello somewhere new");
+  });
+
+  test("a name Slack will not give falls back to the id, rather than losing the message", async () => {
+    const { lines } = await deliverFrom("C_SECRET", () =>
+      new Response(JSON.stringify({ ok: false, error: "channel_not_found" }), { status: 200 }));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]!.channel).toBe("C_SECRET");
+  });
+
+  test("a mapped channel is named from the config and asks Slack nothing", async () => {
+    let infos = 0;
+    const h = make({ channels: { general: "C1" }, roster: { U1: "andrew" } }, (url) => {
+      if (url.includes("conversations.info")) infos += 1;
+      return okRouter(url);
+    });
+    const lines: Delivery[] = [];
+    const p = h.backend.listen([], "alice", (d) => lines.push(d), () => {});
+    await pump();
+    emit(h, msg({ channel: "C1", user: "U1", text: "in a known room" }));
+    await pump(6);
+    void p;
+    expect(lines[0]!.channel).toBe("general");
+    expect(infos).toBe(0);
+  });
+
+  test("the lookup is cached, so a busy new channel is resolved once", async () => {
+    let infos = 0;
+    const h = make({ channels: { general: "C1" }, roster: { U1: "andrew" } }, (url) => {
+      if (url.includes("conversations.info")) {
+        infos += 1;
+        return new Response(JSON.stringify({ ok: true, channel: { name: "new-room" } }), { status: 200 });
+      }
+      return okRouter(url);
+    });
+    const lines: Delivery[] = [];
+    const p = h.backend.listen([], "alice", (d) => lines.push(d), () => {});
+    await pump();
+    emit(h, msg({ channel: "C_NEW", user: "U1", text: "one", ts: "2.1" }));
+    await pump(10);
+    emit(h, msg({ channel: "C_NEW", user: "U1", text: "two", ts: "2.2" }));
+    await pump(10);
+    void p;
+    expect(lines).toHaveLength(2);
+    expect(infos).toBe(1);
+  });
+});

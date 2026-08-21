@@ -29,6 +29,7 @@ const REPLIES_URL = "https://slack.com/api/conversations.replies";
 const USERS_INFO_URL = "https://slack.com/api/users.info";
 const AUTH_TEST_URL = "https://slack.com/api/auth.test";
 const REACT_URL = "https://slack.com/api/reactions.add";
+const CONV_INFO_URL = "https://slack.com/api/conversations.info";
 
 /** Cap on the number of threaded ROOTS expanded per history call — the fan-out
  *  is bounded: one extra conversations.replies request per expanded root, on
@@ -249,6 +250,8 @@ export class SlackBackend {
   private readonly describeCache = new Map<string, string>();
   /** `<channel>/<root>/<agent>` -> is that agent in that thread. */
   private readonly threadCache = new Map<string, boolean>();
+  /** Slack channel id -> its scramble name, for channels absent from the config. */
+  private readonly channelNameCache = new Map<string, string>();
   private readonly roster: Record<string, string>;
   private readonly filesDir: string;
   /** Cache of users.info answers so a repeat unknown id never re-queries. The
@@ -394,6 +397,31 @@ export class SlackBackend {
 
   private appTokenFor(agent: string): string {
     return this.agents[agent]?.appToken ?? this.appToken ?? "";
+  }
+
+  /** The scramble name for a Slack channel id. The config's mapping wins; a
+   *  channel ABSENT from it is asked about through conversations.info, and the
+   *  raw id stands in when even that is refused.
+   *
+   *  It used to return undefined for an unmapped channel and the message was
+   *  dropped, silently and with nothing reported, so inviting an agent to a new
+   *  channel delivered NOTHING until someone hand-edited slack.json (operator,
+   *  2026-08-22). An agent that has been invited somewhere should hear it, and a
+   *  name it cannot look up is a naming problem rather than a reason to lose the
+   *  message. Cached per id. */
+  private async channelNameFor(token: string, id: string): Promise<string> {
+    const cached = this.channelNameCache.get(id);
+    if (cached !== undefined) return cached;
+    const r = await readOk<{ channel?: { name?: string } }>(
+      this.fetch,
+      `${CONV_INFO_URL}?channel=${encodeURIComponent(id)}`,
+      { headers: { authorization: `Bearer ${token}` } },
+    );
+    const name = r.ok && typeof r.data.channel?.name === "string" && r.data.channel.name !== ""
+      ? r.data.channel.name
+      : id;
+    this.channelNameCache.set(id, name);
+    return name;
   }
 
   /** React to a message with an emoji. A reaction is how a channel acknowledges
@@ -576,8 +604,13 @@ export class SlackBackend {
     const text = await this.normalize(token, ev.text);
     const from = await this.resolveSender(token, ev);
     const dmAgent = this.dmChannels[channel];
-    const channelName = dmAgent === undefined ? this.channelById[channel] : `${DM_PREFIX}${dmAgent}/${from}`;
-    if (channelName === undefined) return { delivery: undefined, problems: [] };
+    // The mapped case costs no await: a lookup that returns at once still spends a
+    // turn of the event loop when it is awaited, and every message pays it.
+    const mapped = this.channelById[channel];
+    const channelName =
+      dmAgent !== undefined
+        ? `${DM_PREFIX}${dmAgent}/${from}`
+        : mapped ?? (await this.channelNameFor(token, channel));
     // Slack ts is the per-channel cursor (no global seq), used as both ts and the
     // dedup id for a line.
     const ts = ev.ts ?? new Date().toISOString();
