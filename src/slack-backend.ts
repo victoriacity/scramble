@@ -30,6 +30,13 @@ const USERS_INFO_URL = "https://slack.com/api/users.info";
  *  acceptable; a root dropped by the cap is REPORTED, never silent. */
 export const THREAD_EXPANSION_CAP = 5;
 
+/** Backoff for RE-CONNECTING a Socket Mode stream after it dropped: the first
+ *  reconnect waits RECONNECT_BACKOFF ms. A connection that once worked keeps
+ *  retrying forever (bounded by MAX_RECONNECT_BACKOFF); one that never once
+ *  opened is a FAILURE, not a retry. */
+const RECONNECT_BACKOFF = 1000;
+const MAX_RECONNECT_BACKOFF = 4000;
+
 /** True for a top-level row that CARRIES a thread (Slack marks it with a
  *  reply_count above zero and a thread_ts equal to its own ts). Only such a
  *  row expands via conversations.replies; a reply-less row never triggers a
@@ -338,6 +345,16 @@ export class SlackBackend {
     return Promise.resolve(ev.username ?? "");
   }
 
+  /** The connect-refusal report: a refused Socket Mode connection (e.g.
+   *  invalid_auth answered by apps.connections.open) means scramble could NOT
+   *  look, not that the channel was quiet. So the message names Slack's error
+   *  AND the config key (`appToken`, the app-level xapp- token) that supplies
+   *  the credential: a wrong or missing app token must never read as silence. */
+  private connectRefused(e: unknown): string {
+    const detail = e instanceof Error ? e.message : String(e);
+    return `apps.connections.open refused: ${detail} (config key: appToken)`;
+  }
+
   /** Open one Socket Mode connection: apps.connections.open with the app token,
    *  then the injected socket factory. */
   private async connectSocket(): Promise<{ socket: SlackSocket; close: () => void }> {
@@ -519,22 +536,25 @@ export class SlackBackend {
 
   /** next(channels, as, timeoutSecs, onProblem): block for ONE message then
    *  resolve 0; exit-64 semantics preserved by timing out with nothing
-   *  delivered-and-nothing-printed. */
+   *  delivered-and-nothing-printed. A connection that CANNOT be established
+   *  (a refused apps.connections.open, e.g. invalid_auth) resolves with
+   *  code 1 — scramble could not look — never the quiet-channel 64. */
   async next(
     channels: string[],
     as: string,
     timeoutSecs: number,
     onProblem: (p: string) => void,
     statusTts?: ReadonlySet<string>,
-  ): Promise<{ code: 0; line: Delivery } | { code: 64 }> {
+  ): Promise<{ code: 0; line: Delivery } | { code: 64 } | { code: 1; error: string }> {
     const deadline = this.now() + timeoutSecs * 1000;
     const wantsAll = channels.length === 0;
     // Connect asynchronously; the caller-facing promise settles on the first
-    // matching delivery OR the deadline, whichever comes first.
+    // matching delivery OR the deadline OR a refused connection, whichever
+    // comes first.
     return new Promise((resolve) => {
       let conn: { socket: SlackSocket; close: () => void } | undefined;
       let settled = false;
-      const settle = (v: { code: 0; line: Delivery } | { code: 64 }): void => {
+      const settle = (v: { code: 0; line: Delivery } | { code: 64 } | { code: 1; error: string }): void => {
         if (settled) return;
         settled = true;
         conn?.close();
@@ -551,11 +571,14 @@ export class SlackBackend {
           if (this.now() >= deadline) settle({ code: 64 });
         },
         (e) => {
-          // A Socket Mode connect failure means nothing can arrive: report it
-          // and settle with the nothing-to-report exit, so a next() against a
-          // bad token does not hang.
-          onProblem(e instanceof Error ? e.message : String(e));
-          settle({ code: 64 });
+          // A refused connection means scramble could not look. The caller must
+          // tell a broken credential apart from a quiet channel, so we settle
+          // with code 1 — THE CODE FOR "scramble could not look"; 64 is
+          // reserved for "the channel was quiet" — and report a message naming
+          // the Slack error and the appToken config key.
+          const msg = this.connectRefused(e);
+          onProblem(msg);
+          settle({ code: 1, error: msg });
         },
       );
       void this.sleep(timeoutSecs * 1000).then(() => {
@@ -565,31 +588,60 @@ export class SlackBackend {
   }
 
   /** listen(channels, as, onLine, onProblem): the Socket Mode event stream, ONE
-   *  JSON line per message as the local backend emits. Resolves when the
-   *  underlying socket disconnects cleanly. */
+   *  JSON line per message as the local backend emits. A connection that ONCE
+   *  worked keeps its backoff and RECONNECTS when it drops; a connection that
+   *  NEVER once succeeded FAILS (returns 1) instead of retrying a refusal into
+   *  silence — a broken app token must not scroll past an unattended watch.
+   *  The healthy stream never resolves; the only terminating return is 1. */
   async listen(
     channels: string[],
     as: string,
     onLine: (d: Delivery) => void,
     onProblem: (p: string) => void,
     statusTts?: ReadonlySet<string>,
-  ): Promise<void> {
+  ): Promise<number> {
     const wantsAll = channels.length === 0;
-    await new Promise<void>((resolve) => {
+    let everConnected = false;
+    let backoff = RECONNECT_BACKOFF;
+    for (;;) {
+      const opened = await this.listenOnce(channels, wantsAll, as, onLine, onProblem, statusTts);
+      if (opened) everConnected = true;
+      // The FIRST connection could not be established: scramble could not look,
+      // so it fails rather than retrying the same refusal forever. 64 is the
+      // quiet-channel code; 1 is "scramble could not look".
+      if (!opened && !everConnected) return 1;
+      // A connection that worked then dropped is reconnected with backoff.
+      await this.sleep(backoff);
+      backoff = Math.min(backoff * 2, MAX_RECONNECT_BACKOFF);
+    }
+  }
+
+  /** Connect once, deliver events until the socket closes, and report whether
+   *  the OPEN established. TRUE when the connection came up (even if it later
+   *  dropped); FALSE when the open itself failed. A dropped connection keeps
+   *  the loop alive with backoff. */
+  private listenOnce(
+    channels: string[],
+    wantsAll: boolean,
+    as: string,
+    onLine: (d: Delivery) => void,
+    onProblem: (p: string) => void,
+    statusTts?: ReadonlySet<string>,
+  ): Promise<boolean> {
+    return new Promise((resolve) => {
+      let established = false;
       void this.connectSocket().then(
         (c) => {
+          established = true;
           c.socket.onmessage = (raw) =>
             this.routeFrame(raw, c.socket, (ev) => this.deliver(ev, channels, as, wantsAll, statusTts, onLine, onProblem));
-          c.socket.onclose = () => resolve();
+          c.socket.onclose = () => resolve(established);
         },
         (e) => {
-          onProblem(e instanceof Error ? e.message : String(e));
-          // A failed connect means no stream: report and let listen end, so a
-          // watch with a bad token does not hang forever.
-          resolve();
+          onProblem(this.connectRefused(e));
+          resolve(false);
         },
       );
     });
-    return;
   }
 }
