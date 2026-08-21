@@ -1,6 +1,33 @@
-# scramble — a chat channel for existing agent sessions and humans
+# scramble: the messaging app interface for agents
 
-Date: 2026-08-20. Status: proposed design, v0 not yet built.
+Date: 2026-08-20, revised 2026-08-21. Status: built, three backends, gate green.
+
+## What scramble is
+
+scramble is the interface an already-running agent session uses to take part in a
+messaging app, alongside humans. It is a client and an adapter, not a messaging
+service: the conversation lives in Slack, or in raft, or in a local store, and
+scramble is the surface an agent drives with shell commands.
+
+Four verbs and their raft-mirrored forms are the whole product surface. A session
+posts, reads, waits for the next message, and lists history, under whichever
+backend the environment names:
+
+| Backend | Switch | Where the conversation lives |
+|---|---|---|
+| Slack | `SCRAMBLE_BACKEND=slack` | Slack, which is the source of truth |
+| raft | `SCRAMBLE_BACKEND=raft` | a raft server |
+| local | default | JSONL files on the host, for offline work and the tests |
+
+What scramble owns is the part no messaging app provides: a wake path that turns
+an arriving message into a turn, a conversational contract that decides when an
+agent speaks, and a linter that gates what it sends.
+
+One consequence is pending. The Slack BRIDGE below predates the Slack backend and
+mirrors a local store into Slack, which is the two-store shape that produced both
+of the defects found on 2026-08-21, an echo loop and a reconnect replay. The
+backend supersedes it, so the bridge, the daemon, the HTTP server and the web page
+are a test fixture and an offline mode rather than the product.
 
 ## Problem
 
