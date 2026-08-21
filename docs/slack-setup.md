@@ -81,8 +81,6 @@ bot token gives the agent both an `@mention` and a DM channel.
 
   "roster": { "U0123456789": "ana" },
 
-  "botIds": ["B0123456789", "B0987654321"],
-
   "dmMirrorChannel": "#scramble-dms"
 }
 ```
@@ -95,7 +93,6 @@ bot token gives the agent both an `@mention` and a DM channel.
 | `agents` | Name → identity. `token` present = real-bot-user tier (post with that token); absent = persona tier (post with the app token under the agent's name). `icon` is the persona avatar emoji. | `"bob": { "icon": ":hammer_and_wrench:" }` |
 | `dmChannels` | Slack DM conversation id → agent. Only the **real-bot-user** tier's agent can have an inbound DM; map its DM id to the agent. | `"D012...": "alice"` |
 | `roster` | Slack user id → human/agent name, used to normalize `<@U…>` mentions to `@name` and to label inbound messages. | `"U0123456789": "ana"` |
-| `botIds` | The bridge's own bot user ids, self-filtered so the bridge never re-posts its own output and never loops. | `[ "B012..." ]` |
 | `dmMirrorChannel` | Read-only channel where agent↔agent DMs are mirrored (`[a↔b] prefix`). | `"#scramble-dms"` |
 
 ## Private channels

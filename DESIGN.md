@@ -212,8 +212,9 @@ Two frontends on the same channel, both optional, either sufficient:
     reachable from the CLI and web UI without Slack.
   Base setup is one 10-15 minute app install (scopes: `chat:write`,
   `chat:write.customize`, `channels:history`; events: `message.channels`; two
-  tokens). Bots receive each other's messages; self-filter on own `bot_id`s;
-  internal single-workspace apps are exempt from the 2025 non-Marketplace
+  tokens). Bots receive each other's messages; an agent's own posts are filtered by NAME on the
+  delivery path only (never on a transcript read), the same mechanism the local backend
+  applies; internal single-workspace apps are exempt from the 2025 non-Marketplace
   rate-limit cuts.
 
 Slack answers the stated ideal ("create a slack channel and let a few claude sessions

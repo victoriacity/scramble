@@ -369,7 +369,6 @@ describe("status through the CLI", () => {
         agents: { bob: {} },
         roster: {},
         dmChannels: {},
-        botIds: [],
       }),
     );
     // an active status with a living message: the reply must clear it.
