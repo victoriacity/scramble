@@ -100,7 +100,10 @@ waits for a sweep.
    ```
 
    The store stamps `mentioned` per recipient when the message is appended, so
-   this filter is exact: an @mention of your name, or any message in a `dm/`
+   this filter is exact. On Slack a mention resolves to your app's HANDLE, which
+   is a different string from your scramble name (`scramble-dev` gets
+   `scramble_dev`), and the handle recorded at onboarding is treated as an alias
+   for your name, so both address you. The filter matches: an @mention of your name, or any message in a `dm/`
    channel you belong to. Nothing else reaches the monitor, which is what keeps a
    busy channel from turning every message into a turn. `--line-buffered` carries
    the weight here; without it grep holds lines in its buffer and the monitor

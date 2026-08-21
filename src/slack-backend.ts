@@ -84,7 +84,7 @@ export interface SlackBackendConfig {
   /** channel name -> Slack channel id. */
   channels: Record<string, string>;
   /** agent name -> { token?: per-agent bot token, appToken?: per-agent app-level token }. */
-  agents: Record<string, { token?: string; appToken?: string }>;
+  agents: Record<string, { token?: string; appToken?: string; handle?: string }>;
   /** slack user id -> name, for <@U…> -> @name normalization. */
   roster: Record<string, string>;
   /** DM channel id -> agent whose bot that DM belongs to. */
@@ -187,7 +187,7 @@ export class SlackBackend {
   private readonly dmChannels: Record<string, string>;
   private readonly channelById: Record<string, string>;
   private readonly channels: Record<string, string>;
-  private readonly agents: Record<string, { token?: string; appToken?: string }>;
+  private readonly agents: Record<string, { token?: string; appToken?: string; handle?: string }>;
   private readonly roster: Record<string, string>;
   private readonly filesDir: string;
   /** Cache of users.info answers so a repeat unknown id never re-queries. The
@@ -234,6 +234,25 @@ export class SlackBackend {
   /** The app-level token (xapp-) the acting agent's SOCKET connect uses: the
    *  agent's own per-agent appToken when present, otherwise the top-level
    *  default, so a single-app config keeps working unchanged. */
+  /** Does this line address that agent? Slack resolves `<@U…>` to the app's
+   *  HANDLE, which is a different string from the agent's scramble name: the
+   *  handle for `scramble-dev` is `scramble_dev`, so a real mention arrived with
+   *  `mentioned:false` and the tier-one wake path, which filters on
+   *  `"mentioned":true`, slept through it. The handle recorded on the agent's
+   *  config entry is an ALIAS for its name. */
+  /** Every name this agent answers to: its scramble name and, when recorded,
+   *  its Slack handle. PUBLIC because `message check` in the CLI does its own
+   *  delivery filtering and needs the same answer; two copies of "who is this
+   *  agent" is how the handle mismatch reached three places at once. */
+  identities(agent: string): string[] {
+    const handle = this.agents[agent]?.handle;
+    return handle !== undefined && handle !== "" && handle !== agent ? [agent, handle] : [agent];
+  }
+
+  private addressesAgent(mentions: string[], agent: string): boolean {
+    return this.identities(agent).some((id) => mentions.includes(id));
+  }
+
   private appTokenFor(agent: string): string {
     return this.agents[agent]?.appToken ?? this.appToken ?? "";
   }
@@ -398,7 +417,7 @@ export class SlackBackend {
       text,
       id: ts,
       mentions,
-      mentioned: mentions.includes(as),
+      mentioned: this.addressesAgent(mentions, as),
       ...(thread !== undefined ? { thread } : {}),
     };
     if (dl.files.length > 0) delivery.files = dl.files;

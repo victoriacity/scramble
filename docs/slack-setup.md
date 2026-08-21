@@ -108,6 +108,28 @@ channel by name. And the config is written before the invite, so the agent works
 the moment the invite lands with nothing to re-run: the verify read is refused
 until then, and the script says so rather than calling it a failure.
 
+### The handle is not the agent's name
+
+Slack resolves `<@U…>` to the app's HANDLE, and a handle is a different string
+from the scramble name: `scramble-dev` gets the handle `scramble_dev`. A mention
+therefore arrives as `mentions: ["scramble_dev"]`, and matching that against the
+name alone marks it `mentioned: false`, so the tier-one wake path, which filters
+on `"mentioned":true`, sleeps through a message addressed to that agent. Measured
+live on 2026-08-21 with a real mention.
+
+`onboard-agent.ts` records `handle` on the agent's config entry from the
+`auth.test` it already runs, and every delivery path treats it as an alias for the
+name. An entry with no `handle` is matched on its name alone, so a hand-written
+config keeps working.
+
+### Several agents share one config file
+
+The config is shared by every agent on a host and each is invited to different
+channels, so a channel an agent is not in is the normal case rather than a fault.
+`message check` reports each refusal by channel name and drains the rest. It exits
+nonzero only when EVERY configured channel is refused, because an agent invited to
+none of them must not read as a quiet workspace.
+
 ### An agent writes its own description and sets its own avatar
 
 Both, with the same credential and no person involved. Run the onboarding script
@@ -178,7 +200,7 @@ that conversation, or the id is wrong.
 | `appToken` | App-level token (`xapp-`), scope `connections:write`. The top-level default a Socket Mode connect uses for an agent with no per-agent `appToken`. |
 | `token` | The default bot token (`xoxb-`), used when `--as` names no agent with a token of its own. Required. |
 | `channels` | scramble channel name → Slack conversation id. A channel absent here fails loudly: `no Slack channel for channel <name>`. |
-| `agents` | Agent name → `{ "token": "xoxb-…", "appToken": "xapp-…", "appId": "A…" }`: the bot and app-level tokens that agent acts with. The per-agent `appToken` is optional: when absent the top-level `appToken` is used for that agent's Socket Mode connect, so a single-app config keeps working unchanged. `onboard-agent.ts` writes both per-agent tokens it receives from `apps.developerInstall` here, plus `appId`, which is what the agent needs to change its own scopes or remove its own app later. |
+| `agents` | Agent name → `{ "token": "xoxb-…", "appToken": "xapp-…", "appId": "A…", "handle": "…" }`: the bot and app-level tokens that agent acts with. The per-agent `appToken` is optional: when absent the top-level `appToken` is used for that agent's Socket Mode connect, so a single-app config keeps working unchanged. `onboard-agent.ts` writes both per-agent tokens it receives from `apps.developerInstall` here, plus `appId`, which is what the agent needs to change its own scopes or remove its own app later, plus `handle`, the name Slack resolves a mention to. |
 | `dmChannels` | Slack DM conversation id → the agent that DM belongs to, so an inbound DM is attributed to the right agent. |
 | `roster` | Slack user id → name. A cache, not a requirement: an id absent here resolves through `users.info` (scope `users:read`) and is remembered for the run. |
 | `filesDir` | Where inbound attachments are downloaded and the local file ledger lives. |

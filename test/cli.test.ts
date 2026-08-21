@@ -1329,6 +1329,105 @@ describe("channel join on the slack backend", () => {
   });
 });
 
+describe("message check across a config several agents share", () => {
+  // Measured live on 2026-08-21: scramble-dev was invited to one channel of the
+  // four in the config, and `message check` answered `read failed:
+  // channel_not_found` and drained NOTHING, which a sweeping agent cannot tell
+  // from a quiet workspace.
+  function checkIo(cwd: string, fetch: (u: string) => Promise<Response>): { io: Io; writes: string[]; errs: string[] } {
+    const writes: string[] = [];
+    const errs: string[] = [];
+    return {
+      io: {
+        write: (l) => writes.push(l),
+        writeErr: (l) => errs.push(l),
+        fetch: (input) => fetch(String(input)),
+        env: () => undefined,
+        cwd: () => cwd,
+        sleep: async () => {},
+        serve: async () => 0,
+        createSocket: () => ({ send: () => {}, close: () => {}, onopen: null, onmessage: null, onclose: null, onerror: null }),
+      },
+      writes,
+      errs,
+    };
+  }
+
+  const line = (ts: string, text: string) => ({ ts, user: "U111", text });
+
+  test("an inaccessible channel is reported and the readable ones still drain", async () => {
+    const cwd = scratchDir("check-mixed");
+    writeSlackConfig(cwd, {
+      token: "xoxb-d",
+      channels: { mine: "C_MINE", theirs: "C_THEIRS" },
+      agents: { dev: { token: "T_DEV", handle: "dev_bot" } },
+      roster: { U111: "andrew" },
+    });
+    const { io, writes, errs } = checkIo(cwd, async (u) => {
+      if (u.includes("C_THEIRS")) return new Response(JSON.stringify({ ok: false, error: "channel_not_found" }), { status: 200 });
+      if (u.includes("conversations.history")) {
+        return new Response(JSON.stringify({ ok: true, messages: [line("9.1", "@dev_bot ping")] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    });
+    expect(await main(["message", "check", "--as", "dev", "--backend", "slack"], io)).toBe(0);
+    expect(writes).toHaveLength(1);
+    const said = errs.join(" ");
+    expect(said).toContain("theirs");
+    expect(said).toContain("channel_not_found");
+  });
+
+  test("a mention of the agent's HANDLE marks the line mentioned", async () => {
+    const cwd = scratchDir("check-handle");
+    writeSlackConfig(cwd, {
+      token: "xoxb-d",
+      channels: { mine: "C_MINE" },
+      agents: { dev: { token: "T_DEV", handle: "dev_bot" } },
+      roster: { U111: "andrew" },
+    });
+    const { io, writes } = checkIo(cwd, async (u) => {
+      if (u.includes("conversations.history")) {
+        return new Response(JSON.stringify({ ok: true, messages: [line("9.1", "@dev_bot can you see this")] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    });
+    expect(await main(["message", "check", "--as", "dev", "--backend", "slack"], io)).toBe(0);
+    const m = JSON.parse(writes[0]!) as { mentions: string[]; mentioned: boolean };
+    expect(m.mentions).toEqual(["dev_bot"]);
+    expect(m.mentioned).toBe(true);
+  });
+
+  test("the agent's own line, which arrives under its HANDLE, is not drained back", async () => {
+    const cwd = scratchDir("check-self");
+    writeSlackConfig(cwd, {
+      token: "xoxb-d",
+      channels: { mine: "C_MINE" },
+      agents: { dev: { token: "T_DEV", handle: "dev_bot" } },
+      roster: { U111: "dev_bot" },
+    });
+    const { io, writes } = checkIo(cwd, async (u) => {
+      if (u.includes("conversations.history")) {
+        return new Response(JSON.stringify({ ok: true, messages: [line("9.1", "my own post")] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    });
+    expect(await main(["message", "check", "--as", "dev", "--backend", "slack"], io)).toBe(0);
+    expect(writes).toHaveLength(0);
+  });
+
+  test("every configured channel refused is a nonzero exit, never a silent quiet", async () => {
+    const cwd = scratchDir("check-none");
+    writeSlackConfig(cwd, {
+      token: "xoxb-d",
+      channels: { a: "C_A", b: "C_B" },
+      agents: { dev: { token: "T_DEV", handle: "dev_bot" } },
+    });
+    const { io, errs } = checkIo(cwd, async () => new Response(JSON.stringify({ ok: false, error: "channel_not_found" }), { status: 200 }));
+    expect(await main(["message", "check", "--as", "dev", "--backend", "slack"], io)).toBe(1);
+    expect(errs.join(" ")).toContain("none of the 2 configured channel(s)");
+  });
+});
+
 function writeSlackConfig(cwd: string, cfg: Record<string, unknown>): void {
   mkdirSync(join(cwd, ".scramble"), { recursive: true });
   writeFileSync(join(cwd, ".scramble", "slack.json"), JSON.stringify(cfg));

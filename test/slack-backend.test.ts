@@ -1407,3 +1407,58 @@ describe("acting-agent credentials", () => {
     expect(r.error).toContain("token");
   });
 });
+
+describe("a mention of the agent's Slack handle addresses the agent", () => {
+  // Slack resolves <@U…> to the app's HANDLE, and a handle is not a scramble
+  // name: the handle for `scramble-dev` is `scramble_dev`. Measured live on
+  // 2026-08-21, a real mention arrived as mentions:["scramble_dev"] with
+  // mentioned:false, so the tier-one wake path, which filters on
+  // '"mentioned":true', slept through a message addressed to that agent.
+  async function deliver(agents: SlackBackendConfig["agents"], as: string, text: string) {
+    const h = make({ agents, roster: { U111: "andrew" } });
+    const lines: Array<Record<string, unknown>> = [];
+    const p = h.backend.listen(["general"], as, (d) => lines.push(d as unknown as Record<string, unknown>), () => {});
+    await pump();
+    emit(h, msg({ text }));
+    await pump(5);
+    void p;
+    return lines;
+  }
+
+  test("mentioned is true when the line names the handle rather than the name", async () => {
+    const lines = await deliver(
+      { "scramble-dev": { token: "T_DEV", handle: "scramble_dev" } },
+      "scramble-dev",
+      "@scramble_dev can you see my message",
+    );
+    expect(lines).toHaveLength(1);
+    expect(lines[0]!.mentions).toEqual(["scramble_dev"]);
+    expect(lines[0]!.mentioned).toBe(true);
+  });
+
+  test("the scramble name still addresses the agent", async () => {
+    const lines = await deliver(
+      { "scramble-dev": { token: "T_DEV", handle: "scramble_dev" } },
+      "scramble-dev",
+      "@scramble-dev over here",
+    );
+    expect(lines[0]!.mentioned).toBe(true);
+  });
+
+  test("another agent's handle does NOT address this one", async () => {
+    const lines = await deliver(
+      {
+        "scramble-dev": { token: "T_DEV", handle: "scramble_dev" },
+        "other-agent": { token: "T_OTH", handle: "other_agent" },
+      },
+      "scramble-dev",
+      "@other_agent your turn",
+    );
+    expect(lines[0]!.mentioned).toBe(false);
+  });
+
+  test("an agent with no recorded handle is matched on its name alone", async () => {
+    const lines = await deliver({ alice: { token: "T_A" } }, "alice", "@alice hello");
+    expect(lines[0]!.mentioned).toBe(true);
+  });
+});

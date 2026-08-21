@@ -45,6 +45,7 @@ const SCOPES: Array<[string, string]> = [
   ["channels:history", "read a public channel"],
   ["groups:history", "read a private channel"],
   ["im:history", "read a DM"],
+  ["im:read", "FIND your own DM conversation. Without it conversations.list types=im answers missing_scope, so a human's DM exists and the agent cannot locate it"],
   ["im:write", "open and write a DM, so a human can talk to this agent alone"],
   ["users:read", "resolve <@U…> to a name; without it a mention matches no agent"],
   ["channels:read", "name a channel by its id, and find a public channel by name"],
@@ -329,8 +330,58 @@ if (existingAppId !== undefined && existingAppId !== "") {
     );
   }
   if (iconPath !== undefined) await setIcon(existingAppId, iconPath);
-  if (description === undefined && longDescription === undefined && iconPath === undefined) {
-    console.log("onboard: nothing to change. Pass --description, --long-description or --icon.");
+
+  // SCOPES ARE RECONCILED EVERY RUN, with no flag. The list above is what a
+  // scramble agent needs, so an app installed before a scope was added is behind
+  // and its owner cannot tell from the outside: the missing scope shows up as a
+  // one-word error from an unrelated call. Comparing and reinstalling is cheap,
+  // and the reinstall hands back the token carrying the new scope.
+  const exported = await api(token, "apps.manifest.export", { app_id: existingAppId });
+  const cur = (exported.manifest ?? {}) as Record<string, unknown>;
+  const curScopes = new Set(
+    ((((cur.oauth_config ?? {}) as Record<string, unknown>).scopes as Record<string, unknown> | undefined)
+      ?.bot as string[] | undefined) ?? [],
+  );
+  const want = SCOPES.map(([sc]) => sc);
+  const missing = want.filter((sc) => !curScopes.has(sc));
+  if (missing.length > 0) {
+    console.log(`onboard: this app is missing ${missing.length} scope(s): ${missing.join(", ")}`);
+    const oauth = { ...((cur.oauth_config ?? {}) as Record<string, unknown>) };
+    oauth.scopes = { ...((oauth.scopes ?? {}) as Record<string, unknown>), bot: want };
+    await api(token, "apps.manifest.update", { app_id: existingAppId, manifest: { ...cur, oauth_config: oauth } });
+    const re = await api(token, "apps.developerInstall", {
+      app_id: existingAppId,
+      bot_scopes: want,
+      team_id: team,
+    });
+    const fresh = (re.api_access_tokens as { bot?: string; app_level?: string } | undefined) ?? {};
+    if (fresh.bot !== undefined && fresh.bot !== "") {
+      const cfgP =
+        process.env.SCRAMBLE_SLACK_CONFIG ??
+        join(process.env.HOME ?? ".", ".config", "scramble", "slack.json");
+      const c = JSON.parse(readFileSync(cfgP, "utf8")) as {
+        agents?: Record<string, { token?: string; appToken?: string; appId?: string; handle?: string }>;
+      };
+      c.agents = c.agents ?? {};
+      c.agents[agent] = {
+        ...(c.agents[agent] ?? {}),
+        token: fresh.bot,
+        ...(fresh.app_level !== undefined && fresh.app_level !== "" ? { appToken: fresh.app_level } : {}),
+        appId: existingAppId,
+      };
+      writeFileSync(cfgP, `${JSON.stringify(c, null, 2)}\n`);
+      chmodSync(cfgP, 0o600);
+      console.log("onboard: reinstalled with the full scope list, config updated with the fresh token");
+    }
+  }
+
+  if (
+    description === undefined &&
+    longDescription === undefined &&
+    iconPath === undefined &&
+    missing.length === 0
+  ) {
+    console.log("onboard: nothing to change. Scopes already match, and no --description or --icon was passed.");
   }
   process.exit(0);
 }
@@ -387,7 +438,7 @@ type Cfg = {
   token?: string;
   appToken?: string;
   channels?: Record<string, string>;
-  agents?: Record<string, { token?: string; appToken?: string; appId?: string }>;
+  agents?: Record<string, { token?: string; appToken?: string; appId?: string; handle?: string }>;
   roster?: Record<string, string>;
   dmChannels?: Record<string, string>;
 };
@@ -402,6 +453,11 @@ cfg.agents = {
     token: botToken,
     ...(appToken !== undefined && appToken !== "" ? { appToken } : {}),
     appId,
+    // The HANDLE, which is not the agent's name: Slack resolves a mention to
+    // `scramble_dev` while this agent is `scramble-dev`, and without recording
+    // the alias a real mention arrives with mentioned:false and the wake path
+    // sleeps through it.
+    handle: String(who.user),
   },
 };
 cfg.token = cfg.token ?? botToken;

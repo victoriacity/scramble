@@ -519,6 +519,7 @@ async function historyRead(
     const r = await s.backend.history(channel, since > 0 ? String(since) : undefined, statusTts(statusTracker(io, "slack")), nameFor(flags, io));
     for (const p of r.problems) io.writeErr(`slack: ${p}`);
     if (r.code !== 0) {
+      // ONE channel was asked for by name here, so its refusal IS the answer.
       io.writeErr(`read failed: ${r.error}`);
       return 1;
     }
@@ -621,7 +622,9 @@ export function loadSlackConfig(io: Io): SlackBackendConfig | null {
     const raw = readFileSync(slackConfigPath(io), "utf8");
     const j = JSON.parse(raw) as Record<string, unknown>;
     const channels = j.channels as Record<string, string> | undefined;
-    const agents = j.agents as Record<string, { token?: string; icon?: string; appToken?: string }> | undefined;
+    const agents = j.agents as
+      | Record<string, { token?: string; icon?: string; appToken?: string; handle?: string }>
+      | undefined;
     if (!channels || typeof channels !== "object" || !agents || typeof agents !== "object") {
       return null;
     }
@@ -903,6 +906,9 @@ async function messageCheckSlack(flags: Map<string, string>, io: Io): Promise<nu
   const started = readSlackCursor(io, name);
   const next = { ...started };
   const tts = statusTts(status);
+  const ids = s.backend.identities(name);
+  let unreachable = 0;
+  let drained = 0;
   for (const channel of Object.keys(cfg.channels).sort()) {
     const cursor = started[channel];
     // `oldest` is inclusive in Slack, so re-filter to strictly-newer lines: the
@@ -910,8 +916,15 @@ async function messageCheckSlack(flags: Map<string, string>, io: Io): Promise<nu
     const r = await s.backend.history(channel, cursor === undefined ? undefined : cursor, tts, name);
     for (const p of r.problems) io.writeErr(`slack: ${p}`);
     if (r.code !== 0) {
-      io.writeErr(`read failed: ${r.error}`);
-      return 1;
+      // ONE UNREACHABLE CHANNEL MUST NOT SILENCE THE REST. This loop walks EVERY
+      // configured channel, the config is shared by every agent on the host, and
+      // each is invited to different ones, so a channel this agent is not in is
+      // the normal case rather than a fault. Failing the whole drain there meant
+      // an agent with one uninvited channel drained NOTHING and said
+      // `read failed`, which a sweeping agent cannot tell from a quiet channel.
+      io.writeErr(`slack: ${channel}: ${r.error}`);
+      unreachable += 1;
+      continue;
     }
     const fresh =
       cursor === undefined ? r.messages : r.messages.filter((m) => slackTs(m.ts) > slackTs(cursor));
@@ -920,7 +933,10 @@ async function messageCheckSlack(flags: Map<string, string>, io: Io): Promise<nu
       // The cursor advances past EVERY fresh line, including a skipped one, so
       // a repeated sweep never re-reads an own message forever.
       newest = newerTs(newest, m.ts);
-      const mentioned = m.mentions.includes(name);
+      // The SAME identity set the backend delivers with: a mention of this
+      // agent's Slack handle addresses this agent, and computing it here from
+      // the name alone is what made a real mention arrive with mentioned:false.
+      const mentioned = ids.some((id) => m.mentions.includes(id));
       const line = { ...m, mentioned };
       // `message check` is a DELIVERY verb: its drain hands the agent what has
       // ARRIVED FOR it, and its own post has not arrived for anybody. Skip the
@@ -928,13 +944,26 @@ async function messageCheckSlack(flags: Map<string, string>, io: Io): Promise<nu
       // comparison `listen` and `next` use, so an agent sweeping does not read
       // its own last message as new traffic. `message read` (a transcript)
       // keeps every line — only the DELIVERY drain filters.
-      if (m.from === name) continue;
+      // `from` is the RESOLVED sender, which for an app is its handle, so
+      // comparing against the scramble name alone let an agent drain its own
+      // messages back.
+      if (ids.includes(m.from)) continue;
       if (status !== undefined) await settleStatus(deliverStatus(status, line, name), io);
       io.write(JSON.stringify(line));
     }
     if (newest !== undefined) next[channel] = newest;
+    drained += 1;
   }
   writeSlackCursor(io, name, next);
+  // Every configured channel refused is a REPORT, never a silent exit 0: an
+  // agent invited to none of them must not read as a quiet workspace.
+  if (drained === 0 && unreachable > 0) {
+    io.writeErr(
+      `message check: none of the ${unreachable} configured channel(s) are readable by ${name}. ` +
+        `Ask a member to run /invite for the channel this agent belongs in.`,
+    );
+    return 1;
+  }
   return 0;
 }
 
