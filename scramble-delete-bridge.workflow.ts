@@ -1,6 +1,6 @@
 export const meta = {
-  name: 'scramble-delete-bridge',
-  description: 'Delete the Slack bridge and the web page: the Slack backend supersedes them',
+  name: 'scramble-delete-bridge-and-raft',
+  description: 'Delete the Slack bridge, the web page, and the raft backend',
   phases: [{ title: 'delete' }],
 }
 
@@ -20,6 +20,16 @@ This is a NET DELETION. Success is measured in lines removed with the gate still
 so resist re-adding anything as a "compatibility shim".
 
 DELETE:
+0. THE RAFT BACKEND: \`src/raft.ts\`, \`test/raft.test.ts\`, the
+   \`SCRAMBLE_BACKEND=raft\` arm of the backend switch, and every raft row in the
+   backend tables of DESIGN.md, PLAN.md, README.md and the skill. Operator, 2026-08-21:
+   raft and scramble are PARALLEL ALTERNATIVES, so a raft backend inside scramble is one
+   product wrapping its competitor for no gain.
+   KEEP the raft-mirrored GRAMMAR: \`message send\`, \`message check\`, \`message read\`,
+   \`profile show/update\`, \`channel join\`, and \`--target\`. Those exist so an agent
+   learns one command set across both tools, which survives the backend going. Keep
+   PLAN.md's mapping table with a line saying the grammar came from raft and stays while
+   the backend does not.
 1. \`src/slack.ts\` (the bridge) and \`test/slack.test.ts\`.
 2. \`web/index.html\` and \`test/web.test.ts\`. Slack and raft are the human surfaces, so
    the built-in page is dead weight; the daemon's \`GET /\` route goes with it.
@@ -41,6 +51,9 @@ KEEP, and this is the part to get right:
   postToChannel, dryRun as a bridge concept) go.
 - The local store, the daemon and \`src/server.ts\` STAY as the offline backend and the
   test fixture. Do not delete them in this unit.
+- Two backends remain when you are done: slack and local. Every verb must work under
+  both, and the switch must report a clear error for an unknown backend name, naming the
+  two that exist.
 - Any thread or attachment work that landed in \`src/slack.ts\` must be PORTED to
   \`src/slack-backend.ts\` before the file goes, if the backend lacks it. Losing a feature
   to a deletion is a defect, so check both files for thread_ts handling and mention

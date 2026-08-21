@@ -28,6 +28,11 @@ not ask the agent to describe its work: the text is scramble's, short and fixed
 ("working"), because agent-authored progress prose is a message pretending to be a
 status.
 
+CONCURRENCY: other units are in flight. Do NOT touch src/slack.ts or src/raft.ts, both
+of which another unit is deleting. Put the status logic in a NEW src/status.ts and keep
+the hooks in src/cli.ts and src/slack-backend.ts minimal, so a concurrent merge rebases
+cleanly.
+
 DELIVER:
 
 1. SET ON DELIVERY. When a verb delivers a message addressed to this agent, set the
@@ -46,8 +51,6 @@ DELIVER:
      when the target is an assistant thread, and otherwise a LIVING MESSAGE: post once,
      remember the ts, \`chat.update\` it on change, delete it on clear, and replace its
      text when delete is refused. One living message per channel, never a second.
-   - raft: a no-op that reports on stderr what it would have shown. raft's own activity
-     surface is documented as unreliable for external agents, so do not invent an API.
    - local: record it so a test can read it back.
 5. OPT OUT with \`SCRAMBLE_STATUS=off\`, one switch, for an operator who wants silence.
 

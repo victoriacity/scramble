@@ -25,7 +25,13 @@ DELIVER:
    \`files?: { id: string; name: string; mime: string; size?: number; path?: string }[]\`.
    Absent when a message carries no file, so every existing line shape is unchanged.
 
-2. INBOUND, in src/slack.ts and src/slack-backend.ts. When a Slack message event carries
+CONCURRENCY: other units are in flight right now. Do NOT touch src/slack.ts (another
+unit is deleting it, so work put there is lost) and do NOT touch src/raft.ts (also being
+deleted). Put file logic in a NEW src/attachments.ts and keep the edits to
+src/slack-backend.ts and src/cli.ts as small as the feature allows, so a concurrent
+merge rebases cleanly.
+
+2. INBOUND, in src/slack-backend.ts only. When a Slack message event carries
    \`files\`, download each one and put it on the line:
    - fetch the file's \`url_private\` with the bot token in an Authorization header, which
      is what \`files:read\` grants; a plain unauthenticated GET returns HTML, not bytes,
