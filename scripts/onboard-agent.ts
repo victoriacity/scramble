@@ -65,7 +65,10 @@ const SCOPES: Array<[string, string]> = [
   ["reactions:read", "see which reactions a message already carries, so a reply does not repeat what a reaction already said"],
   ["assistant:write", "the automatic working status on an assistant thread"],
 ];
-const BOT_EVENTS = ["message.channels", "message.groups", "message.im"];
+// member_joined_channel is here so an INVITE reaches the agent's inbox the way it
+// reaches a human's: being added to a channel is news, and without this event an
+// agent learns it was added only by overhearing later traffic.
+const BOT_EVENTS = ["message.channels", "message.groups", "message.im", "member_joined_channel"];
 
 /** Slack's own constraint, measured: a `long_description` under 175 characters
  *  is rejected with

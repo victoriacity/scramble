@@ -30,6 +30,7 @@ const USERS_INFO_URL = "https://slack.com/api/users.info";
 const AUTH_TEST_URL = "https://slack.com/api/auth.test";
 const REACT_URL = "https://slack.com/api/reactions.add";
 const CONV_INFO_URL = "https://slack.com/api/conversations.info";
+const CONV_LIST_URL = "https://slack.com/api/conversations.list";
 
 /** Cap on the number of threaded ROOTS expanded per history call — the fan-out
  *  is bounded: one extra conversations.replies request per expanded root, on
@@ -57,6 +58,9 @@ export function isThreadRoot(m: SlackHistoryMessage): boolean {
  *  mapped to our line shape are read, deliberately. */
 export interface SlackInboundEvent {
   type?: string;
+  /** `member_joined_channel` carries the id of the member who joined and, when
+   *  someone added them, the inviter. */
+  inviter?: string;
   /** Slack message metadata; a scramble status carries STATUS_METADATA_TYPE. */
   metadata?: { event_type?: string };
   subtype?: string;
@@ -252,6 +256,8 @@ export class SlackBackend {
   private readonly threadCache = new Map<string, boolean>();
   /** Slack channel id -> its scramble name, for channels absent from the config. */
   private readonly channelNameCache = new Map<string, string>();
+  /** Channel name -> its Slack id, "" for a name this agent cannot reach. */
+  private readonly channelIdCache = new Map<string, string>();
   private readonly roster: Record<string, string>;
   private readonly filesDir: string;
   /** Cache of users.info answers so a repeat unknown id never re-queries. The
@@ -399,6 +405,60 @@ export class SlackBackend {
     return this.agents[agent]?.appToken ?? this.appToken ?? "";
   }
 
+  /** The acting agent's token when it has one, else the config default. Used for
+   *  a LOOKUP, where a refusal costs a name rather than a message, so falling
+   *  back is better than failing before the verb reports its own error. */
+  private tokenOrDefault(agent: string): string {
+    const t = this.agentToken(agent);
+    return t.ok ? t.token : this.token;
+  }
+
+  /** The Slack id for a channel NAME. The config's map wins; a name absent from
+   *  it is looked up among the conversations this agent is actually in.
+   *
+   *  The mirror of channelNameFor, and it was missing: after inbound resolution
+   *  landed, a peer measured 129 messages arriving from a channel whose name
+   *  `message read`, `send`, `react` and `channel join` all refused with "no
+   *  Slack channel for channel <name>". An agent could hear a room and not answer
+   *  in it. Cached, including the miss, so a wrong name costs one lookup. */
+  private async slackChannelFor(token: string, name: string): Promise<string | undefined> {
+    const mapped = this.channels[name];
+    if (mapped !== undefined) return mapped;
+    const cached = this.channelIdCache.get(name);
+    if (cached !== undefined) return cached === "" ? undefined : cached;
+    let cursor = "";
+    for (let page = 0; page < 10; page++) {
+      const q =
+        `${CONV_LIST_URL}?types=public_channel,private_channel&exclude_archived=true&limit=200` +
+        (cursor === "" ? "" : `&cursor=${encodeURIComponent(cursor)}`);
+      const r = await readOk<{
+        channels?: Array<{ id?: string; name?: string; is_member?: boolean }>;
+        response_metadata?: { next_cursor?: string };
+      }>(this.fetch, q, { headers: { authorization: `Bearer ${token}` } });
+      if (!r.ok) break;
+      for (const c of r.data.channels ?? []) {
+        if (c.name === name && typeof c.id === "string") {
+          this.channelIdCache.set(name, c.id);
+          return c.id;
+        }
+      }
+      cursor = r.data.response_metadata?.next_cursor ?? "";
+      if (cursor === "") break;
+    }
+    this.channelIdCache.set(name, "");
+    return undefined;
+  }
+
+  /** This agent's own Slack user id, from the roster the config already keeps
+   *  (id -> name), inverted against the agent's identities. Undefined when the
+   *  roster does not name it, in which case a join event cannot be told apart
+   *  from anyone else's and is left alone. */
+  private userIdFor(agent: string): string | undefined {
+    const names = this.identities(agent);
+    for (const [id, name] of Object.entries(this.roster)) if (names.includes(name)) return id;
+    return undefined;
+  }
+
   /** The scramble name for a Slack channel id. The config's mapping wins; a
    *  channel ABSENT from it is asked about through conversations.info, and the
    *  raw id stands in when even that is refused.
@@ -436,7 +496,7 @@ export class SlackBackend {
     emoji: string,
     as: string,
   ): Promise<{ ok: true } | { ok: false; error: string }> {
-    const slackChannel = this.channels[channel];
+    const slackChannel = await this.slackChannelFor(this.tokenOrDefault(as), channel);
     if (!slackChannel) return { ok: false, error: `no Slack channel for channel ${channel}` };
     const t = this.agentToken(as);
     if (!t.ok) return { ok: false, error: t.error };
@@ -462,7 +522,7 @@ export class SlackBackend {
     channel: string,
     as: string,
   ): Promise<{ ok: true; joined: boolean; handle: string; detail: string } | { ok: false; error: string }> {
-    const slackChannel = this.channels[channel];
+    const slackChannel = await this.slackChannelFor(this.tokenOrDefault(as), channel);
     if (!slackChannel) return { ok: false, error: `no Slack channel for channel ${channel}` };
     const t = this.agentToken(as);
     if (!t.ok) return { ok: false, error: t.error };
@@ -490,7 +550,7 @@ export class SlackBackend {
     as: string,
     thread?: string,
   ): Promise<{ ok: true } | { ok: false; error: string }> {
-    const slackChannel = this.channels[channel];
+    const slackChannel = await this.slackChannelFor(this.tokenOrDefault(as), channel);
     if (!slackChannel) return { ok: false, error: `no Slack channel for channel ${channel}` };
     const t = this.agentToken(as);
     if (!t.ok) return { ok: false, error: t.error };
@@ -594,6 +654,33 @@ export class SlackBackend {
     // conversations.replies per threaded row to compute a value nobody reads.
     wantThreadWake = false,
   ): Promise<{ delivery: Delivery | undefined; problems: string[] }> {
+    // AN INVITE IS NEWS. Being added to a channel reaches a human's attention, and
+    // an agent that learns it only by overhearing later traffic has already
+    // missed whatever it was added for (operator, 2026-08-22). Delivered as a
+    // line addressed to this agent, so the inbox wakes on it.
+    if (ev.type === "member_joined_channel") {
+      if (as === "" || ev.user === undefined || ev.user !== this.userIdFor(as)) {
+        return { delivery: undefined, problems: [] };
+      }
+      const ch = ev.channel;
+      if (ch === undefined) return { delivery: undefined, problems: [] };
+      const name = this.channelById[ch] ?? (await this.channelNameFor(token, ch));
+      const by = ev.inviter === undefined ? "" : ` by ${await this.resolveName(token, ev.inviter)}`;
+      const ts = ev.ts ?? new Date().toISOString();
+      return {
+        delivery: {
+          seq: 0,
+          ts,
+          channel: name,
+          from: "slack",
+          text: `You were added to ${name}${by}. Read what the channel is doing before you speak in it.`,
+          id: ts,
+          mentions: [],
+          mentioned: true,
+        },
+        problems: [],
+      };
+    }
     if (ev.type !== "message" || !ev.text || ev.text === "") return { delivery: undefined, problems: [] };
     // A status is never a message, and that holds for a PEER's status too.
     if (isStatusLine(ev)) return { delivery: undefined, problems: [] };
@@ -794,7 +881,7 @@ export class SlackBackend {
     // transcript and needs neither, and paying for them per row there is waste.
     forDelivery = false,
   ): Promise<{ code: 0 | 1; error?: string; messages: Message[]; problems: string[] }> {
-    const slackChannel = this.channels[channel];
+    const slackChannel = await this.slackChannelFor(this.tokenOrDefault(as ?? ""), channel);
     if (!slackChannel) return { code: 1, error: `no Slack channel for channel ${channel}`, messages: [], problems: [] };
     const t = this.agentToken(as ?? "");
     if (!t.ok) return { code: 1, error: t.error, messages: [], problems: [] };

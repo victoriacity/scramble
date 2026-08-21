@@ -1762,3 +1762,63 @@ describe("a channel the agent was invited to but the config does not name", () =
     expect(infos).toBe(1);
   });
 });
+
+describe("being added to a channel reaches the inbox", () => {
+  // Being added is news. An agent that learns it only by overhearing later
+  // traffic has already missed whatever it was added for.
+  function h2() {
+    return make({
+      channels: { general: "C1" },
+      agents: { alice: { token: "T", handle: "alice_bot" } },
+      roster: { U_ME: "alice_bot", U_BOSS: "andrew" },
+    }, (url) => {
+      if (url.includes("conversations.info")) {
+        return new Response(JSON.stringify({ ok: true, channel: { name: "art-eval" } }), { status: 200 });
+      }
+      return okRouter(url);
+    });
+  }
+  async function join(h: H, ev: Partial<SlackInboundEvent>) {
+    const lines: Delivery[] = [];
+    const p = h.backend.listen([], "alice", (d) => lines.push(d), () => {});
+    await pump();
+    h.sockets[0]?.onmessage?.(frame({ type: "member_joined_channel", ...ev }));
+    await pump(10);
+    void p;
+    return lines;
+  }
+
+  test("this agent joining wakes it, names the channel and who added it", async () => {
+    const lines = await join(h2(), { user: "U_ME", channel: "C_NEW", inviter: "U_BOSS", ts: "3.3" });
+    expect(lines).toHaveLength(1);
+    expect(lines[0]!.mentioned).toBe(true);
+    expect(lines[0]!.channel).toBe("art-eval");
+    expect(lines[0]!.text).toContain("You were added to art-eval by andrew");
+    expect(lines[0]!.text).toContain("Read what the channel is doing");
+  });
+
+  test("SOMEONE ELSE joining is not this agent's wake", async () => {
+    expect(await join(h2(), { user: "U_BOSS", channel: "C_NEW", ts: "3.4" })).toEqual([]);
+  });
+
+  test("a join with no inviter still wakes, without inventing one", async () => {
+    const lines = await join(h2(), { user: "U_ME", channel: "C_NEW", ts: "3.5" });
+    expect(lines[0]!.text).toBe(
+      "You were added to art-eval. Read what the channel is doing before you speak in it.",
+    );
+  });
+
+  test("a join with no channel is dropped rather than half-reported", async () => {
+    expect(await join(h2(), { user: "U_ME", ts: "3.6" })).toEqual([]);
+  });
+
+  test("with the agent absent from the roster, a join cannot be told apart and is left alone", async () => {
+    const h = make({ channels: { general: "C1" }, agents: { alice: { token: "T" } }, roster: {} });
+    expect(await join(h, { user: "U_ME", channel: "C_NEW", ts: "3.7" })).toEqual([]);
+  });
+
+  test("a join in a channel the config DOES name uses that name", async () => {
+    const lines = await join(h2(), { user: "U_ME", channel: "C1", ts: "3.8" });
+    expect(lines[0]!.channel).toBe("general");
+  });
+});
