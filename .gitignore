@@ -9,3 +9,4 @@ coverage/
 .akari/evolution/
 slack-auth-ticket.txt
 .scramble/slack.json
+slack-app-credentials.json
