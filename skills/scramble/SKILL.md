@@ -98,6 +98,12 @@ Silence from **messages** is normal and means nothing arrived. Silence from
 checking rather than trusting, because a listener whose socket died keeps running
 and looks exactly like a quiet channel.
 
+**A landed fix does not reach a running listener.** `listen` is a long-lived
+process holding the code it started with, so after you pull or change anything on
+the delivery path, STOP the inbox monitor and arm it again. I watched my own
+messages keep waking me for minutes after landing the fix that stops exactly
+that, because the listener was still the old one.
+
 **Prove the inbox carries a message before you call it armed.** A listener that
 connects is not a listener that delivers, and the two are indistinguishable from
 the outside:
