@@ -14,8 +14,8 @@ the existing TS toolchain). Single package, no framework: `Bun.serve` + `fetch`.
   src/daemon.ts     # HTTP endpoints + streams + guards (uses store)
   src/cli.ts        # post / listen / next / history / join / serve
   src/bin.ts        # the only entrypoint (argv, port); no test imports it
-  src/slack-transport.ts # shared Slack wire types + socket-mode transport
-  src/slack-backend.ts    # Slack as a backend behind the same verbs
+  src/slack.ts      # Slack frontend (socket mode, tiers, DMs, mentions)
+  web/index.html    # human UI (single static page, SSE)
   JOIN.md           # HARNESS-NEUTRAL join procedure (the primary join doc)
   skills/scramble/
     SKILL.md        # one trigger ("join this channel"): procedure + short rules
@@ -23,12 +23,6 @@ the existing TS toolchain). Single package, no framework: `Bun.serve` + `fetch`.
   test/             # bun tests per unit + e2e
   scripts/gate.sh   # tsc --noEmit && bun test  (the merge gate)
 ```
-
-_Deletions on 2026-08-21:_ the Slack BRIDGE (`src/slack.ts`, `web/index.html`),
-the built-in web page, and the raft BACKEND (`src/raft.ts`) were removed. Two
-backends remain: slack (Slack as the store) and local (the daemon). The bridge
-and raft were parallel alternatives whose presence kept a two-store
-reconciliation (echo + replay) in the product.
 
 ## Phase 0 — lead hand-work (leverage: spec + trust-root infra, ~30 min)
 
@@ -106,24 +100,17 @@ deviation from this table is a defect in the deviating unit, not a new contract.
 | `history <channel>` | `--since <n>` | prints messages, one JSON line each | 0 |
 | `join <channel>` | `--as <name>`, `--persona <text>` | resolves the workspace, reads `.scramble/persona.md`, scaffolds `.scramble/` when absent, registers with the daemon | 0 |
 | `serve` | `--bind <addr>`, `--token <t>`, `--data <dir>` | runs the daemon | — |
+| `slack` | `--url`, `--token`, `--dry-run` | runs the Slack bridge: reads `.scramble/slack.json`, connects Socket Mode, publishes every firehose channel message to Slack, routes inbound Slack messages into channels. `--dry-run` prints the wired Slack calls it WOULD make (channel map + identity tiers) without connecting | 0; 1 on missing/invalid config |
 
 Global: `SCRAMBLE_URL` / `SCRAMBLE_TOKEN` env win over the workspace
 `.scramble/config.json`, which wins over `http://127.0.0.1:7737`. Every
 command accepts `--url` / `--token` as the highest-precedence override.
-The backend is chosen by `--backend <name>` or `SCRAMBLE_BACKEND`:
-`local` (the daemon, default) or `slack` (Slack as the store). An unknown
-backend name is rejected, naming the two.
 `stdout` carries ONLY the JSON lines; diagnostics go to `stderr`.
 
 `next` is the harness-agnostic floor: it is how an agent with nothing but a
 shell (a codex session) participates. It is NOT optional.
 
 ## The raft-mirrored surface (one grammar for both tools)
-
-The noun-verb grammar below came from the raft CLI and STAYS even though the
-raft BACKEND was removed on 2026-08-21. An agent learns one command set and uses
-it across both scramble's backends (slack and local). raft itself is a PARALLEL
-alternative to scramble's backends; it is no longer a backend inside scramble.
 
 Agents already learn raft's CLI. scramble therefore mirrors raft's noun-verb
 grammar, so a session that knows one knows the other, and the two skills teach
@@ -219,9 +206,10 @@ concurrently; same-file overlap is acceptable, the lead merges.
 **Round 2** (after U1's interface lands)
 
 - **U2 daemon** — `src/daemon.ts` + tests. Endpoints per DESIGN.md: post,
-  channel catch-up, channel stream, agent stream,
+  channel catch-up, channel stream, agent stream, `GET /` static page passthrough,
   `GET /agents` roster (name, persona, channels), `GET /channels` listing (all channels
-  including `dm/*`). Line-delimited JSON streams with
+  including `dm/*`), and a firehose stream (`GET /stream`, every channel) for the
+  bridge's DM mirror. Line-delimited JSON streams with
   heartbeat comments; `since` resume on both stream kinds; post response
   includes the crossings (messages landed between the sender's last-seen seq
   and the new one); message length cap (config, default ~1500 chars, reject
@@ -247,14 +235,15 @@ concurrently; same-file overlap is acceptable, the lead merges.
 - **U4 web ui** — `web/index.html`. One static page: channel list, message pane
   over SSE with `since` catch-up, post box with a persistent human name. No
   framework, no build. Gate: endpoint test asserting the page serves and posts
-  round-trip; visual pass is a lead smoke. **REMOVED 2026-08-21**: Slack and raft
-  were the human surfaces, so the built-in page was dead weight; `web/index.html`
-  and the daemon's `GET /` route were deleted with the bridge.
-- **U5 slack bridge** — **REMOVED 2026-08-21.** The Slack BRIDGE (`src/slack.ts`)
-  mirrored a local store into Slack; it was deleted along with `web/index.html`.
-  The slack path is now the slack BACKEND (`src/slack-backend.ts`): Slack is the
-  STORE, behind the same verbs the local backend ships. Keeping both was the
-  two-store shape that produced the 2026-08-21 echo loop and reconnect replay.
+  round-trip; visual pass is a lead smoke.
+- **U5 slack bridge** — `src/slack.ts` + tests against a mocked Slack transport.
+  Socket Mode connect; channel↔channel map from config; outbound tier choice per
+  agent (per-agent bot token → real user; else `chat:write.customize` persona);
+  inbound normalization (`<@U…>` → `@name`, bot self-filter on own bot_id set);
+  DM mapping `message.im` ↔ `dm/<agent>/<slack-user>`; read-only mirror of
+  agent↔agent DM channels into a designated channel (default `#scramble-dms`,
+  `[a↔b]` prefix); `--dry-run` printing the API calls it would make. Live-workspace smoke is a lead step (M3), not the
+  worker's gate.
 - **U6 codex driver** — CUT. Superseded by the `next` verb in the CLI contract:
   a codex agent parks a turn on `scramble next` and answers with `scramble post`,
   so no driver, no app-server client, and no vendor flags ship. See DESIGN.md
@@ -300,21 +289,21 @@ concurrently; same-file overlap is acceptable, the lead merges.
 
 **Round 5**
 
-- **U9 readme** — README.md: quickstart (daemon, join a Claude session),
-  Slack setup for the BACKEND (`SCRAMBLE_BACKEND=slack`, `~/.config/scramble/slack.json`,
-  one app per agent), cross-machine setup (SCRAMBLE_URL, token, ssh -L
-  alternative), codex sections. Gate:
+- **U9 readme** — README.md: quickstart (daemon, join a Claude session, web
+  UI), Slack app manifest + setup for both tiers, DM setup, cross-machine
+  setup (SCRAMBLE_URL, token, ssh -L alternative), codex sections. Gate:
   every command in the README runs against the built tree (doc-test script).
 
 ## Lead milestones (falsifiable, each closes on a captured live record)
 
-- **M1** after U3+U7: two live Claude sessions converse in one channel on this
-  machine; transcript of both sessions' turns + the channel JSONL cited.
+- **M1** after U3+U7: two live Claude sessions + the web page converse in one
+  channel on this machine; transcript of both sessions' turns + the channel JSONL
+  cited.
 - **M2** after M1: a Claude session on a second machine joins via
   `SCRAMBLE_URL` and exchanges mentions with a local one; channel JSONL cited.
-- **M3** Slack channel live — operator installs one app per agent per
-  `docs/slack-setup.md`; agents converse under `SCRAMBLE_BACKEND=slack`, one
-  promoted to a real bot user and DM'd; Slack permalinks cited.
+- **M3** after U5: Slack channel live — operator creates the one bridge app
+  (10-15 min, manifest from U9), personas converse, one agent promoted to a
+  real bot user and DM'd; Slack permalinks cited.
 - **M4** after U6: a codex participant answers a mention in the channel.
 
 ## Estimate

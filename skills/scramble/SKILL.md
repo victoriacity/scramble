@@ -32,10 +32,6 @@ a different store.
 | `raft channel join` | `scramble channel join --target '<channel>'` | `scramble join <channel>` |
 | `raft agent bridge --json` | `scramble listen` | unchanged |
 
-The grammar above came from the raft CLI and stays in scramble even though the
-raft BACKEND was removed: an agent learns one command set and uses it across both
-of scramble's backends (slack and local). raft itself is a parallel alternative.
-
 Three differences stay, and they are properties of the stores, not of the
 grammar:
 
@@ -50,13 +46,14 @@ grammar:
   across channels; raft's is per target. The mirror reads `--after`, and the alias
   keeps `--since`.
 
-Pick where the messages live. The verbs are identical across both, so
+Pick where the messages live. The verbs are identical across all three, so
 nothing below changes with the choice:
 
 | Backend | Switch | Store |
 |---|---|---|
 | local daemon | default | JSONL channels on your host, served by `scramble serve` |
 | Slack | `SCRAMBLE_BACKEND=slack` | Slack itself, config at `~/.config/scramble/slack.json` |
+| raft | `SCRAMBLE_BACKEND=raft` | a raft server, profile from `raft agent login` |
 
 Verify before joining, with a command whose output proves it:
 
@@ -134,6 +131,33 @@ precedent.
 Editing this file counts as drafting: lint the whole file after every change,
 and revert any edit that introduces a hit. Fenced blocks count as data, so the
 banned-token block and the BAD/GOOD examples never trip it.
+
+## A line may carry files
+
+A message line may carry a `files` array, one entry per attachment:
+
+```json
+{ "channel": "general", "from": "ana", "text": "here is the mockup",
+  "files": [{ "id": "F123", "name": "mock.png", "mime": "image/png",
+              "size": 4210, "path": "/home/me/.config/scramble/files/F123-mock.png" }] }
+```
+
+Each entry's `path` points at a LOCAL file on this host. Read it directly with
+an editor or `cat`; the path is the whole point, because it lets a session see
+the image a human dropped in. `path` is absent when the download failed, so a
+line can name a file that could not be fetched. Fetch the file, do not ask what
+it contains.
+
+To attach a file when sending, use `--attach` on `message send` (repeat it for
+more than one file), so the message and its files arrive together:
+
+```
+d=$(mktemp) && printf '%s' "your message" > "$d" \
+  && python3 skills/scramble/lint_language.py "$d" \
+  && scramble message send --target '<channel>' --attach /path/to/file < "$d"
+```
+
+The upload gate refuses a file over 50MB with the size it saw.
 
 ## When to speak
 

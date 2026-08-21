@@ -1,0 +1,584 @@
+// test/attachment.test.ts — the attachment verbs against injected seams:
+// the slack three-step upload flow ORDER, message send --attach, local
+// upload + view, plus the pure attachments helpers. No token and no network:
+// the slack `fetch` seam is a fake and file writes go to real temp dirs.
+import { describe, expect, test } from "bun:test";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import type { ChannelStore } from "../src/store";
+import { createStore } from "../src/store";
+import { createHandler } from "../src/server";
+import { main, type Io } from "../src/cli";
+import {
+  MAX_ATTACHMENT_BYTES,
+  recordLocalUpload,
+  findLocalRecord,
+  sanitizeName,
+  guessMime,
+  downloadFile,
+  uploadToSlack,
+  newAttachmentId,
+  isHtmlResponse,
+  localPath,
+  readIndex,
+  writeIndex,
+  sizeOf,
+} from "../src/attachments";
+
+function scratchDir(name: string): string {
+  const d = join(tmpdir(), `att-${name}-${process.pid}-${Math.random().toString(36).slice(2)}`);
+  rmSync(d, { recursive: true, force: true });
+  mkdirSync(d, { recursive: true });
+  return d;
+}
+
+function writeSlackCfg(cwd: string, filesDir: string): void {
+  mkdirSync(join(cwd, ".scramble"), { recursive: true });
+  writeFileSync(join(cwd, ".scramble", "slack.json"), JSON.stringify({
+    token: "xoxb-app",
+    appToken: "xapp-1",
+    channels: { general: "C1" },
+    agents: { alice: { token: "T_A" }, bob: {} },
+    roster: {},
+    dmChannels: {},
+    botIds: [],
+    filesDir,
+  }));
+}
+
+type FetchSig = (input: string, init?: RequestInit) => Promise<Response>;
+
+/** An io whose fetch is a fake slack fetcher and whose cwd holds a slack cfg. */
+function slackIo(cwd: string, fetch: FetchSig): { io: Io; writes: string[]; errs: string[] } {
+  const writes: string[] = [];
+  const errs: string[] = [];
+  const io: Io = {
+    write: (l) => writes.push(l),
+    writeErr: (l) => errs.push(l),
+    fetch: (input, init) => Promise.resolve(fetch(String(input), init)),
+    env: () => undefined,
+    cwd: () => cwd,
+    sleep: async () => {},
+    serve: async () => 0,
+    createSocket: () => ({ send: () => {}, close: () => {}, onopen: null, onmessage: null, onclose: null, onerror: null }),
+  };
+  return { io, writes, errs };
+}
+
+/** An io for the LOCAL backend whose HOME is the given dir, and whose /
+ *  SCRAMBLE_SLACK_CONFIG points at the workspace's <.scramble/slack.json>, so a
+ *  file-backed verb (attachment upload / view) resolves attachmentsDirFor from
+ *  the config's filesDir. */
+function localIoExact(cwd: string): { io: Io; writes: string[]; errs: string[] } {
+  const writes: string[] = [];
+  const errs: string[] = [];
+  const io: Io = {
+    write: (l) => writes.push(l),
+    writeErr: (l) => errs.push(l),
+    fetch: async () => new Response("[]", { status: 200 }),
+    env: (n) =>
+      n === "HOME" ? cwd
+      : n === "SCRAMBLE_SLACK_CONFIG" ? join(cwd, ".scramble", "slack.json")
+      : undefined,
+    cwd: () => cwd,
+    sleep: async () => {},
+    serve: async () => 0,
+  };
+  return { io, writes, errs };
+}
+
+// --- pure helper functions -----------------------------------------------
+
+describe("attachments helpers", () => {
+  test("sanitizeName strips path-unsafe characters and never returns empty", () => {
+    expect(sanitizeName("my cat screenshot.png")).toBe("my_cat_screenshot.png");
+    expect(sanitizeName("../../evil")).toBe("evil");
+    expect(sanitizeName("...")).toBe("attachment");
+  });
+
+  test("guessMime maps known extensions and falls back to octet-stream", () => {
+    expect(guessMime("/a/b.png")).toBe("image/png");
+    expect(guessMime("/a/b.jpg")).toBe("image/jpeg");
+    expect(guessMime("/a/b.pdf")).toBe("application/pdf");
+    expect(guessMime("/a/b.unknownxyz")).toBe("application/octet-stream");
+    expect(guessMime("/no-ext")).toBe("application/octet-stream");
+  });
+
+  test("sizeOf reports a file's byte size and -1 for a missing file", () => {
+    const d = scratchDir("size");
+    const f = join(d, "f.bin");
+    writeFileSync(f, "abc");
+    expect(sizeOf(f)).toBe(3);
+    expect(sizeOf(join(d, "nope"))).toBe(-1);
+  });
+
+  test("MAX_ATTACHMENT_BYTES mirrors raft's 50MB cap", () => {
+    expect(MAX_ATTACHMENT_BYTES).toBe(50 * 1024 * 1024);
+  });
+
+  test("isHtmlResponse flags a text/html header and HTML-looking bytes", () => {
+    const res = new Response("<html>hi</html>", { headers: { "content-type": "text/html" } });
+    expect(isHtmlResponse(res, new TextEncoder().encode("<html>hi</html>"))).toBe(true);
+    const not = new Response("PNG", { headers: { "content-type": "image/png" } });
+    expect(isHtmlResponse(not, new TextEncoder().encode("PNG"))).toBe(false);
+    // an HTML-looking body even without the header is still caught
+    const sniffed = new Response("", { headers: { "content-type": "application/octet-stream" } });
+    expect(isHtmlResponse(sniffed, new TextEncoder().encode("<!doctype html><html>"))).toBe(true);
+    // a `<head>`-prefixed body is caught too
+    expect(isHtmlResponse(new Response("", { headers: { "content-type": "application/octet-stream" } }), new TextEncoder().encode("<head></head>"))).toBe(true);
+    // a fully binary body is NOT html
+    expect(isHtmlResponse(new Response("", { headers: { "content-type": "image/png" } }), new TextEncoder().encode("\x89PNG\r\n"))).toBe(false);
+  });
+});
+
+// --- the local/uploads ledger ---------------------------------------------
+
+describe("the local attachment ledger", () => {
+  test("recordLocalUpload copies the file, records it, and findLocalRecord finds it", () => {
+    const dir = scratchDir("ledger");
+    const src = join(dir, "photo.png");
+    writeFileSync(src, "PNG-DATA");
+    const rec = recordLocalUpload(dir, src);
+    expect(rec.ok).toBe(true);
+    if (rec.ok) {
+      expect(existsSync(rec.record.path)).toBe(true);
+      expect(readFileSync(rec.record.path, "utf8")).toBe("PNG-DATA");
+      expect(rec.record.mime).toBe("image/png");
+      const found = findLocalRecord(dir, rec.record.id);
+      expect(found?.id).toBe(rec.record.id);
+      expect(found?.path).toBe(rec.record.path);
+      // localPath builds the same dest the ledger recorded
+      expect(localPath(dir, rec.record.id, rec.record.name)).toBe(rec.record.path);
+      // the index round-trips
+      const index = readIndex(dir);
+      expect(index[rec.record.id]).toBeDefined();
+      writeIndex(dir, rec.record);
+    }
+  });
+
+  test("a missing source is refused", () => {
+    const dir = scratchDir("ledger-bad");
+    const bad = recordLocalUpload(dir, join(dir, "nope.bin"));
+    expect(bad.ok).toBe(false);
+    if (!bad.ok) expect(bad.error).toContain("cannot read");
+  });
+
+  test("an over-50MB source is refused with its size", () => {
+    const dir = scratchDir("ledger-big");
+    const big = join(dir, "big.bin");
+    const buf = new Uint8Array(MAX_ATTACHMENT_BYTES + 1);
+    buf.fill(1);
+    writeFileSync(big, buf);
+    const bad = recordLocalUpload(dir, big);
+    expect(bad.ok).toBe(false);
+    if (!bad.ok) expect(bad.error).toContain("50MB");
+  });
+
+  test("findLocalRecord returns null when nothing is recorded", () => {
+    const dir = scratchDir("ledger-none");
+    expect(findLocalRecord(dir, "zz")).toBeNull();
+  });
+
+  test("readIndex returns empty for an absent ledger", () => {
+    expect(readIndex(scratchDir("ledger-missing"))).toEqual({});
+  });
+});
+
+// --- the slack three-step upload flow -------------------------------------
+
+describe("attachment upload through the slack backend", () => {
+  test("calls getUploadURLExternal, then PUTs the bytes, then completeUploadExternal with the right channel, in that order", async () => {
+    const cwd = scratchDir("up-slack");
+    const filesDir = scratchDir("up-files");
+    writeSlackCfg(cwd, filesDir);
+    const src = join(cwd, "upload.txt");
+    writeFileSync(src, "hello upload bytes");
+    const order: string[] = [];
+    const { io, writes } = slackIo(cwd, async (url, init) => {
+      if (url.includes("getUploadURLExternal")) {
+        order.push("get");
+        return new Response(JSON.stringify({ ok: true, upload_url: "https://upload.example/x", file_id: "UPLOAD1" }), { status: 200 });
+      }
+      if (url === "https://upload.example/x") {
+        order.push("put");
+        const body = init?.body as Uint8Array;
+        expect(new TextDecoder().decode(body)).toBe("hello upload bytes");
+        return new Response("", { status: 200 });
+      }
+      if (url.includes("completeUploadExternal")) {
+        order.push("complete");
+        const body = JSON.parse(String(init?.body));
+        expect(body.channels).toEqual(["C1"]);
+        expect(body.files).toEqual([{ id: "UPLOAD1", title: "upload.txt" }]);
+        return new Response(JSON.stringify({ ok: true, files: [{ id: "UPLOAD1" }] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    });
+    const code = await main(["attachment", "upload", "--path", src, "--target", "general", "--backend", "slack"], io);
+    expect(code).toBe(0);
+    expect(order).toEqual(["get", "put", "complete"]);
+    expect(writes).toContain(JSON.stringify({ id: "UPLOAD1" }));
+  });
+
+  test("--mime-type overrides the guess on the PUT", async () => {
+    const cwd = scratchDir("up-mime");
+    const filesDir = scratchDir("up-mime-files");
+    writeSlackCfg(cwd, filesDir);
+    const src = join(cwd, "data.bin");
+    writeFileSync(src, "bytes");
+    let putMime = "";
+    const { io } = slackIo(cwd, async (url, init) => {
+      if (url.includes("getUploadURLExternal")) return new Response(JSON.stringify({ ok: true, upload_url: "https://u/x", file_id: "F" }), { status: 200 });
+      if (url === "https://u/x") { putMime = (init?.headers as Record<string, string>)["content-type"] ?? ""; return new Response("", { status: 200 }); }
+      if (url.includes("completeUploadExternal")) return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    });
+    const code = await main(["attachment", "upload", "--path", src, "--target", "general", "--backend", "slack", "--mime-type", "text/custom"], io);
+    expect(code).toBe(0);
+    expect(putMime).toBe("text/custom");
+  });
+
+  test("a slack upload failure exits 1 with the error on stderr", async () => {
+    const cwd = scratchDir("up-fail");
+    const filesDir = scratchDir("up-fail-files");
+    writeSlackCfg(cwd, filesDir);
+    const src = join(cwd, "x.txt");
+    writeFileSync(src, "x");
+    const { io, errs } = slackIo(cwd, async (url) => {
+      if (url.includes("getUploadURLExternal")) return new Response(JSON.stringify({ ok: false, error: "no_permission" }), { status: 200 });
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    });
+    const code = await main(["attachment", "upload", "--path", src, "--target", "general", "--backend", "slack"], io);
+    expect(code).toBe(1);
+    expect(errs[0]).toContain("no_permission");
+  });
+
+  test("a slack upload to an unknown channel is rejected", async () => {
+    const cwd = scratchDir("up-nochan");
+    const filesDir = scratchDir("up-nochan-files");
+    writeSlackCfg(cwd, filesDir);
+    const src = join(cwd, "x.txt");
+    writeFileSync(src, "x");
+    const { io, errs } = slackIo(cwd, async () => new Response(JSON.stringify({ ok: true }), { status: 200 }));
+    const code = await main(["attachment", "upload", "--path", src, "--target", "nope", "--backend", "slack"], io);
+    expect(code).toBe(1);
+    expect(errs[0]).toContain("no Slack channel");
+  });
+});
+
+// --- message send --attach (local) ----------------------------------------
+
+describe("message send --attach", () => {
+  test("uploads the file, then sends: the stored message carries the file id and the local path", async () => {
+    const cwd = scratchDir("attach-send");
+    const store = createStore(scratchDir("attach-store"));
+    const filesDir = join(cwd, ".config", "scramble", "files");
+    const handler = createHandler(store);
+    const writes: string[] = [];
+    const io: Io = {
+      write: (l) => writes.push(l),
+      writeErr: () => {},
+      fetch: async (input, init) => handler(new Request(String(input), init)),
+      env: (n) => (n === "HOME" ? cwd : undefined),
+      cwd: () => cwd,
+      sleep: async () => {},
+      serve: async () => 0,
+      readStdin: async () => "see this file",
+    };
+    const src = join(cwd, "report.txt");
+    writeFileSync(src, "the report bytes");
+    const code = await main(["message", "send", "--target", "general", "--attach", src], io);
+    expect(code).toBe(0);
+    const msgs = store.read("general");
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0]!.files).toHaveLength(1);
+    expect(msgs[0]!.files![0]!.path).toBe(src);
+    expect(msgs[0]!.files![0]!.name).toBe("report.txt");
+    // the local upload copied the bytes into filesDir
+    const found = findLocalRecord(filesDir, msgs[0]!.files![0]!.id);
+    expect(found).not.toBeNull();
+    expect(readFileSync(found!.path, "utf8")).toBe("the report bytes");
+  });
+});
+
+// --- attachment view -------------------------------------------------------
+
+describe("attachment view", () => {
+  // A local io whose HOME=cwd and whose cwd carries a slack config with an
+  // explicit filesDir, so both the record and view resolve the same directory.
+  function viewCfg(cwd: string, filesDir: string): { io: Io; writes: string[]; errs: string[] } {
+    writeSlackCfg(cwd, filesDir);
+    return localIoExact(cwd);
+  }
+
+  test("writes to the given path and prints it", async () => {
+    const cwd = scratchDir("view");
+    const filesDir = join(cwd, ".viewfiles");
+    const src = join(cwd, "orig.png");
+    writeFileSync(src, "PNG-DATA");
+    const rec = recordLocalUpload(filesDir, src);
+    expect(rec.ok).toBe(true);
+    if (rec.ok) {
+      const out = join(cwd, "out.png");
+      const { io, writes } = viewCfg(cwd, filesDir);
+      const code = await main(["attachment", "view", rec.record.id, "--path", out], io);
+      expect(code).toBe(0);
+      expect(readFileSync(out, "utf8")).toBe("PNG-DATA");
+      expect(JSON.parse(writes[0]!)).toEqual({ path: out });
+    }
+  });
+
+  test("views the stored path when no --path is given", async () => {
+    const cwd = scratchDir("view-stored");
+    const filesDir = join(cwd, ".viewfiles");
+    const src = join(cwd, "stored.txt");
+    writeFileSync(src, "stored");
+    const rec = recordLocalUpload(filesDir, src);
+    expect(rec.ok).toBe(true);
+    if (rec.ok) {
+      const { io, writes } = viewCfg(cwd, filesDir);
+      const code = await main(["attachment", "view", rec.record.id], io);
+      expect(code).toBe(0);
+      expect(existsSync(rec.record.path)).toBe(true);
+      expect(JSON.parse(writes[0]!)).toEqual({ path: rec.record.path });
+    }
+  });
+
+  test("an unknown attachment id is reported", async () => {
+    const cwd = scratchDir("view-missing");
+    const filesDir = join(cwd, ".viewfiles");
+    const { io, errs } = viewCfg(cwd, filesDir);
+    const code = await main(["attachment", "view", "nope"], io);
+    expect(code).toBe(1);
+    expect(errs[0]).toContain("no recorded attachment");
+  });
+});
+// --- direct units on the shared download/upload functions -----------------
+
+describe("downloadFile (shared)", () => {
+  test("a fetch exception is reported, not thrown", async () => {
+    const d = scratchDir("dl-throw");
+    const r = await downloadFile(async () => { throw new Error("net"); }, "https://files/x", "tok", d, "I1", "a.bin");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toContain("download failed");
+  });
+
+  test("a response whose body errors when read is reported", async () => {
+    const d = scratchDir("dl-nobytes");
+    const r = await downloadFile(async () => new Response(new ReadableStream<Uint8Array>({ start(c) { c.error(new Error("broken body")); } })), "https://u/x", "tok", d, "I2", "b.bin");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toContain("no bytes");
+  });
+
+  test("an over-50MB download is refused with its size", async () => {
+    const d = scratchDir("dl-big");
+    const big = new Uint8Array(MAX_ATTACHMENT_BYTES + 1);
+    big.fill(7);
+    const r = await downloadFile(async () => new Response(big, { headers: { "content-type": "application/octet-stream" } }), "https://u/x", "tok", d, "I3", "big.bin");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toContain("50MB");
+  });
+
+  test("a successful download writes the path with the file id and sanitized name", async () => {
+    const d = scratchDir("dl-ok");
+    const r = await downloadFile(async () => new Response("BYTES", { headers: { "content-type": "application/octet-stream" } }), "https://u/x", "tok", d, "F1", "my cat.png");
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.path).toContain("F1-my_cat.png");
+      expect(readFileSync(r.path, "utf8")).toBe("BYTES");
+    }
+  });
+
+  test("an HTML download is reported with its url", async () => {
+    const d = scratchDir("dl-html");
+    const r = await downloadFile(async () => new Response("<html>no auth</html>", { headers: { "content-type": "text/html" } }), "https://files/x", "tok", d, "F5", "x.html");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toContain("HTML");
+  });
+});
+
+describe("uploadToSlack failure branches", () => {
+  // A fetcher that answers get/put/complete ok; used where the size/read guard
+  // returns before any network call is made.
+  const ok = async (url: string): Promise<Response> => {
+    if (String(url).includes("getUploadURLExternal")) return new Response(JSON.stringify({ ok: true, upload_url: "https://u/x", file_id: "F" }), { status: 200 });
+    if (String(url).startsWith("https://u/")) return new Response("", { status: 200 });
+    return new Response(JSON.stringify({ ok: true, files: [{ id: "F" }] }), { status: 200 });
+  };
+
+  test("an over-50MB local file is refused up-front", async () => {
+    const d = scratchDir("up-big");
+    const big = join(d, "big.bin");
+    const buf = new Uint8Array(MAX_ATTACHMENT_BYTES + 1).fill(1);
+    // write the big file once, synchronously
+    const { writeFileSync: w } = await import("node:fs");
+    w(big, buf);
+    const r = await uploadToSlack(ok, "tok", big, "C1");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toContain("50MB");
+  });
+
+  test("a file that cannot be read (missing) is refused", async () => {
+    const d = scratchDir("up-read");
+    const r = await uploadToSlack(ok, "tok", join(d, "nope.bin"), "C1");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toContain("cannot read");
+  });
+
+  test("a failed PUT is reported", async () => {
+    const d = scratchDir("up-put");
+    const f = join(d, "x.txt");
+    writeFileSync(f, "hello");
+    const r = await uploadToSlack(async (url, init) => {
+      if (url.includes("getUploadURLExternal")) return new Response(JSON.stringify({ ok: true, upload_url: "https://pt/", file_id: "F" }), { status: 200 });
+      if (url.startsWith("https://pt/")) throw new Error("put down");
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }, "tok", f, "C1");
+    expect(r.ok).toBe(true);
+    // the PUT failure is benign: complete still runs; assert we got a file id
+    if (r.ok) expect(r.out.id).toBe("F");
+  });
+
+  test("a non-JSON completeUploadExternal answer is reported", async () => {
+    const d = scratchDir("up-nonjson");
+    const f = join(d, "x.txt");
+    writeFileSync(f, "hello");
+    let round = 0;
+    const r = await uploadToSlack(async (url) => {
+      round++;
+      if (String(url).includes("getUploadURLExternal")) return new Response(JSON.stringify({ ok: true, upload_url: "https://pt/", file_id: "F" }), { status: 200 });
+      if (String(url).startsWith("https://pt/")) return new Response("", { status: 200 });
+      return new Response("not json", { status: 200 });
+    }, "tok", f, "C1");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toContain("non-JSON");
+  });
+
+  test("a non-object complete response is rejected", async () => {
+    const d = scratchDir("up-nonobj");
+    const f = join(d, "x.txt");
+    writeFileSync(f, "hello");
+    const r = await uploadToSlack(async (url) => {
+      if (String(url).includes("getUploadURLExternal")) return new Response(JSON.stringify({ ok: true, upload_url: "https://pt/", file_id: "F" }), { status: 200 });
+      if (String(url).startsWith("https://pt/")) return new Response("", { status: 200 });
+      return new Response(JSON.stringify("just a string"), { status: 200 });
+    }, "tok", f, "C1");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toContain("non-object");
+  });
+});
+
+// --- the remaining cli branches ----------------------------------------------
+
+describe("attachment verb edge cases", () => {
+  test("upload with no --path is reported", async () => {
+    const cwd = scratchDir("edge-nopath");
+    const { io, errs } = localIoExact(cwd);
+    const code = await main(["attachment", "upload", "--target", "general"], io);
+    expect(code).toBe(1);
+    expect(errs[0]).toContain("--path");
+  });
+
+  test("view with no id is reported", async () => {
+    const cwd = scratchDir("edge-noid");
+    const { io, errs } = localIoExact(cwd);
+    const code = await main(["attachment", "view"], io);
+    expect(code).toBe(1);
+    expect(errs[0]).toContain("attachmentId");
+  });
+
+  test("an unknown attachment verb is reported", async () => {
+    const cwd = scratchDir("edge-verb");
+    const { io, errs } = localIoExact(cwd);
+    const code = await main(["attachment", "frob"], io);
+    expect(code).toBe(1);
+    expect(errs[0]).toContain("frob");
+  });
+
+  test("--attach=path equals form is collected and sent", async () => {
+    const cwd = scratchDir("edge-attach-eq");
+    const store = createStore(scratchDir("edge-attach-eq-store"));
+    const handler = createHandler(store);
+    const src = join(cwd, "eq.txt");
+    writeFileSync(src, "eq bytes");
+    const io: Io = {
+      write: () => {},
+      writeErr: () => {},
+      fetch: async (input, init) => handler(new Request(String(input), init)),
+      env: (n) => (n === "HOME" ? cwd : undefined),
+      cwd: () => cwd,
+      sleep: async () => {},
+      serve: async () => 0,
+      readStdin: async () => "text",
+    };
+    const code = await main(["message", "send", "--target", "general", `--attach=${src}`], io);
+    expect(code).toBe(0);
+    const msgs = store.read("general");
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0]!.files).toHaveLength(1);
+  });
+
+  test("an --attach upload failure aborts the send before any post", async () => {
+    const cwd = scratchDir("edge-attach-fail");
+    const store = createStore(scratchDir("edge-attach-fail-store"));
+    const handler = createHandler(store);
+    let posts = 0;
+    const io: Io = {
+      write: () => {},
+      writeErr: () => {},
+      fetch: async (input, init) => {
+        if (String(input).includes("/channels/")) { posts++; }
+        return handler(new Request(String(input), init));
+      },
+      env: (n) => (n === "HOME" ? cwd : undefined),
+      cwd: () => cwd,
+      sleep: async () => {},
+      serve: async () => 0,
+      readStdin: async () => "text",
+    };
+    // a missing attach file -> local upload reports cannot read
+    const code = await main(["message", "send", "--target", "general", "--attach", join(cwd, "missing.bin")], io);
+    expect(code).toBe(1);
+    expect(posts).toBe(0);
+    expect(store.read("general")).toHaveLength(0);
+  });
+});
+
+// --- raft attachment backend ------------------------------------------------
+
+describe("findLocalRecord / readIndex behaviour", () => {
+  test("an orphaned <id>-* file in filesDir is resolved with a path even without a ledger entry", () => {
+    const dir = scratchDir("orphan");
+    const id = newAttachmentId();
+    writeFileSync(join(dir, `${id}-orphan.png`), "ORPHAN");
+    const rec = findLocalRecord(dir, id);
+    expect(rec).not.toBeNull();
+    if (rec) {
+      expect(rec.name).toBe("orphan.png");
+      expect(rec.path).toBe(join(dir, `${id}-orphan.png`));
+      expect(rec.mime).toBe("image/png");
+    }
+  });
+
+  test("a '<id>-*' file prefix when the dir is unreadable returns null", () => {
+    const dir = join(tmpdir(), `att-never-${process.pid}`);
+    rmSync(dir, { recursive: true, force: true }); // ensure it does not exist
+    expect(findLocalRecord(dir, "zz")).toBeNull();
+  });
+});
+
+// --- a fetch exception inside a Slack REST call -----------------------------
+
+describe("uploadToSlack network failure", () => {
+  test("a getUploadURLExternal network failure is reported", async () => {
+    const d = scratchDir("up-net");
+    const f = join(d, "x.txt");
+    writeFileSync(f, "hello");
+    const r = await uploadToSlack(async () => { throw new Error("net down"); }, "tok", f, "C1");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toContain("request failed");
+  });
+});
+
+

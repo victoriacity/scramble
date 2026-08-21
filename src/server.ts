@@ -1,5 +1,5 @@
 // src/server.ts — the HTTP surface over the store.
-import { DEFAULTS, type Message, type PostResult, type ServerOptions } from "./types";
+import { DEFAULTS, type Attachment, type Message, type PostResult, type ServerOptions } from "./types";
 import type { ChannelStore } from "./store";
 
 /** serve() merges the server-only knobs (hostname/port) onto the shared ones.
@@ -85,7 +85,7 @@ export function createHandler(store: ChannelStore, opts: ServerOptions = {}) {
   }
 
   async function postChannel(channelSeg: string, req: Request): Promise<Response> {
-    let body: { from?: string; text?: string; id?: string; lastSeen?: number };
+    let body: { from?: string; text?: string; id?: string; lastSeen?: number; files?: Attachment[] };
     try {
       body = (await req.json()) as typeof body;
     } catch {
@@ -107,7 +107,14 @@ export function createHandler(store: ChannelStore, opts: ServerOptions = {}) {
     }
     let result: PostResult;
     try {
-      result = store.post({ channel, from, text, id, lastSeen: body.lastSeen });
+      result = store.post({
+        channel,
+        from,
+        text,
+        id,
+        lastSeen: body.lastSeen,
+        ...(body.files !== undefined && body.files.length > 0 ? { files: body.files } : {}),
+      });
     } catch {
       return json(400, { error: "invalid channel", channel });
     }

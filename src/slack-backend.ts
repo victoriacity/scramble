@@ -11,9 +11,10 @@
 // no shared total order). The line shape we emit matches the local backend
 // EXACTLY (channel, from, text, ts, mentions plus a `mentioned` flag for this
 // agent) because the join skill and the hooks read it verbatim.
-import type { Delivery, Message } from "./types";
+import type { Delivery, Message, Attachment } from "./types";
 import { DM_PREFIX } from "./types";
 import type { SlackSocket } from "./slack-transport";
+import { downloadFile, type SlackFileMeta } from "./attachments";
 
 // --- slack endpoint URLs ------------------------------------------------
 
@@ -33,6 +34,7 @@ export interface SlackInboundEvent {
   user?: string;
   username?: string;
   ts?: string;
+  files?: SlackFileMeta[];
 }
 
 /** A Socket Mode envelope. Slack redelivers any envelope you do not ACK, so we
@@ -62,6 +64,9 @@ export interface SlackBackendConfig {
   dmChannels: Record<string, string>;
   /** own bot ids the backend never delivers (the self-filter). */
   botIds: string[];
+  /** directory downloadable Slack attachments are written to. Default
+   *  `~/.config/scramble/files` (resolved by the caller, which sees HOME). */
+  filesDir: string;
 }
 
 /** The injected seams. Every outbound Slack call and every socket is built
@@ -117,6 +122,7 @@ export interface SlackHistoryMessage {
   username?: string;
   text?: string;
   bot_id?: string;
+  files?: SlackFileMeta[];
 }
 
 /** The members a message addresses. A dm/ channel addresses its peers (everyone
@@ -154,6 +160,7 @@ export class SlackBackend {
   private readonly channels: Record<string, string>;
   private readonly agents: Record<string, { token?: string }>;
   private readonly roster: Record<string, string>;
+  private readonly filesDir: string;
   /** Cache of users.info answers so a repeat unknown id never re-queries. */
   private readonly nameCache = new Map<string, string>();
 
@@ -167,6 +174,7 @@ export class SlackBackend {
     this.agents = cfg.agents;
     this.roster = cfg.roster;
     this.botIds = cfg.botIds;
+    this.filesDir = cfg.filesDir;
     this.dmChannels = cfg.dmChannels;
     this.channelById = Object.fromEntries(Object.entries(cfg.channels).map(([r, c]) => [c, r]));
     this.channels = cfg.channels;
@@ -225,27 +233,71 @@ export class SlackBackend {
     return out;
   }
 
+  /** Download every file on an event into filesDir, mapping each to an
+   *  Attachment on the line. A download failure is REPORTED (pushed onto
+   *  `problems`) and the message still carries the file's metadata with no
+   *  `path`, so the agent learns a file exists and that fetching it failed. */
+  private async downloadFiles(files: SlackFileMeta[] | undefined): Promise<{ files: Attachment[]; problems: string[] }> {
+    const problems: string[] = [];
+    const output: Attachment[] = [];
+    if (!files) return { files: output, problems };
+    for (const f of files) {
+      const id = f.id ?? "";
+      const name = f.name ?? id ?? "file";
+      const fileId = id === "" ? `dl-${output.length}` : id;
+      const entry: Attachment = {
+        id: fileId,
+        name,
+        mime: f.mimetype ?? "application/octet-stream",
+        ...(f.size !== undefined ? { size: f.size } : {}),
+      };
+      if (f.url_private) {
+        const r = await downloadFile(this.fetch, f.url_private, this.token, this.filesDir, fileId, name);
+        if (r.ok) entry.path = r.path;
+        else problems.push(r.error);
+      }
+      output.push(entry);
+    }
+    return { files: output, problems };
+  }
+
   /** Turn one inbound event into an outbound Delivery, or undefined when it
    *  should be dropped (a self-post, an uninteresting event, an unknown
-   *  channel). */
-  private async toDelivery(ev: SlackInboundEvent, as: string): Promise<Delivery | undefined> {
-    if (ev.type !== "message" || !ev.text || ev.text === "") return undefined;
+   *  channel). Also downloads any `files` the event carries and reports a
+   *  download failure that still leaves the message deliverable. */
+  private async toDelivery(
+    ev: SlackInboundEvent,
+    as: string,
+  ): Promise<{ delivery: Delivery | undefined; problems: string[] }> {
+    if (ev.type !== "message" || !ev.text || ev.text === "") return { delivery: undefined, problems: [] };
     // Self-filter: never deliver our OWN posts (a bot_id in the config list),
     // which is what keeps an agent from answering itself.
-    if (ev.bot_id !== undefined && this.botIds.includes(ev.bot_id)) return undefined;
+    if (ev.bot_id !== undefined && this.botIds.includes(ev.bot_id)) return { delivery: undefined, problems: [] };
     const channel = ev.channel;
-    if (channel === undefined) return undefined;
+    if (channel === undefined) return { delivery: undefined, problems: [] };
     // Normalize <@U…> mentions to @name, resolving unseen ids via users.info.
     const text = await this.normalize(ev.text);
     const from = await this.resolveSender(ev);
     const dmAgent = this.dmChannels[channel];
     const channelName = dmAgent === undefined ? this.channelById[channel] : `${DM_PREFIX}${dmAgent}/${from}`;
-    if (channelName === undefined) return undefined;
+    if (channelName === undefined) return { delivery: undefined, problems: [] };
     // Slack ts is the per-channel cursor (no global seq), used as both ts and the
-    // dedup id for a line, exactly as the comment on the CLI documents.
+    // dedup id for a line.
     const ts = ev.ts ?? new Date().toISOString();
     const mentions = computeMentions(channelName, text, from);
-    return { seq: 0, ts, channel: channelName, from, text, id: ts, mentions, mentioned: mentions.includes(as) };
+    const dl = await this.downloadFiles(ev.files);
+    const delivery: Delivery = {
+      seq: 0,
+      ts,
+      channel: channelName,
+      from,
+      text,
+      id: ts,
+      mentions,
+      mentioned: mentions.includes(as),
+    };
+    if (dl.files.length > 0) delivery.files = dl.files;
+    return { delivery, problems: dl.problems };
   }
 
   /** Resolve the sender's name: a user token shaped like a Slack id is looked
@@ -288,16 +340,22 @@ export class SlackBackend {
     if (env.type === "events_api" && env.payload?.event) onEvent(env.payload.event);
   }
 
-  /** Route an inbound event through the channel filter and deliver (or problem-report). */
+  /** Route an inbound event through the channel filter and deliver. A download
+   *  problem is reported via onProblem BEFORE the line is delivered, so the
+   *  agent learns a file failed but still gets the message. */
   private deliver(
     ev: SlackInboundEvent,
     channels: string[],
     as: string,
     wantsAll: boolean,
     onLine: (d: Delivery) => void,
+    onProblem: (p: string) => void,
   ): void {
-    void this.toDelivery(ev, as).then((d) => {
-      if (d !== undefined && (wantsAll || channels.includes(d.channel))) onLine(d);
+    void this.toDelivery(ev, as).then(({ delivery, problems }) => {
+      for (const p of problems) onProblem(p);
+      if (delivery !== undefined && (wantsAll || channels.includes(delivery.channel))) {
+        onLine(delivery);
+      }
     });
   }
 
@@ -307,33 +365,35 @@ export class SlackBackend {
   async history(
     channel: string,
     since?: string,
-  ): Promise<{ code: 0 | 1; error?: string; messages: Message[] }> {
+  ): Promise<{ code: 0 | 1; error?: string; messages: Message[]; problems: string[] }> {
     const slackChannel = this.channels[channel];
-    if (!slackChannel) return { code: 1, error: `no Slack channel for channel ${channel}`, messages: [] };
+    if (!slackChannel) return { code: 1, error: `no Slack channel for channel ${channel}`, messages: [], problems: [] };
     const qs = since !== undefined ? `&oldest=${encodeURIComponent(since)}` : "";
     const r = await readOk<{ messages?: SlackHistoryMessage[] }>(
       this.fetch,
       `${HISTORY_URL}?channel=${encodeURIComponent(slackChannel)}${qs}`,
       { headers: { authorization: `Bearer ${this.token}` } },
     );
-    if (!r.ok) return { code: 1, error: r.error, messages: [] };
+    if (!r.ok) return { code: 1, error: r.error, messages: [], problems: [] };
     const messages: Message[] = [];
+    const problems: string[] = [];
     let seq = 0;
     for (const m of r.data.messages ?? []) {
-      const d = await this.toDelivery(
-        { type: "message", channel: slackChannel, user: m.user, username: m.user, ts: m.ts, text: m.text, bot_id: m.bot_id },
+      const { delivery, problems: dlProblems } = await this.toDelivery(
+        { type: "message", channel: slackChannel, user: m.user, username: m.user, ts: m.ts, text: m.text, bot_id: m.bot_id, files: m.files },
         "",
       );
-      if (d === undefined) continue;
+      problems.push(...dlProblems);
+      if (delivery === undefined) continue;
       // history is channel-scoped: force the requested `channel` (a Slack id tells us
       // the Slack channel, the channel mapping is the caller's frame). Slack has no
       // global seq, so a synthetic per-history counter stands in where the
       // local line's `seq` lives; the message's ts is the real cursor.
-      const { mentioned, ...rest } = d;
+      const { mentioned, ...rest } = delivery;
       void mentioned;
       messages.push({ ...rest, channel, seq: ++seq });
     }
-    return { code: 0, messages };
+    return { code: 0, messages, problems };
   }
 
   /** next(channels, as, timeoutSecs, onProblem): block for ONE message then
@@ -364,7 +424,7 @@ export class SlackBackend {
           conn = c;
           c.socket.onmessage = (raw) =>
             this.routeFrame(raw, c.socket, (ev) => {
-              this.deliver(ev, channels, as, wantsAll, (d) => settle({ code: 0, line: d }));
+              this.deliver(ev, channels, as, wantsAll, (d) => settle({ code: 0, line: d }), onProblem);
             });
           if (this.now() >= deadline) settle({ code: 64 });
         },
@@ -396,7 +456,7 @@ export class SlackBackend {
       void this.connectSocket().then(
         (c) => {
           c.socket.onmessage = (raw) =>
-            this.routeFrame(raw, c.socket, (ev) => this.deliver(ev, channels, as, wantsAll, onLine));
+            this.routeFrame(raw, c.socket, (ev) => this.deliver(ev, channels, as, wantsAll, onLine, onProblem));
           c.socket.onclose = () => resolve();
         },
         (e) => {
