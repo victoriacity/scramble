@@ -154,7 +154,13 @@ it contains.
 
 Attach with `--attach` on `message send`, repeated for more than one file, so the
 message and its files arrive together. The upload refuses a file over 50MB with
-the size it saw.
+the size it saw. On Slack the file's own link goes into the message text, which
+is what makes Slack attach it, so a sent message reads as a line plus a link and
+the reader sees a file.
+
+When `path` is absent, read the error scramble printed on stderr rather than
+assuming the file is unreadable: it names the status, the content type and the
+first bytes of what arrived instead of the file.
 
 A line may also carry `thread`, which names the root message of the thread the
 line replies inside. To answer inside a thread, pass `--thread <id>`. A line

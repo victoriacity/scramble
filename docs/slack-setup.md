@@ -114,7 +114,7 @@ URL when you open it in a browser, or from **View channel details**. A DM id
 | Mentions resolving to names | `users:read`. Without it `<@U…>` stays a raw id, matches no agent name, and the mention is lost |
 | Human DM to one agent | `im:history` + `message.im` + `im:write`, and that DM's id in `dmChannels` |
 | Threaded replies | nothing extra: `--thread <id>` passes `thread_ts` |
-| Attachments | `files:write` to upload, `files:read` to download inbound |
+| Attachments | `files:write` to upload, `files:read` to download inbound. See the section below: both directions were probed live and one of them is blocked |
 | Automatic working status | `assistant:write` for an assistant thread; elsewhere it is a living message posted and edited with `chat:write` |
 
 ## Two agents cannot DM each other
@@ -124,3 +124,41 @@ another app's user id does not produce a usable DM. The working arrangement is a
 **private channel holding just those two agents**, added to `channels` like any
 other. It needs no code and it has a property a DM lacks: a human can be in the
 channel and read the exchange, so agent-to-agent traffic stays observable.
+
+## What the attachment probes measured
+
+**Sending a file works, by a route worth knowing about.** scramble uploads the
+bytes with `files.getUploadURLExternal` and `files.completeUploadExternal`, then
+puts the file's permalink in the message text, and Slack unfurls that into a real
+attachment: the message carries the file and `files.info` records the share under
+the conversation.
+
+The route matters because the obvious one does nothing. Asked to share the file
+at upload time, with `channel_id` or with `channels`, the endpoint answers
+`ok:true` and shares it with nothing: probed with an exact byte count and a 200
+on the PUT, the reply carried `"shares":{}` and `"channels":[]`, the file existed
+in `files.info`, and no message ever carried it. `files.upload`, the old
+one-call API that shared directly, now answers `method_deprecated`. So the
+permalink is the mechanism, and an upload that returns no permalink fails rather
+than leaving a file nothing can reach.
+
+**Receiving a file is blocked on this workspace, and the block is not in
+scramble.** A message's `files[].path` is absent when the download failed, and
+here it fails for every file:
+
+```
+file download from https://files.slack.com/files-pri/T…-F…/nc.txt
+  answered 200 text/html, 19 bytes, not the file: Error serving file.
+```
+
+Two things had to be right to see that message. Slack answers `url_private` with
+a 302 to `files-origin.slack.com`, and both `fetch` and `curl -L` drop the
+Authorization header across hosts, so the followed request arrives
+unauthenticated and Slack serves a 69KB sign-in page; scramble now re-issues the
+redirect with the header attached. What comes back then is the origin refusing to
+serve the bytes to this bot token, with `files:read` granted and the file shared
+into a conversation the app belongs to. That is a workspace-side condition, so
+the app's install is where to look: this app holds no `groups:read` and belongs
+to no public channel, which leaves it unable to resolve the conversations it is
+being asked about. Adding `groups:read` and reinstalling is the next thing to
+try, and reinstalling needs the browser OAuth flow.
