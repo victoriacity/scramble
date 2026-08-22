@@ -8,7 +8,7 @@ describe("the language rules, checked where the message leaves", () => {
     // `message send` all day, so it ran on nothing, and the operator read this
     // shape in a message and told me the linting had failed.
     const hits = lintLanguage("Both are landed in the closing gate — controlled on six transcripts.");
-    expect(hits).toEqual([{ label: "em dash", match: "—" }]);
+    expect(hits).toEqual([{ label: "em dash", match: "—", index: 36 }]);
     expect(languageRefusal(hits)).toContain("message send REFUSED: 1 language-rule hit(s)");
     expect(languageRefusal(hits)).toContain("[em dash]");
   });

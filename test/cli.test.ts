@@ -773,6 +773,54 @@ describe("message check (local => cursor drain)", () => {
   });
 });
 
+describe("`scramble lint`: the send's rules, pointed at any document", () => {
+  // Operator, 2026-08-22: "the linter should be individually callable to check
+  // other documents such as lark docs or markdown files."
+  test("a file's hits are reported with the line, and the exit code is nonzero", async () => {
+    const cwd = scratchDir("lint-file");
+    const f = join(cwd, "doc.md");
+    writeFileSync(f, "# A doc\n\nThis is basically fine.\nA second line — with a dash.\n");
+    const { io, writes, errs } = stubIo(cwd, async () => new Response("{}", { status: 200 }));
+    expect(await main(["lint", f], io)).toBe(1);
+    expect(errs.join("\n")).toContain(`${f}:3: [filler] "basically"`);
+    expect(errs.join("\n")).toContain(`${f}:4: [em dash]`);
+    expect(JSON.parse(writes[0]!)).toEqual({ lint: "hits", files: 1, hits: 2 });
+  });
+
+  test("a clean file exits 0 and says so", async () => {
+    const cwd = scratchDir("lint-clean");
+    const f = join(cwd, "clean.md");
+    writeFileSync(f, "# A doc\n\nThe manifest names every event it subscribes to.\n");
+    const { io, writes } = stubIo(cwd, async () => new Response("{}", { status: 200 }));
+    expect(await main(["lint", f], io)).toBe(0);
+    expect(JSON.parse(writes[0]!)).toEqual({ lint: "clean", files: 1, hits: 0 });
+  });
+
+  test("text on stdin is linted when no file is named", async () => {
+    const cwd = scratchDir("lint-stdin");
+    const { io, errs } = stubIo(cwd, async () => new Response("{}", { status: 200 }));
+    io.readStdin = async () => "Gate green at 457.";
+    expect(await main(["lint"], io)).toBe(1);
+    expect(errs.join("\n")).toContain("(stdin):1:");
+  });
+
+  test("no file and no stdin is a usage error", async () => {
+    const cwd = scratchDir("lint-usage");
+    const { io, errs } = stubIo(cwd, async () => new Response("{}", { status: 200 }));
+    io.readStdin = async () => "   ";
+    expect(await main(["lint"], io)).toBe(1);
+    expect(errs.join(" ")).toContain("usage: scramble lint");
+  });
+
+  test("a file that cannot be read is a FAILURE, never a silent pass", async () => {
+    // A lint that skips what it cannot open reports clean on a typo.
+    const cwd = scratchDir("lint-missing");
+    const { io, errs } = stubIo(cwd, async () => new Response("{}", { status: 200 }));
+    expect(await main(["lint", join(cwd, "nope.md")], io)).toBe(1);
+    expect(errs.join(" ")).toContain("cannot read");
+  });
+});
+
 describe("`inbox pending`: the count of what is owed, per ITEM", () => {
   /** Drive a real delivery through the local daemon, so the ledger is written by
    *  the delivery path and never by the test. */
@@ -1014,6 +1062,49 @@ describe("message check under the slack backend", () => {
     const io = slackCheckIo(scratchDir("mslack-ok"));
     const code = await main(["message", "check", "--as", "dev", "--backend", "slack"], io);
     expect(code).toBe(0);
+  });
+
+  test("the sweep reads MY OWN sent lines back against today's rules", async () => {
+    // Operator, 2026-08-22, after catching three style defects in a row: "You
+    // need to understand this general pattern and use the message check to
+    // guard it." Every rule was added AFTER a message went out carrying what it
+    // bans, so a rule guarding only the NEXT message leaves every earlier one
+    // standing in the channel, unmarked, as though it were fine.
+    const errs: string[] = [];
+    const cwd = scratchDir("mslack-selflint");
+    const io = slackCheckIo(cwd, {
+      writeErr: (l) => errs.push(l),
+      fetch: async (url) =>
+        String(url).includes("conversations.history")
+          ? new Response(
+              JSON.stringify({
+                ok: true,
+                messages: [
+                  { ts: "9.1", user: "U1", text: "Gate green at 457, six live stages pass." },
+                  { ts: "9.2", user: "U1", text: "The manifest names every event it subscribes to." },
+                ],
+              }),
+              { status: 200 },
+            )
+          : new Response(JSON.stringify({ ok: true, user: "dev", messages: [] }), { status: 200 }),
+    });
+    // AFTER the helper, which writes its own config: the roster resolves U1 to
+    // this agent, so the drain recognises the line as its OWN and self-lints it.
+    writeSlackConfig(cwd, {
+      appToken: "xapp-1",
+      token: "xoxb-1",
+      channels: { general: "C1" },
+      agents: { dev: { token: "T", handle: "dev" } },
+      roster: { U1: "dev" },
+    });
+    const code = await main(["message", "check", "--as", "dev", "--backend", "slack"], io);
+    expect(code).toBe(0);
+    const said = errs.join("\n");
+    expect(said).toContain("would be refused by today's rules");
+    expect(said).toContain("9.1");
+    expect(said).toContain("internal shorthand");
+    // The clean line is not named: a report that lists everything names nothing.
+    expect(said).not.toContain("9.2");
   });
 
   test("a broken slack config is reported and exits nonzero", async () => {

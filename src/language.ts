@@ -24,6 +24,16 @@ export interface LanguageRule {
 export interface LanguageHit {
   label: string;
   match: string;
+  /** Character offset in the ORIGINAL text. Quoted spans are blanked rather than
+   *  removed, so every offset survives and a file report can name the line. */
+  index: number;
+}
+
+/** 1-based line number for an offset. */
+export function lineOf(text: string, index: number): number {
+  let line = 1;
+  for (let i = 0; i < index && i < text.length; i++) if (text[i] === "\n") line += 1;
+  return line;
 }
 
 /** Every rule, with the reason it exists where the reason is not obvious. */
@@ -121,10 +131,11 @@ export function lintLanguage(text: string, rules: LanguageRule[] = LANGUAGE_RULE
     // from wherever the first one stopped and miss what came before it.
     const rx = new RegExp(rule.rx.source, rule.rx.flags);
     for (const m of prose.matchAll(rx)) {
-      if (m[0] !== "") hits.push({ label: rule.label, match: m[0] });
+      if (m[0] !== "") hits.push({ label: rule.label, match: m[0], index: m.index });
     }
   }
-  return hits;
+  // Offset order, so a file report reads top to bottom rather than rule by rule.
+  return hits.sort((a, b) => a.index - b.index);
 }
 
 /** The refusal an agent reads, naming every hit. Empty when the text is clean. */

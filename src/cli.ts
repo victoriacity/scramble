@@ -29,7 +29,7 @@ import {
 } from "./attachments";
 import { StatusManager } from "./status";
 import { SCOPE_NAMES, BOT_EVENT_NAMES } from "./app-manifest";
-import { lintLanguage, languageRefusal } from "./language";
+import { lintLanguage, languageRefusal, lineOf } from "./language";
 import { closeInboxItems, inboxPath, isAddressed, pendingInbox, pendingReport, recordInboxItem } from "./inbox";
 
 const DEFAULT_URL = "http://127.0.0.1:7737";
@@ -1023,6 +1023,8 @@ async function messageCheckSlack(flags: Map<string, string>, io: Io): Promise<nu
   const ids = s.backend.identities(name);
   let unreachable = 0;
   let drained = 0;
+  // What I have already said that today's rules would refuse.
+  const selfHits: string[] = [];
   for (const channel of Object.keys(cfg.channels).sort()) {
     const cursor = started[channel];
     // `oldest` is inclusive in Slack, so re-filter to strictly-newer lines: the
@@ -1064,7 +1066,24 @@ async function messageCheckSlack(flags: Map<string, string>, io: Io): Promise<nu
       // `from` is the RESOLVED sender, which for an app is its handle, so
       // comparing against the scramble name alone let an agent drain its own
       // messages back.
-      if (ids.includes(m.from)) continue;
+      if (ids.includes(m.from)) {
+        // MY OWN LINES ARE READ BACK AGAINST TODAY'S RULES. The sweep walks them
+        // anyway on its way past, and every rule in this file was added AFTER a
+        // message had already gone out carrying what it bans, so the messages
+        // already sent are the evidence for whether the newest rule was needed.
+        //
+        // The operator, 2026-08-22, having caught three of these in a row:
+        // "You need to understand this general pattern and use the message check
+        // to guard it." A rule that only guards the NEXT message leaves every
+        // earlier one standing in the channel, unmarked, as though it were fine.
+        const late = lintLanguage(m.text ?? "");
+        if (late.length > 0) {
+          selfHits.push(
+            `${channel} ${m.ts}: ${late.map((h) => `[${h.label}] ${JSON.stringify(h.match)}`).join(" ")}`,
+          );
+        }
+        continue;
+      }
       if (status !== undefined) await settleStatus(deliverStatus(status, line, name), io);
       emitDelivery(io, name, line as unknown as Record<string, unknown>);
     }
@@ -1072,6 +1091,14 @@ async function messageCheckSlack(flags: Map<string, string>, io: Io): Promise<nu
     drained += 1;
   }
   writeSlackCursor(io, name, next);
+  if (selfHits.length > 0) {
+    io.writeErr(
+      `${selfHits.length} message(s) you already sent would be refused by today's rules:\n` +
+        `${selfHits.map((h) => `  ${h}`).join("\n")}\n` +
+        `Each rule here was added after a message went out carrying what it bans. ` +
+        `Correct them in the channel where they are still standing.`,
+    );
+  }
   // Every configured channel refused is a REPORT, never a silent exit 0: an
   // agent invited to none of them must not read as a quiet workspace.
   if (drained === 0 && unreachable > 0) {
@@ -1215,6 +1242,48 @@ async function cmdAttachment(args: string[], io: Io): Promise<number> {
   }
   io.writeErr(`unknown attachment verb: ${sub ?? "(none)"}`);
   return 1;
+}
+
+/** `scramble lint <file>...`, or the text on stdin: the SAME rules `message send`
+ *  enforces, pointed at anything else worth checking.
+ *
+ *  Operator, 2026-08-22: "the linter should be individually callable to check
+ *  other documents such as lark docs or markdown files." The rules belong to the
+ *  send, and a document going to the same people deserves the same reading, so
+ *  the verb reuses the rule list rather than owning a copy of it.
+ *
+ *  Prints `file:line: [label] "match"` and exits 1 when anything hit. */
+async function cmdLint(argv: string[], io: Io): Promise<number> {
+  const { positionals } = parseArgs(argv);
+  const sources: Array<{ name: string; text: string }> = [];
+  if (positionals.length === 0) {
+    const text = await (io.readStdin ? io.readStdin() : Promise.resolve(""));
+    if (text.trim() === "") {
+      io.writeErr("usage: scramble lint <file> [<file> ...], or pipe the text in on stdin");
+      return 1;
+    }
+    sources.push({ name: "(stdin)", text });
+  } else {
+    for (const p of positionals) {
+      try {
+        sources.push({ name: p, text: readFileSync(p, "utf8") });
+      } catch (e) {
+        // A FILE THAT COULD NOT BE READ IS A FAILURE, never a silent pass: a
+        // lint that skips what it cannot open reports clean on a typo.
+        io.writeErr(`lint: cannot read ${p}: ${String(e)}`);
+        return 1;
+      }
+    }
+  }
+  let total = 0;
+  for (const src of sources) {
+    for (const h of lintLanguage(src.text)) {
+      io.writeErr(`${src.name}:${lineOf(src.text, h.index)}: [${h.label}] ${JSON.stringify(h.match)}`);
+      total += 1;
+    }
+  }
+  io.write(JSON.stringify({ lint: total === 0 ? "clean" : "hits", files: sources.length, hits: total }));
+  return total === 0 ? 0 : 1;
 }
 
 /** `scramble inbox pending --as <name>`: every line addressed to this agent that
@@ -1868,6 +1937,8 @@ export async function main(argv: string[], io: Io): Promise<number> {
       return cmdChannel(argv.slice(1), io);
     case "inbox":
       return cmdInbox(argv.slice(1), io);
+    case "lint":
+      return cmdLint(argv.slice(1), io);
     case "doctor":
       return cmdDoctor(argv.slice(1), io);
     case "join":

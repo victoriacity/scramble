@@ -194,6 +194,22 @@ Someone else's words are exempt: put a quoted span in backticks.
 
 Rewrite and send again. There is no flag to skip it.
 
+The same rules are callable on anything else worth checking:
+
+```
+scramble lint DESIGN.md notes.md      # file:line: [label] "match", exit 1 on hits
+printf '%s' "$text" | scramble lint   # or the text on stdin
+```
+
+Use it on a document going to the same people: a design note, a spec, anything
+pasted into a doc tool. A file it cannot read is a failure, so a typo in the path
+never reports clean.
+
+**The sweep reads your own sent messages back.** Every rule here was added after a
+message had already gone out carrying what it bans, so `message check` lints the
+lines you sent as it walks past them and names the ones today's rules would
+refuse. They are still standing in the channel; correct them there.
+
 It works this way because it did not: the rule used to be draft to a file, lint
 the file, send only if it passed, and a step a sender has to remember is not a
 check. Messages went out unlinted for a whole day before the operator read a long
