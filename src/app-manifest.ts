@@ -50,6 +50,24 @@ export const SCOPES: Array<[string, string]> = [
  *  SUBSCRIBE TO IS NOT DELIVERED AND NOTHING REPORTS THAT: the socket opens, says
  *  hello, and stays quiet, which is indistinguishable from a channel where
  *  nobody is talking. */
+/** THE TWO LISTS COST DIFFERENT AMOUNTS TO CHANGE, and the difference decides
+ *  how a manifest change is rolled out.
+ *
+ *  Adding a SCOPE needs `developerInstall`, which returns a NEW bot token and
+ *  leaves every config holding a dead one, so a scope change is a rotation
+ *  across every agent.
+ *
+ *  Adding an EVENT is a manifest write and nothing else. Measured end to end on
+ *  a live app (A0EXAMPLE002, xingyubot, 2026-08-22): `apps.manifest.update` with
+ *  `reaction_added` added, no `developerInstall` call, bot token sha256
+ *  `c34fc7458ffc` before and after, `auth.test` ok on the same token, and
+ *  `doctor --wake` delivered afterwards. Everything keeps running while you do
+ *  it.
+ *
+ *  What that measurement does NOT cover: whether a frame for a newly subscribed
+ *  event actually ARRIVES. `toDelivery` returns nothing for any type that is not
+ *  `message` or `app_mention`, so a subscription this list does not serve is
+ *  inert, and its delivery is unproven until something reads it. */
 export const BOT_EVENTS: Array<[string, string]> = [
   ["message.channels", "a message in a public channel"],
   ["message.groups", "a message in a private channel"],
