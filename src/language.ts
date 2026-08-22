@@ -56,6 +56,20 @@ export const LANGUAGE_RULES: LanguageRule[] = [
     label: "minimization of work",
     rx: /\b(quick|simple|simplest|easy|easiest|minimal|trivial|small|tiny|cheap|fast)\s+(fix|patch|approach|path|solution|change|edit|commit|tweak|update|win|hack)\b/gi,
   },
+  // INTERNAL SHORTHAND (operator 2026-08-22, on a message of mine ending "Gate
+  // green at 457, six live stages pass."): "Nobody else ever understands" it. A
+  // channel is a room of people who do not share my terminal, so a status token
+  // that means something only to the person who built the check carries nothing
+  // and takes up a line.
+  //
+  // Say what was checked and what it showed: "the test suite passes, and the
+  // checks that talk to the real workspace pass too". This rule is on the SEND
+  // and not on the closing gate, because the operator reading my terminal does
+  // know what the gate is; the room does not.
+  {
+    label: "internal shorthand nobody outside can read",
+    rx: /\bgates?\s+(green|red)\b|\bgreen\s+at\s+\d+\b|\blive\s+stages?\b|\b\d+\s+stages?\s+pass\w*\b|\bsmoke\s+(green|passes|passed)\b|\ball\s+\d+\s+stage/gi,
+  },
   { label: "em dash", rx: /—/g },
   { label: "en dash", rx: /–/g },
   { label: "'layer' as a name", rx: /\blayers?\b|\blayering\b/gi },

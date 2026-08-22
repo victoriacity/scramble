@@ -26,6 +26,7 @@ describe("the language rules, checked where the message leaves", () => {
       ["hedge", "That said, the socket stayed open."],
       ["minimizing really-just", "It really just needs the team id."],
       ["minimization of work", "A quick fix for the lookup."],
+      ["internal shorthand nobody outside can read", "Gate green at 457, six live stages pass."],
       ["em dash", "One thing — another thing."],
       ["en dash", "One thing – another thing."],
       ["'layer' as a name", "Add a validation layer above it."],
@@ -66,6 +67,24 @@ describe("the language rules, checked where the message leaves", () => {
     // And the sentence those wanted to be says the same thing without the word.
     expect(lintLanguage("The manifest names every event it subscribes to.")).toEqual([]);
     expect(lintLanguage("The error names the field, which is enough to act on.")).toEqual([]);
+  });
+
+  test("THE LINE THE ROOM COULD NOT READ: internal shorthand is refused", () => {
+    // Operator, 2026-08-22, on a message of mine: "Nobody else ever understands
+    // 'Gate green at 457, six live stages pass.'" A channel is a room of people
+    // who do not share my terminal.
+    for (const said of [
+      "Gate green at 457, six live stages pass.",
+      "gate red, looking now",
+      "All 6 stages passed against the real workspace.",
+      "smoke green, landing it",
+    ]) {
+      expect(lintLanguage(said).length).toBeGreaterThan(0);
+    }
+    // What those sentences were trying to say, which a reader outside my
+    // terminal can act on.
+    expect(lintLanguage("The test suite passes, and so do the checks that talk to the real workspace.")).toEqual([]);
+    expect(lintLanguage("457 tests pass, including the ones that send a real message.")).toEqual([]);
   });
 
   test("someone else's words in backticks are DATA, not this agent's prose", () => {
