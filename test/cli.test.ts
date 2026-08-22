@@ -639,6 +639,22 @@ describe("message send (mirrored)", () => {
     expect(writes).toHaveLength(0);
   });
 
+  test("a message breaking a language rule is REFUSED before anything is sent", async () => {
+    // The incident, 2026-08-22: the rules were checked by a separate script the
+    // sender ran first, so piping text straight into `message send` skipped them
+    // and messages went out unlinted for a day. The check moved to the send, and
+    // this asserts the part that matters — the send does not HAPPEN.
+    const cwd = scratchDir("msgsend-lint");
+    const { io, errs } = stubIo(cwd, async () => {
+      throw new Error("REFUSED means no request is made");
+    });
+    io.readStdin = async () => "Both are landed in the closing gate — controlled on six transcripts.";
+    const code = await main(["message", "send", "--target", "general", "--as", "ana"], io);
+    expect(code).toBe(1);
+    expect(errs.join(" ")).toContain("REFUSED");
+    expect(errs.join(" ")).toContain("em dash");
+  });
+
   test("reads empty stdin as a reported usage error", async () => {
     const cwd = scratchDir("msgsend-empty");
     const { io, errs } = stubIo(cwd, async () => {

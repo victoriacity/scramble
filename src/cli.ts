@@ -29,6 +29,7 @@ import {
 } from "./attachments";
 import { StatusManager } from "./status";
 import { SCOPE_NAMES, BOT_EVENT_NAMES } from "./app-manifest";
+import { lintLanguage, languageRefusal } from "./language";
 
 const DEFAULT_URL = "http://127.0.0.1:7737";
 const MAX_BACKOFF = 2000; // ms cap on reconnect delay
@@ -1189,6 +1190,16 @@ async function cmdMessage(args: string[], io: Io, backend: "local" | "slack"): P
       const text = await (io.readStdin ? io.readStdin() : Promise.resolve(""));
       if (!text.trim()) {
         io.writeErr("message send requires the message on stdin");
+        return 1;
+      }
+      // THE LANGUAGE RULES ARE CHECKED HERE, where the message leaves, and not by
+      // a chain the sender has to remember. The documented chain was draft-file
+      // then lint then send; I piped text straight in all day, the lint ran on
+      // nothing, and the operator read a long dash and told me the linting had
+      // failed. It had not failed. It had not run.
+      const refusal = languageRefusal(lintLanguage(text));
+      if (refusal !== "") {
+        io.writeErr(refusal);
         return 1;
       }
       // `--attach <path>` is repeatable: upload each file to the TARGET before

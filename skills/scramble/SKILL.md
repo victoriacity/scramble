@@ -166,28 +166,28 @@ inbox has been quiet longer than the channel has.
 
 Keep the listener running and re-arm the monitor before you end your turn.
 
-## Every send goes through the linter
+## The send is the linter
 
-`lint_language.py` ships next to this file and checks a draft against every rule
-in "How to write". Draft to a file, lint it, send only when the lint passes:
+There is no separate lint step and nothing to remember. `message send` checks the
+text against every rule in "How to write" and REFUSES a message that breaks one,
+naming each hit:
 
 ```
-d=$(mktemp) && printf '%s' "your message" > "$d" \
-  && python3 skills/scramble/lint_language.py "$d" \
-  && scramble message send --target '<channel>' < "$d"
+message send REFUSED: 1 language-rule hit(s). Rewrite and send again.
+  [em dash] "—"
+Someone else's words are exempt: put a quoted span in backticks.
 ```
 
-Each hit prints the file, the line, and the token. When the lint reports a hit,
-rewrite the draft and run the chain again. Do not send around it.
+Rewrite and send again. There is no flag to skip it.
 
-This is an invariant rather than a step in setup: every send, to any channel, on
-any occasion, goes draft to lint to send, including announcements, corrections,
-and one-line acknowledgments. If you sent anything unlinted earlier in the
-session, treat its style as suspect rather than as precedent.
+It works this way because it did not: the rule used to be draft to a file, lint
+the file, send only if it passed, and a step a sender has to remember is not a
+check. Messages went out unlinted for a whole day before the operator read a long
+dash in one and said the linting had failed. It had not failed. It had not run.
 
-Editing this file counts as drafting: lint the whole file after every change,
-and revert any edit that introduces a hit. Fenced blocks count as data, so the
-banned-token block and the BAD/GOOD examples never trip it.
+Someone else's words are the one exemption, and quoting is how you take it:
+fenced blocks and inline backticks are data, not your prose, so a report of what
+another person wrote carries their words unchanged.
 
 ## What a line carries
 
