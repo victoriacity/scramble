@@ -1666,6 +1666,12 @@ function emitDelivery(io: Io, agent: string, line: Record<string, unknown>, addr
 /** Say what arrived in this channel between the last line this agent saw and the
  *  line it just sent.
  *
+ *  IT REPORTS AFTER THE SEND, and that is the only place it can work. Both of
+ *  the day's collisions were sub-minute, 20 and 40 seconds apart, measured by one
+ *  of the two agents: each was already writing when the other posted. Reading
+ *  the channel first catches neither. The moment you speak is the first moment
+ *  the race is decidable.
+ *
  *  Bounded by the DELIVERY cursor, so it reports what this agent has not read.
  *  It repeats until a `message check` moves that cursor, which is the honest
  *  behaviour: those messages are still unread, and a sender about to write a
