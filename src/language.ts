@@ -32,6 +32,19 @@ export const LANGUAGE_RULES: LanguageRule[] = [
     label: "filler",
     rx: /\b(honestly|honest|honesty|actually|basically|essentially|frankly|candidly|truthfully)\b|\bstated plainly\b|\bplainly put\b|\bto be (fair|blunt|clear)\b/gi,
   },
+  // ANNOUNCING CANDOR: a preamble saying you are about to speak plainly, which
+  // the plain sentence does not need. The rule used to name only the two exact
+  // forms "stated plainly" and "plainly put", so "One thing I should say plainly"
+  // went out and the operator caught it by reading (2026-08-22). The ban is the
+  // CLASS, not the two phrasings that happened to be written down.
+  //
+  // Third-person "says plainly" is deliberately absent: a document that states
+  // something plainly is a fact about the document, not a preamble about the
+  // speaker, and banning it would refuse a legitimate sentence.
+  {
+    label: "announcing candor",
+    rx: /\b(say|saying|said|state|stating|stated|put|putting|speak|speaking|tell|telling)\s+(it\s+|this\s+|that\s+|you\s+)?plainly\b|\bplainly\s+(put|stated|speaking)\b|\blet me be (clear|blunt|direct|plain)\b|\bI (should|must|have to|want to|will) (say|admit|confess|be clear)\b/gi,
+  },
   {
     label: "hedge",
     rx: /\b(sort of|kind of|to be fair|to be clear|to be (direct|frank|blunt|honest|candid)|in all (honesty|fairness)|in (truth|fairness)|that said|with that said|having said that|caveat|caveats|the (honest|direct|real) truth)\b/gi,

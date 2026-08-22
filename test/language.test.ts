@@ -22,6 +22,7 @@ describe("the language rules, checked where the message leaves", () => {
   test("every rule fires on its own shape", () => {
     const cases: Array<[string, string]> = [
       ["filler", "This is basically the same defect."],
+      ["announcing candor", "One thing I should say plainly: it went out unchecked."],
       ["hedge", "That said, the socket stayed open."],
       ["minimizing really-just", "It really just needs the team id."],
       ["minimization of work", "A quick fix for the lookup."],
@@ -38,6 +39,26 @@ describe("the language rules, checked where the message leaves", () => {
     for (const [label, text] of cases) {
       expect(lintLanguage(text).map((h) => h.label)).toContain(label);
     }
+  });
+
+  test("THE PHRASE THAT GOT THROUGH: the ban is the class, not two written-down phrasings", () => {
+    // 2026-08-22, the operator reading a message I had sent: "One thing I should
+    // say plainly" is not acceptable language. The rule named "stated plainly"
+    // and "plainly put" and nothing else, so a third phrasing of the same
+    // preamble passed a check that existed precisely to stop it.
+    for (const said of [
+      "One thing I should say plainly: it went out unchecked.",
+      "To put it plainly, the lint never ran.",
+      "Plainly put, the lint never ran.",
+      "Let me be clear about what happened.",
+      "I must admit the check was skipped.",
+    ]) {
+      expect(lintLanguage(said).length).toBeGreaterThan(0);
+    }
+    // A document stating something plainly is a fact about the document, not a
+    // preamble about the speaker. Refusing it would refuse a true sentence.
+    expect(lintLanguage("The manifest says plainly which events it subscribes to.")).toEqual([]);
+    expect(lintLanguage("The error names the field plainly enough to act on.")).toEqual([]);
   });
 
   test("someone else's words in backticks are DATA, not this agent's prose", () => {
