@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import type { ChannelStore } from "../src/store";
 import { createStore } from "../src/store";
 import { createHandler } from "../src/server";
-import { main, parseBind, loadSlackConfig, slackConfigPath, slackCliToken, staleConfigWarning, staleListeners, pickStale, staleListenerProblem, readProcesses, liveListeners, listenerCommit, listenersBehind, type Io } from "../src/cli";
+import { main, parseBind, loadSlackConfig, slackConfigPath, slackCliToken, staleConfigWarning, staleListeners, pickStale, staleListenerProblem, readProcesses, liveListeners, listenerCommit, listenersBehind, processesReadable, type Io } from "../src/cli";
 import { SCOPE_NAMES, BOT_EVENT_NAMES } from "../src/app-manifest";
 
 function scratchDir(name: string): string {
@@ -2433,6 +2433,30 @@ describe("doctor, and the warning an agent gets without asking", () => {
     const said = errs.join(" ");
     expect(said).toContain("pid 88 on 4f7b942");
     expect(said).toContain("installed 995edba");
+  });
+
+  test("a host with no readable process table SAYS so, and never reports ok", async () => {
+    // Both listener checks read /proc. A host without one is not a host where
+    // the listeners are fine; it is a host where nothing looked. scramble is
+    // about to run on machines that are not this one.
+    expect(processesReadable("/proc")).toBe(true);
+    expect(processesReadable(join(scratchDir("no-proc"), "absent"))).toBe(false);
+    const cwd = scratchDir("doc-noproc");
+    writeSlackConfig(cwd, { token: "xoxb-d", channels: {}, agents: { dev: { token: "T", handle: "dev_bot" } } });
+    const errs: string[] = [];
+    const io: Io = {
+      write: () => {},
+      writeErr: (l) => errs.push(l),
+      fetch: async () =>
+        new Response(JSON.stringify({ ok: true, user: "dev_bot" }), { status: 200, headers: { "x-oauth-scopes": ALL } }),
+      env: (n) => (n === "SCRAMBLE_PROC" ? join(cwd, "no-such-proc") : undefined),
+      cwd: () => cwd,
+      sleep: async () => {},
+      serve: async () => 0,
+      createSocket: () => ({ send: () => {}, close: () => {}, onopen: null, onmessage: null, onclose: null, onerror: null }),
+    };
+    expect(await main(["doctor", "--as", "dev", "--backend", "slack"], io)).toBe(1);
+    expect(errs.join(" ")).toContain("NOTHING here checked your listeners");
   });
 
   test("doctor --wake REFUSES to run while a listener holds the socket", async () => {

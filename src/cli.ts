@@ -1682,6 +1682,18 @@ async function cmdDoctor(argv: string[], io: Io): Promise<number> {
   // version in its own command line; comparing that against the installed one
   // answers "is this process running the code I have" without touching mtimes,
   // which for an installed copy describe the wrong tree entirely.
+  // A HOST WHOSE PROCESS TABLE CANNOT BE READ SAYS SO. Both listener checks read
+  // /proc, which a Linux host has and others do not, and both answer "nothing
+  // wrong" when they cannot look. `ok` would then mean "checked and fine" on a
+  // machine where nothing was checked.
+  const procRoot = io.env("SCRAMBLE_PROC") ?? "/proc";
+  if (!processesReadable(procRoot)) {
+    problems.push(
+      `this host has no readable process table at ${procRoot}, so NOTHING here checked your ` +
+        `listeners: neither whether one is running stale code nor whether one runs a different ` +
+        `commit than the install. Check by hand with ps, and treat a quiet inbox as unexplained.`,
+    );
+  }
   const installedNow = installedCommit(io);
   const behind = listenersBehind(readProcesses(io.env("SCRAMBLE_PROC") ?? "/proc"), name, installedNow);
   if (behind.length > 0) {
@@ -1844,6 +1856,22 @@ function newestSourceMs(io: Io): number | undefined {
 /** Every process this host will admit to, as (pid, cmdline, startedMs). Reads
  *  /proc and answers an empty list where that is absent, so the DECISION below
  *  stays pure and testable while the reading stays thin. */
+/** Can this host's process table be read at all?
+ *
+ *  `readProcesses` answers the empty list for BOTH "nothing matched" and "there
+ *  is no /proc here", and doctor cannot tell those apart: on a host without
+ *  /proc it printed `doctor: ok` having inspected no listener at all, and the
+ *  agent reading that has been told its listeners are fine when nothing looked.
+ *  Anything that is about to run on other machines needs this separated. */
+export function processesReadable(root = "/proc"): boolean {
+  try {
+    readdirSync(root);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function readProcesses(root = "/proc"): Array<{ pid: string; cmd: string; startedMs: number }> {
   const out: Array<{ pid: string; cmd: string; startedMs: number }> = [];
   let pids: string[] = [];
