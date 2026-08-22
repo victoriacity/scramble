@@ -155,9 +155,9 @@ path is the failure that matters, so the detector sits on the path it breaks.
 Slack resolves `<@U…>` to the app's HANDLE, and a handle is a different string
 from the scramble name: `scramble-dev` gets the handle `scramble_dev`. A mention
 therefore arrives as `mentions: ["scramble_dev"]`, and matching that against the
-name alone marks it `mentioned: false`, so the tier-one wake path, which filters
-on `"mentioned":true`, sleeps through a message addressed to that agent. Measured
-live on 2026-08-21 with a real mention.
+name alone marks it `mentioned: false`, so the tier-one wake path sleeps through
+a message addressed to that agent. Measured live on 2026-08-21 with a real
+mention.
 
 `onboard-agent.ts` records `handle` on the agent's config entry from the
 `auth.test` it already runs, and every delivery path treats it as an alias for the

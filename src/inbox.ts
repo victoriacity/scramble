@@ -43,6 +43,15 @@ export interface InboxItem {
    *  ABSENT MEANS TRUE: every row written before this field existed was an
    *  addressed item, since nothing else was recorded then. */
   addressed?: boolean;
+  /** The Slack app id this line was delivered TO.
+   *
+   *  The ledger is keyed by agent NAME, and a name can be repointed at a
+   *  different Slack app. `xingyu-bot` pointed at one app for an hour and then
+   *  got its own, and its ledger holds 14 rows from a channel the current app
+   *  has never been in: two identities in one corpus, reported under one name
+   *  (measured by that agent, 2026-08-22). Stamping the app makes the seam
+   *  visible to whoever reads the file. */
+  app?: string;
 }
 
 /** Did this row oblige an answer? Absent means yes, for rows predating the field. */
@@ -194,32 +203,71 @@ export function pendingReport(items: InboxItem[], agent: string): string {
  *  (did this line reach me at all) and ADDRESSED (did it wake me, or did it wait
  *  for a sweep). That distinction is the whole broadcast defect: `<!channel>`
  *  was delivered to four agents and addressed to none of them. */
-export function traceReport(rows: InboxItem[], id: string, agent: string, path: string): string {
+export function traceReport(rows: InboxItem[], id: string, agent: string, path: string, app?: string): string {
+  // COUNTED BY WHAT THE ROW ACTUALLY CARRIES, never inferred. The first version
+  // printed "88 of them addressed to this agent" for a file where 88 rows carry
+  // no `addressed` field at all, because the back-compat rule that keeps old
+  // items in `pending` was reused as a measurement. The agent who read it: "the
+  // count is inferred from a missing field and printed as though measured."
+  const addressed = rows.filter((r) => r.addressed === true).length;
+  const deliveredOnly = rows.filter((r) => r.addressed === false).length;
+  const blind = rows.filter((r) => r.addressed === undefined);
+  const foreign = rows.filter((r) => r.app !== undefined && app !== undefined && r.app !== app);
   const corpus =
     rows.length === 0
       ? `The ledger at ${path} holds NO rows, so this absence says nothing about the message: ` +
         `either nothing has been delivered to ${agent} yet, or the ledger is not being written. ` +
         `Run \`scramble doctor\` before reading anything into it.`
       : `Searched ${rows.length} delivered row(s) for ${agent} in ${path}, ` +
-        `ids ${rows[0]?.id ?? "?"} to ${rows[rows.length - 1]?.id ?? "?"}, ` +
-        `${rows.filter(owesAnswer).length} of them addressed to this agent.`;
+        `ids ${rows[0]?.id ?? "?"} to ${rows[rows.length - 1]?.id ?? "?"}: ` +
+        `${addressed} addressed to this agent, ${deliveredOnly} delivered without addressing it, ` +
+        `${blind.length} written before the ledger recorded unaddressed deliveries.`;
+  const seam =
+    foreign.length === 0
+      ? ""
+      : `\n${foreign.length} row(s) here were delivered to app ` +
+        `${[...new Set(foreign.map((r) => r.app))].join(", ")}, which is NOT this agent's app ${app}. ` +
+        `The ledger is keyed by agent NAME, so repointing a name at a different Slack app inherits ` +
+        `the old app's rows and this file holds two identities under one name.`;
   const hits = rows.filter((r) => r.id === id);
   if (hits.length === 0) {
+    // AN ABSENCE OVER BLIND ROWS PROVES NOTHING, and saying "NOT delivered" over
+    // them is the exact failure this command exists to kill. Those rows were
+    // written when only ADDRESSED lines were recorded, so an unaddressed
+    // delivery in that span was never written and is absent here in the same way
+    // a message that never arrived is absent. A broadcast is that case.
+    const newest = Number(blind[blind.length - 1]?.id);
+    const asked = Number(id);
+    const outside = Number.isFinite(newest) && Number.isFinite(asked) && asked > newest;
+    const caveat =
+      blind.length === 0
+        ? ""
+        : outside
+          ? `\nThose ${blind.length} row(s) end at ${blind[blind.length - 1]?.id}, older than ${id}, ` +
+            `so they do not touch this verdict.`
+          : `\nTHIS VERDICT IS UNSOUND FOR THIS ID: ${blind.length} row(s), ` +
+            `${blind[0]?.id} to ${blind[blind.length - 1]?.id}, were written when the ledger recorded ` +
+            `ONLY addressed lines. A delivery in that span that addressed nobody was never written, ` +
+            `so it is missing here exactly as a message that never arrived is missing, and a ` +
+            `broadcast is precisely that case. Read the channel for this one.`;
     return (
-      `${id} was NOT delivered to ${agent}.\n${corpus}\n` +
+      `${id} was NOT delivered to ${agent}.\n${corpus}${seam}${caveat}\n` +
       `A message can also be absent here and still exist: \`message read\` shows a channel's ` +
       `history without delivering anything, so a line seen there and missing here reached the ` +
       `channel and never reached this agent.`
     );
   }
   const lines = hits.map((r) => {
-    const woke = owesAnswer(r)
-      ? `ADDRESSED to ${agent}, so it woke this agent`
-      : `delivered but NOT addressed to ${agent}, so nothing woke: it was visible only to a sweep`;
+    const woke =
+      r.addressed === undefined
+        ? `whether it ADDRESSED ${agent} is UNRECORDED: this row predates that field`
+        : r.addressed
+          ? `ADDRESSED to ${agent}, so it woke this agent`
+          : `delivered but NOT addressed to ${agent}, so nothing woke: it was visible only to a sweep`;
     const answer = r.answeredBy === undefined ? "no reply recorded" : `answered by ${r.answeredBy}`;
     return `  ${r.channel} from ${r.from} at ${r.at}: ${woke}, ${answer}\n    ${r.text}`;
   });
-  return `${id} WAS delivered to ${agent}, ${hits.length} row(s):\n${lines.join("\n")}\n${corpus}`;
+  return `${id} WAS delivered to ${agent}, ${hits.length} row(s):\n${lines.join("\n")}\n${corpus}${seam}`;
 }
 
 /** Should this delivered line become an item? Only lines ADDRESSED to this agent

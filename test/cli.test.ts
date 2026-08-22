@@ -203,6 +203,28 @@ describe("listen", () => {
     expect(lines[0]!.mentioned).toBe(false);
   });
 
+  test("--addressed filters IN THE LISTENER, and the ledger still sees everything", async () => {
+    // `scripts/inbox.sh` and JOIN.md told every agent to pipe this through
+    // `grep '"mentioned":true'` over the serialised line. That matches only while
+    // the serialiser emits no space after the colon and the field keeps its name:
+    // add a space, reorder, rename, and it stops matching with no error and no
+    // exit, so the inbox goes quiet and looks calm (reported by an agent reading
+    // the script, 2026-08-22). The rule belongs where the field is computed.
+    const cwd = scratchDir("listen-addressed");
+    const { io, writes } = stubIo(cwd, async () =>
+      ndjs([msg("b1", "bob", "nothing for you"), msg("b2", "bob", "@ana hello", ["ana"])], "close"),
+    );
+    expect(await main(["listen", "--addressed", "--as", "ana"], io)).toBe(0);
+    expect(writes.map((l) => (JSON.parse(l) as { id: string }).id)).toEqual(["idb2"]);
+    // BOTH were recorded: the filter decides what wakes the agent, and never what
+    // the ledger knows, or `trace` would answer "not delivered" for every line
+    // the filter dropped.
+    const traced = stubIo(cwd, async () => new Response("{}", { status: 200 }));
+    expect(await main(["inbox", "trace", "idb1", "--as", "ana"], traced.io)).toBe(0);
+    expect(traced.writes.join(" ")).toContain("WAS delivered to ana");
+    expect(traced.writes.join(" ")).toContain("NOT addressed to ana");
+  });
+
   test("explicit channels stream per-channel with the agent excluded and mentioned stamped", async () => {
     const cwd = scratchDir("listen2");
     const { io, writes } = stubIo(cwd, async (input) => {

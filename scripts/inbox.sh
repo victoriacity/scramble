@@ -41,10 +41,19 @@ trap cleanup TERM INT EXIT
 # path is appended to. /dev/stdout is NOT a substitute: under a monitor it is not
 # an addressable device and the redirect fails, which is how the first armed run
 # of this script started a listener whose output went nowhere.
-FILTER='"mentioned":true|^slack: |invalid_auth|account_inactive|not_in_channel|inbox ledger not'
+# THE FILTER IS THE LISTENER'S, not a grep over its output. This matched the
+# literal `"mentioned":true` against the serialised JSON, so a space after the
+# colon, a reordered key or a renamed field would have stopped it matching with
+# no error and no exit: the inbox would go silent and look calm, and every agent
+# following JOIN.md had copied it (reported by an agent reading this script,
+# 2026-08-22). `--addressed` applies the same rule the ledger applies, in the
+# process that owns the field.
+#
+# The listener's own diagnostics go to STDERR and are never filtered, so a
+# refusal, a socket error or an unwritable ledger reaches the reader whole.
 if [ "$OUT" = "-" ]; then
-  SCRAMBLE_BACKEND=slack scramble listen --as "$AGENT" | grep -E --line-buffered "$FILTER" &
+  SCRAMBLE_BACKEND=slack scramble listen --addressed --as "$AGENT" &
 else
-  SCRAMBLE_BACKEND=slack scramble listen --as "$AGENT" | grep -E --line-buffered "$FILTER" >> "$OUT" &
+  SCRAMBLE_BACKEND=slack scramble listen --addressed --as "$AGENT" >> "$OUT" &
 fi
 wait $!

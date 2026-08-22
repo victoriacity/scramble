@@ -453,6 +453,7 @@ async function cmdListen(argv: string[], io: Io): Promise<number> {
   const agentStream = channels.length === 0;
   const status = statusTracker(io, "local");
   const stopTicker = status ? status.startExpiryTicker(2000, io.sleep) : undefined;
+  const addressedOnly = flags.has("addressed");
   let lastSeq = 0;
   let backoff = 100;
   let staying = true;
@@ -467,7 +468,7 @@ async function cmdListen(argv: string[], io: Io): Promise<number> {
         (m) => {
           if (status !== undefined) void deliverStatus(status, m, name);
           if (m.seq > lastSeq) lastSeq = m.seq;
-          emitDelivery(io, name, m as unknown as Record<string, unknown>);
+          emitDelivery(io, name, m as unknown as Record<string, unknown>, addressedOnly);
         },
       );
       staying = !stop;
@@ -1003,7 +1004,7 @@ async function slackCmdListen(argv: string[], io: Io): Promise<number> {
       name,
       (d) => {
         if (status !== undefined) void deliverStatus(status, d, name);
-        emitDelivery(io, name, d as unknown as Record<string, unknown>);
+        emitDelivery(io, name, d as unknown as Record<string, unknown>, flags.has("addressed"));
       },
       (p) => io.writeErr(`slack: ${p}`),
     );
@@ -1441,7 +1442,8 @@ async function cmdInbox(argv: string[], io: Io): Promise<number> {
       return 1;
     }
     const path = inboxPath(slackConfigPath(io), name);
-    io.write(traceReport(readInbox(path), id, name, path));
+    const app = loadSlackConfig(io)?.agents[name]?.appId;
+    io.write(traceReport(readInbox(path), id, name, path, app));
     return 0;
   }
   if (sub !== "pending") {
@@ -1464,13 +1466,13 @@ async function cmdInbox(argv: string[], io: Io): Promise<number> {
  *  ledger must not stop a message reaching the agent, since the message is the
  *  point and the ledger is the accounting. It is REPORTED, so an inbox that
  *  quietly counts nothing does not read as an inbox with nothing in it. */
-function emitDelivery(io: Io, agent: string, line: Record<string, unknown>): void {
-  io.write(JSON.stringify(line));
+function emitDelivery(io: Io, agent: string, line: Record<string, unknown>, addressedOnly = false): void {
   // THIS AGENT'S IDENTITIES: its scramble name and the Slack handle a mention
   // resolves to, which differ (`scramble-dev` is mentioned as `scramble_dev`).
   // Comparing against the name alone is what once made a real mention arrive
   // with mentioned:false.
-  const handle = loadSlackConfig(io)?.agents[agent]?.handle;
+  const conf = loadSlackConfig(io)?.agents[agent];
+  const handle = conf?.handle;
   const names = handle === undefined || handle === "" ? [agent] : [agent, handle];
   // EVERY DELIVERED LINE IS RECORDED, addressed or not. Only the addressed ones
   // are items owing a reply; the rest are the record that lets `inbox trace`
@@ -1479,6 +1481,14 @@ function emitDelivery(io: Io, agent: string, line: Record<string, unknown>): voi
   // meanings and no way to choose, which is what sent four agents grepping a
   // text log for a timestamp.
   const addressed = isAddressed(line, names);
+  // THE FILTER LIVES HERE, where `addressed` is computed, and never in a grep
+  // downstream. `scripts/inbox.sh` matched the literal `"mentioned":true`
+  // against the serialised line, which works only while the serialiser emits no
+  // space after that colon and the field keeps that name: add a space, reorder,
+  // rename, and the grep stops matching with no error and no exit, so an inbox
+  // goes quiet and looks calm (reported by an agent reading the script,
+  // 2026-08-22). Every agent following JOIN.md inherited it.
+  if (!addressedOnly || addressed) io.write(JSON.stringify(line));
   try {
     recordInboxItem(inboxPath(slackConfigPath(io), agent), {
       id: String(line.id ?? line.ts ?? line.seq ?? ""),
@@ -1488,6 +1498,7 @@ function emitDelivery(io: Io, agent: string, line: Record<string, unknown>): voi
       text: String(line.text ?? "").slice(0, 120),
       at: new Date().toISOString(),
       addressed,
+      ...(conf?.appId === undefined || conf.appId === "" ? {} : { app: conf.appId }),
     });
   } catch (e) {
     io.writeErr(`inbox ledger not written for ${String(line.id ?? "")}: ${String(e)}`);
@@ -2314,7 +2325,7 @@ const USAGE = [
   "  inbox pending                                   lines addressed to you with no reply",
   "  inbox trace <ts>                                did that message reach you, and wake you",
   "  lint <file>...                                  the send's language rules, on any file",
-  "  listen                                          stream deliveries, one JSON line each",
+  "  listen            [--addressed]                 stream deliveries, one JSON line each",
   "  next              [--timeout N]                 one delivery, then exit",
   "  doctor            [--wake <channel>]            is this agent's wiring real",
   "  version                                         which copy is running",

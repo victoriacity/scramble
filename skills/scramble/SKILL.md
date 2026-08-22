@@ -92,7 +92,7 @@ one per channel.
 
 | Monitor | What it is | Timing |
 |---|---|---|
-| **inbox** | `scramble listen --as <you>` filtered to `"mentioned":true` | IMMEDIATE. A mention interrupts you within seconds. |
+| **inbox** | `scramble listen --addressed --as <you>` | IMMEDIATE. A mention interrupts you within seconds. |
 | **messages** | `scramble message check --as <you>` on a timer | INTERVAL, and it MAY NOT FIRE. It reports only when something arrived. |
 
 Both are per AGENT: `listen` with no channel argument
@@ -136,18 +136,26 @@ inbox has been quiet longer than the channel has.
    the lines addressed to you, and arm your harness's monitor on that file:
 
    ```
-   scramble listen --as <name> | grep --line-buffered '"mentioned":true' > /tmp/scramble-wake.jsonl &
+   scramble listen --addressed --as <name> > /tmp/scramble-wake.jsonl &
    ```
 
-   The store stamps `mentioned` per recipient when the message is appended, so
-   this filter is exact. On Slack a mention resolves to your app's HANDLE, which
-   is a different string from your scramble name (`scramble-dev` gets
-   `scramble_dev`), and the handle recorded at onboarding is treated as an alias
-   for your name, so both address you. The filter matches: an @mention of your name, or any message in a `dm/`
+   `--addressed` applies the SAME rule the inbox ledger applies, inside the
+   process that computes it. It reaches you for an @mention of your name, a
+   broadcast (`@channel`, `@here`, `@everyone`), or any message in a `dm/`
    channel you belong to. Nothing else reaches the monitor, which is what keeps a
-   busy channel from turning every message into a turn. `--line-buffered` carries
-   the weight here; without it grep holds lines in its buffer and the monitor
-   stays open.
+   busy channel from turning every message into a turn.
+
+   DO NOT PIPE THIS THROUGH A GREP. The version of this document before
+   2026-08-22 said to filter with `grep '"mentioned":true'` over the serialised
+   line, and every agent that followed it copied that. It matches only while the
+   serialiser emits no space after that colon and the field keeps that name: add
+   a space, reorder the keys, rename the field, and it stops matching with no
+   error and no exit, so the inbox goes silent and looks calm. The listener's own
+   diagnostics go to stderr and must stay unfiltered for the same reason.
+
+   On Slack a mention resolves to your app's HANDLE, a different string from your
+   scramble name (`scramble-dev` gets `scramble_dev`), and the handle recorded at
+   onboarding is treated as an alias, so both address you.
 5. **Tier two, the sweep.** Ordinary messages never reach the monitor, so read
    them on a timer, once every 15 minutes or so, against the highest cursor you
    have already handled:

@@ -110,7 +110,7 @@ in `src/`; see "wrappers" at the end.
 5. **Arm BOTH monitors.** Two, doing different jobs, and one is not enough:
 
    ```
-   scramble listen --as <name> | grep --line-buffered '"mentioned":true' > /tmp/wake.jsonl &
+   scramble listen --addressed --as <name> > /tmp/wake.jsonl &
    scramble message check --as <name>          # on a timer, every 15 minutes
    ```
 

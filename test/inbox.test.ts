@@ -214,12 +214,69 @@ describe("inbox trace: what happened to ONE message, without grepping a text log
     // one." An agent's grep returned zero and was right BY LUCK, because nobody
     // had quoted the ts yet.
     const p = join(scratch(), "inbox", "dev.jsonl");
-    recordInboxItem(p, item({ id: "100.1" }));
+    recordInboxItem(p, item({ id: "100.1", addressed: true }));
     recordInboxItem(p, item({ id: "200.2", addressed: false }));
     const said = traceReport(readInbox(p), "300.3", "dev", p);
     expect(said).toContain("Searched 2 delivered row(s)");
     expect(said).toContain("ids 100.1 to 200.2");
-    expect(said).toContain("1 of them addressed");
+    expect(said).toContain("1 addressed to this agent, 1 delivered without addressing it");
+  });
+
+  test("the corpus counts what the rows CARRY, and never infers a count", () => {
+    // The first version printed "88 of them addressed to this agent" over a file
+    // where no row carried the field, because the back-compat rule that keeps old
+    // items in `pending` got reused as a measurement. The agent who read it:
+    // "the count is inferred from a missing field and printed as though
+    // measured."
+    const p = join(scratch(), "inbox", "dev.jsonl");
+    recordInboxItem(p, item({ id: "100.1" }));
+    recordInboxItem(p, item({ id: "200.2" }));
+    const said = traceReport(readInbox(p), "100.1", "dev", p);
+    expect(said).toContain("0 addressed to this agent, 0 delivered without addressing it");
+    expect(said).toContain("2 written before the ledger recorded unaddressed deliveries");
+    // And the row itself reports the field as unrecorded, never as a value.
+    expect(said).toContain("is UNRECORDED: this row predates that field");
+  });
+
+  test("an absence over rows that predate the field is REFUSED, not reported", () => {
+    // Those rows were written when only ADDRESSED lines were recorded, so a
+    // delivery that addressed nobody was never written and is missing exactly as
+    // a message that never arrived is missing. A broadcast is that case, which is
+    // the one thing anybody was tracing.
+    const p = join(scratch(), "inbox", "dev.jsonl");
+    recordInboxItem(p, item({ id: "100.1" }));
+    recordInboxItem(p, item({ id: "300.3" }));
+    const said = traceReport(readInbox(p), "200.2", "dev", p);
+    expect(said).toContain("was NOT delivered to dev");
+    expect(said).toContain("THIS VERDICT IS UNSOUND FOR THIS ID");
+    expect(said).toContain("100.1 to 300.3");
+    expect(said).toContain("Read the channel for this one");
+  });
+
+  test("an absence NEWER than every such row stands, and says why", () => {
+    const p = join(scratch(), "inbox", "dev.jsonl");
+    recordInboxItem(p, item({ id: "100.1" }));
+    recordInboxItem(p, item({ id: "300.3", addressed: true }));
+    const said = traceReport(readInbox(p), "400.4", "dev", p);
+    expect(said).toContain("was NOT delivered to dev");
+    expect(said).toContain("end at 100.1, older than 400.4, so they do not touch this verdict");
+    expect(said).not.toContain("UNSOUND");
+  });
+
+  test("rows delivered to a DIFFERENT app under the same name are named as such", () => {
+    // The ledger is keyed by agent NAME. An agent repointed its name at its own
+    // Slack app after an hour on a shared one, and its ledger holds 14 rows from
+    // a channel the current app has never been in: two identities, one corpus,
+    // reported under one name.
+    const p = join(scratch(), "inbox", "dev.jsonl");
+    recordInboxItem(p, item({ id: "100.1", channel: "argo", app: "A0OLD", addressed: true }));
+    recordInboxItem(p, item({ id: "300.3", app: "A0MINE", addressed: true }));
+    const said = traceReport(readInbox(p), "300.3", "dev", p, "A0MINE");
+    expect(said).toContain("1 row(s) here were delivered to app A0OLD");
+    expect(said).toContain("NOT this agent's app A0MINE");
+    expect(said).toContain("keyed by agent NAME");
+    // With no app known, nothing is claimed about identity at all.
+    expect(traceReport(readInbox(p), "300.3", "dev", p)).not.toContain("were delivered to app");
   });
 
   test("an EMPTY ledger refuses to answer instead of reporting absence", () => {
@@ -277,7 +334,10 @@ describe("inbox trace: what happened to ONE message, without grepping a text log
     const p = join(scratch(), "inbox", "dev.jsonl");
     recordInboxItem(p, item({ id: "100.1" }));
     expect(pendingInbox(p)).toHaveLength(1);
-    expect(traceReport(readInbox(p), "100.1", "dev", p)).toContain("so it woke this agent");
+    // The obligation is kept, and trace still refuses to CLAIM it woke anyone:
+    // keeping an old question answerable and asserting what the row recorded are
+    // different things, and only the first is safe to infer.
+    expect(traceReport(readInbox(p), "100.1", "dev", p)).toContain("is UNRECORDED");
   });
 
   test("a delivery-only row is never closed by a reply or by an own message", () => {
