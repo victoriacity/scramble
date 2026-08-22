@@ -1175,13 +1175,16 @@ async function attachmentUpload(
   threadTs?: string,
 ): Promise<AttachResult> {
   if (backend === "slack") {
-    const cfg = loadSlackConfig(io);
-    if (cfg === null || !cfg.token) return { ok: false, error: "slack backend requires a bot token" };
-    const slackId = cfg.channels[targetChannel];
-    if (!slackId) return { ok: false, error: `no Slack channel for channel ${targetChannel}` };
-    const token = (as !== undefined ? cfg.agents[as]?.token : undefined) ?? cfg.token;
-    const r = await uploadToSlack(io.fetch, token, path, slackId, mimeOverride, initialComment, threadTs);
-    return r.ok ? { ok: true, id: r.out.id, permalink: r.out.permalink } : { ok: false, error: r.error };
+    // THROUGH THE BACKEND, which owns channel resolution and mention conversion.
+    // This function used to read cfg.channels itself and hand the text to Slack
+    // raw, so an attach failed on a channel a plain send reached, and a name in
+    // the text notified nobody.
+    const s = slackBackend(io);
+    if (s.error !== undefined || s.backend === undefined) {
+      return { ok: false, error: s.error ?? "slack backend unavailable" };
+    }
+    const r = await s.backend.upload(targetChannel, path, as ?? "", mimeOverride, initialComment, threadTs);
+    return r.ok ? { ok: true, id: r.id, permalink: r.permalink } : { ok: false, error: r.error };
   }
   const r = recordLocalUpload(slackFilesDir(io), path, mimeOverride);
   if (!r.ok) return { ok: false, error: r.error };

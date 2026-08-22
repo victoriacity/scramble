@@ -15,7 +15,7 @@ import type { Delivery, Message, Attachment } from "./types";
 import { DM_PREFIX } from "./types";
 import type { SlackSocket } from "./slack-transport";
 import { STATUS_METADATA_TYPE } from "./status";
-import { downloadFile, type SlackFileMeta } from "./attachments";
+import { downloadFile, uploadToSlack, type SlackFileMeta } from "./attachments";
 
 // --- slack endpoint URLs ------------------------------------------------
 
@@ -664,6 +664,44 @@ export class SlackBackend {
       };
     }
     return { ok: true };
+  }
+
+  /** Upload a file to a channel, through the SAME resolution and the SAME
+   *  mention conversion a plain post gets.
+   *
+   *  It went around both. `attachmentUpload` read `cfg.channels[target]` itself,
+   *  so a channel this agent is in but the config does not map failed with a
+   *  short "no Slack channel" while a plain send to that channel worked; and the
+   *  text rode to Slack as `initial_comment` without denormalize, so a message
+   *  opening with someone's name stored the name LITERALLY and notified nobody.
+   *  A peer agent measured both on a live channel (2026-08-22) and named the
+   *  shape: "the upload path skips what plain send does."
+   *
+   *  So the upload lives here now, beside post(), because what they share is not
+   *  a helper both call. It is the same question, asked once: which channel, and
+   *  whose names are in this text. */
+  async upload(
+    channel: string,
+    filePath: string,
+    as: string,
+    mimeOverride?: string,
+    initialComment?: string,
+    thread?: string,
+  ): Promise<{ ok: true; id: string; permalink?: string } | { ok: false; error: string }> {
+    const resolved = await this.slackChannelFor(this.tokenOrDefault(as), channel);
+    if (resolved.id === undefined) return { ok: false, error: resolved.error };
+    const t = this.agentToken(as);
+    if (!t.ok) return { ok: false, error: t.error };
+    const r = await uploadToSlack(
+      this.fetch,
+      t.token,
+      filePath,
+      resolved.id,
+      mimeOverride,
+      initialComment === undefined ? undefined : denormalize(initialComment, this.roster),
+      thread,
+    );
+    return r.ok ? { ok: true, id: r.out.id, ...(r.out.permalink !== undefined ? { permalink: r.out.permalink } : {}) } : { ok: false, error: r.error };
   }
 
   /** Resolve a Slack user id to a name: the roster wins, then users.info (the

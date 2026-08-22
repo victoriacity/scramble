@@ -895,4 +895,19 @@ describe("message send --attach on the slack backend", () => {
     expect(await main(["message", "send", "--target", "general", "--as", "alice", "--backend", "slack"], io)).toBe(0);
     expect(postedText).toBe("just words");
   });
+
+  test("an unusable slack config REFUSES the upload, and says which", async () => {
+    // The upload goes through the backend now, so it reports the backend's own
+    // reason. It used to check `cfg === null || !cfg.token` itself, which is one
+    // of the two things this consolidation removed.
+    const cwd = scratchDir("attach-nocfg");
+    mkdirSync(join(cwd, ".scramble"), { recursive: true });
+    writeFileSync(join(cwd, ".scramble", "slack.json"), "not json at all");
+    const src = join(cwd, "a.png");
+    writeFileSync(src, "bytes");
+    const { io, errs } = slackIo(cwd, async () => new Response(JSON.stringify({ ok: true }), { status: 200 }));
+    io.readStdin = async () => "with a file";
+    expect(await main(["message", "send", "--target", "general", "--as", "alice", "--attach", src, "--backend", "slack"], io)).toBe(1);
+    expect(errs.join(" ")).toContain("slack.json");
+  });
 });

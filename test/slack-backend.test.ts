@@ -172,6 +172,67 @@ describe("post", () => {
     expect((call.init?.headers as Record<string, string>).authorization).toBe("Bearer xoxb-app");
   });
 
+  test("an upload resolves the channel the SAME way a plain send does", async () => {
+    // A peer agent, 2026-08-22, on a live channel: `message send --attach` read
+    // cfg.channels[target] itself, so a channel the agent is IN but the config
+    // does not map failed with a short "no Slack channel" while a plain send to
+    // that same channel worked. The discriminator was the missing suffix.
+    const seen: string[] = [];
+    const h = make({}, async (url) => {
+      seen.push(url);
+      if (url.includes("users.conversations")) {
+        return new Response(JSON.stringify({ ok: true, channels: [{ id: "C9", name: "invited" }] }), { status: 200 });
+      }
+      if (url.includes("files.getUploadURLExternal")) {
+        return new Response(JSON.stringify({ ok: true, upload_url: "https://u/x", file_id: "F1" }), { status: 200 });
+      }
+      if (url.includes("files.completeUploadExternal")) {
+        return new Response(JSON.stringify({ ok: true, files: [{ id: "F1", permalink: "https://p/1" }] }), { status: 200 });
+      }
+      if (url.startsWith("https://u/")) return new Response("", { status: 200 });
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    });
+    const f = join(makeTmpDir("upload-resolve"), "a.txt");
+    writeFileSync(f, "bytes");
+    const r = await h.backend.upload("invited", f, "alice");
+    expect(r.ok).toBe(true);
+    expect(seen.some((u) => u.includes("users.conversations"))).toBe(true);
+    // A channel it is NOT in gets the full answer, the same one a send gives.
+    const bad = await h.backend.upload("nowhere", f, "alice");
+    expect(bad.ok).toBe(false);
+    expect(bad.ok ? "" : bad.error).toContain("this agent is not in a channel by that name");
+  });
+
+  test("an upload converts @names in its comment, so a mention NOTIFIES", async () => {
+    // The same peer: "My message opened with the operator's name and Slack
+    // stored it literally, so he had no notification on an answer he had asked
+    // for." The upload posts its text as initial_comment and never denormalized
+    // it, while chat.postMessage did.
+    let comment = "";
+    const h = make({}, async (url, init) => {
+      if (url.includes("files.getUploadURLExternal")) {
+        return new Response(JSON.stringify({ ok: true, upload_url: "https://u/x", file_id: "F1" }), { status: 200 });
+      }
+      if (url.includes("files.completeUploadExternal")) {
+        // FORM-ENCODED, which is what this endpoint takes. Parsing it as JSON
+        // threw inside the fake and surfaced as "slack request failed", reading
+        // like a network fault while the product was doing the right thing.
+        comment = new URLSearchParams(String(init?.body ?? "")).get("initial_comment") ?? "";
+        // The permalink is REQUIRED by the upload path, which refuses without
+        // one because nothing could attach the file to a message.
+        return new Response(JSON.stringify({ ok: true, files: [{ id: "F1", permalink: "https://p/1" }] }), { status: 200 });
+      }
+      if (url.startsWith("https://u/")) return new Response("", { status: 200 });
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    });
+    const f = join(makeTmpDir("upload-mention"), "a.txt");
+    writeFileSync(f, "bytes");
+    // `general` is mapped in the fixture config, and U111 is `ana` in its roster.
+    const r = await h.backend.upload("general", f, "alice", undefined, "@ana here is the file");
+    expect(r.ok).toBe(true);
+    expect(comment).toBe("<@U111> here is the file");
+  });
+
   test("a thread_ts Slack accepts and IGNORES is reported, not read as success", async () => {
     // Measured against the real workspace: posting with a ts that names no
     // message answers ok:true, puts the line at the top level, and returns no
