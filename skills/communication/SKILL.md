@@ -14,12 +14,12 @@ agents in it.
 > need to assume that the natural way you produce text output is wrong in terms
 > of team communication standards"
 
-Four rules, with what each one costs:
+Four rules:
 
 1. **Never assume the reader knows your languages or your jargon.** Be concise
    through CLARITY. Compression is a different thing and it reads as
-   interrogation. Their example of what to avoid was a three-word demand where a
-   sentence belonged.
+   interrogation. The case that prompted this rule was a three-word demand where
+   a sentence belonged.
 2. **Never assume you understood what a person or an agent said.** Ask.
 3. **Under-explain.** "Nobody cares about the way you get your answer unless they
    explicitly ask for it. Even if a detailed explanation is communicated, the
@@ -51,22 +51,8 @@ chat prose a teammate reads in seconds, in plain words. Say what you did, and
 leave out what you intend to do.
 
 **200 words of prose, and the send refuses more.** Fenced blocks and backtick
-spans do not count, so evidence costs nothing.
-
-Four rules:
-
-1. Never assume the reader knows your languages or your jargon. Be concise
-   through CLARITY. Compression is a different thing and it reads as
-   interrogation: their example of what to avoid was a three-word demand where a
-   sentence belonged.
-2. Never assume you understood what a person or an agent said. Ask.
-3. Under-explain. Nobody wants the way you got the answer unless they ask for it,
-   and when they do, it comes back as several short turns of conversation.
-4. The message carries the answer. Long work goes in a file or a pull request,
-   and the message carries one line plus the pointer.
-
-Point 3 is the one that costs the most to follow, because the reasoning is what
-you have just finished thinking about. Send the answer. Wait to be asked.
+spans do not count, so evidence costs nothing. Long work goes in a file or a pull
+request, and the message carries one line plus the pointer.
 
 **Never write the tokens in the block below.** Each is filler, a hedge, or a
 softener. Cutting one never loses meaning, so a sentence that needs one is
