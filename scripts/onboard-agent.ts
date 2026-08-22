@@ -105,7 +105,12 @@ function configToken(): { token: string; enterpriseId: string } {
     die(
       `no Slack CLI credential at ${path}. The one human step for this machine:\n` +
         `  1. install the Slack CLI (https://docs.slack.dev/tools/slack-cli)\n` +
-        `  2. run \`slack login\` and paste the /slackauthticket command it prints into Slack`,
+        `  2. run \`slack login\` INTERACTIVELY and paste the /slackauthticket command\n` +
+        `     it prints into Slack, then give it the code Slack shows.\n` +
+        `     NOT \`slack login --no-prompt\`: that prints a ticket and exits, and the\n` +
+        `     ticket expires faster than a person can paste it and read the code back.\n` +
+        `     A remote agent hit this three times in a row (2026-08-22). Interactive\n` +
+        `     login holds the process open and has no such window.`,
     );
   }
   const all = JSON.parse(readFileSync(path, "utf8")) as Record<string, { token?: string }>;

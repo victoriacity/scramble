@@ -30,7 +30,7 @@ public-bound: a token in a commit is readable in every clone forever. Override
 the path with `SCRAMBLE_SLACK_CONFIG=/path/to/slack.json`. With `HOME` unset the
 fallback is `.scramble/slack.json` in the working directory.
 
-Inbound attachments land in `filesDir`, default `~/.config/scramble/files`, kept
+Inbound attachments are written to `filesDir`, default `~/.config/scramble/files`, kept
 out of the tree for the same reason.
 
 ## Setup: the agent onboards itself
@@ -39,8 +39,14 @@ One human operation, once per machine, and it is not per agent:
 
 ```
 # install the Slack CLI, then:
-slack login          # paste the /slackauthticket command it prints into Slack
+slack login          # INTERACTIVE. Paste the /slackauthticket command it prints
+                     # into Slack, approve, and give it the code Slack shows.
 ```
+
+Do NOT use `slack login --no-prompt`. It prints a ticket and exits, and the
+ticket expires faster than a person can paste it into Slack and read the code
+back: a remote agent hit that three times in a row before switching. The
+interactive login holds the process open and has no such window.
 
 Everything after that is the agent's own work:
 
@@ -105,8 +111,8 @@ Two things make it cheap. The channel's ID never has to be handed over, because
 the CLI credential holds `groups:read` and
 `bun scripts/onboard-agent.ts <name> --channel <name>` finds even a private
 channel by name. And the config is written before the invite, so the agent works
-the moment the invite lands with nothing to re-run: the verify read is refused
-until then, and the script says so rather than calling it a failure.
+the moment the invite arrives with nothing to re-run: the verify read is refused
+until then, and the script says so, calling it expected.
 
 ### An agent's inbox can be dead while everything else works
 
@@ -118,7 +124,7 @@ line, and requires the frame for that exact ts to come back:
 ```
 
 Exit 0 with a ts means the wake path carries messages. Nonzero means it does not,
-and the message says so rather than leaving an agent to infer it from silence.
+and the message says so, leaving no agent to infer it from silence.
 This exists because a socket that connects and delivers nothing looks exactly
 like a quiet channel: on 2026-08-21 an inbox monitor ran for hours in that state
 while every read and post kept working.
@@ -126,7 +132,7 @@ while every read and post kept working.
 ### An agent that onboarded before a fix
 
 An agent keeps running with whatever its app and config held on the day it
-onboarded, so a fix landed afterwards reaches it only if something tells it. Two
+onboarded, so a fix committed afterwards reaches it only if something tells it. Two
 things do.
 
 ```
@@ -161,7 +167,7 @@ config keeps working.
 ### Several agents share one config file
 
 The config is shared by every agent on a host and each is invited to different
-channels, so a channel an agent is not in is the normal case rather than a fault.
+channels, so a channel an agent is not in is the normal case, and never a fault.
 `message check` reports each refusal by channel name and drains the rest. It exits
 nonzero only when EVERY configured channel is refused, because an agent invited to
 none of them must not read as a quiet workspace.
@@ -238,7 +244,7 @@ that conversation, or the id is wrong.
 | `channels` | scramble channel name → Slack conversation id. A channel absent here fails loudly: `no Slack channel for channel <name>`. |
 | `agents` | Agent name → `{ "token": "xoxb-…", "appToken": "xapp-…", "appId": "A…", "handle": "…" }`: the bot and app-level tokens that agent acts with. The per-agent `appToken` is optional: when absent the top-level `appToken` is used for that agent's Socket Mode connect, so a single-app config keeps working unchanged. `onboard-agent.ts` writes both per-agent tokens it receives from `apps.developerInstall` here, plus `appId`, which is what the agent needs to change its own scopes or remove its own app later, plus `handle`, the name Slack resolves a mention to. |
 | `dmChannels` | Slack DM conversation id → the agent that DM belongs to, so an inbound DM is attributed to the right agent. |
-| `roster` | Slack user id → name. A cache, not a requirement: an id absent here resolves through `users.info` (scope `users:read`) and is remembered for the run. |
+| `roster` | Slack user id → name. A cache: an id absent here resolves through `users.info` (scope `users:read`) and is remembered for the run. |
 | `filesDir` | Where inbound attachments are downloaded and the local file ledger lives. |
 
 Every call uses the ACTING agent's credential: `--as <name>` resolves through
@@ -299,7 +305,7 @@ than leaving a file nothing can reach.
 channel and downloads as itself; a file a person sends downloads to `filesDir` and
 the line carries its local `path`.
 
-That took finding a defect in this repo rather than in Slack. The upload step sent
+That took finding a defect in this repo, with Slack behaving correctly. The upload step sent
 the bytes as a raw `PUT`, and Slack answers **200** to that while storing a file it
 will not share and cannot serve: `completeUploadExternal` then reported ok with
 `shares: {}`, and fetching the bytes returned a 69KB sign-in page. Nothing failed
@@ -317,7 +323,7 @@ POST multipart   shares=REAL   download=2000 bytes of the file
 Two things follow. `completeUploadExternal` takes `channel_id`, which produces the
 real share, so no permalink needs to go in the message text. And it takes
 `initial_comment` and `thread_ts`, so the words and the file arrive as ONE message
-in the right thread rather than as two.
+in the right thread, as one message.
 
 `bun scripts/live-smoke.ts inbound` checks the receiving direction against a real
 file and reports the exact response when it fails.

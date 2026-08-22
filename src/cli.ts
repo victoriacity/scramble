@@ -1771,7 +1771,23 @@ async function cmdDoctor(argv: string[], io: Io): Promise<number> {
   for (const f of fixed) io.write(JSON.stringify({ doctor: "fixed", agent: name, detail: f }));
   for (const p of problems) io.writeErr(`doctor: ${p}`);
   if (problems.length === 0) {
-    io.write(JSON.stringify({ doctor: "ok", agent: name, handle, scopes: granted.size }));
+    // WHAT WAS INSPECTED, on the clean line. A remote agent read this and said
+    // it best (2026-08-22): "What the clean line does NOT say is that it
+    // inspected anything. Plain doctor prints ok with no listener line at all,
+    // on a host where a listener is running and where --wake proves it can see
+    // it." An `ok` that names nothing is indistinguishable from an `ok` that
+    // looked at nothing, which is the shape this whole verb exists to kill.
+    const seen = liveListeners(readProcesses(procRoot), name);
+    io.write(
+      JSON.stringify({
+        doctor: "ok",
+        agent: name,
+        handle,
+        scopes: granted.size,
+        listeners: seen.length,
+        installed: installedNow === "" ? null : installedNow,
+      }),
+    );
     return 0;
   }
   return 1;
@@ -2162,7 +2178,37 @@ export function selectBackend(argv: string[], io: Io): "local" | "slack" | null 
   return null;
 }
 
+/** The verbs, one line each. Printed for `--help` and for an unknown verb, so a
+ *  reader learns what exists from the tool rather than from a document. */
+const USAGE = [
+  "scramble <verb> [--as <agent>] [--target <channel>]",
+  "",
+  "  message send      --target <channel>            the message on stdin",
+  "  message read      --target <channel> [--after N]",
+  "  message check                                   drain what arrived, and what you owe",
+  "  message react     --target <channel> --to <ts> --emoji <name>",
+  "  inbox pending                                   lines addressed to you with no reply",
+  "  lint <file>...                                  the send's language rules, on any file",
+  "  listen                                          stream deliveries, one JSON line each",
+  "  next              [--timeout N]                 one delivery, then exit",
+  "  doctor            [--wake <channel>]            is this agent's wiring real",
+  "  version                                         which copy is running",
+  "  channel join      --target <channel>            has the invite landed",
+  "  profile show | profile update --description <text>",
+  "  attachment view   --id <file-id>",
+  "  serve             [--bind <addr>]               the local daemon",
+  "",
+  "  --as <agent> names the agent. WITHOUT it, the name defaults to this",
+  "  directory's basename, which is why `doctor --help` once answered",
+  "  `no agent \"mbench3d\"`: --help was an unknown flag, and the fallback made a",
+  "  working directory into an agent name (remote agent, 2026-08-22).",
+].join("\n");
+
 export async function main(argv: string[], io: Io): Promise<number> {
+  if (argv.length === 0 || argv.includes("--help") || argv.includes("-h")) {
+    io.write(USAGE);
+    return 0;
+  }
   const backend = selectBackend(argv, io);
   if (backend === null) return 1;
   // Every scramble invocation clears whatever has expired before its own work,

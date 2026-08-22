@@ -773,6 +773,31 @@ describe("message check (local => cursor drain)", () => {
   });
 });
 
+describe("`--help`, and the agent name that is not a directory", () => {
+  // A remote agent, 2026-08-22: "`--help` is unknown CLI-wide, and `doctor
+  // --help` falls through to the working directory as the agent name:
+  // doctor: no agent "mbench3d" ... From /tmp it says "tmp", from home it says
+  // "agent"." An unknown flag turned a directory into an identity.
+  test("--help lists the verbs and exits 0, from any verb", async () => {
+    const cwd = scratchDir("help");
+    for (const argv of [["--help"], ["doctor", "--help"], ["message", "send", "-h"], []]) {
+      const { io, writes } = stubIo(cwd, async () => {
+        throw new Error("--help must touch nothing");
+      });
+      expect(await main(argv, io)).toBe(0);
+      expect(writes.join("\n")).toContain("scramble <verb>");
+      expect(writes.join("\n")).toContain("inbox pending");
+    }
+  });
+
+  test("the help says WHERE the agent name comes from without --as", async () => {
+    // The surprise was the fallback, so the fallback is what the help names.
+    const { io, writes } = stubIo(scratchDir("help-as"), async () => new Response("{}", { status: 200 }));
+    expect(await main(["--help"], io)).toBe(0);
+    expect(writes.join("\n")).toContain("directory's basename");
+  });
+});
+
 describe("`scramble version`: which copy is running", () => {
   // A peer agent, 2026-08-22: "My scramble executes your working tree. bun link
   // points at the maintainer's checkout and runs src directly... if you save
