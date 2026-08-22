@@ -115,12 +115,30 @@ describe("the inbox ledger: one row per addressed line, one reply owed", () => {
   });
 
   test("only lines ADDRESSED to this agent by someone else become items", () => {
-    expect(isAddressed({ mentioned: true, from: "andrew" }, "dev")).toBe(true);
-    // Its own line: never an obligation to answer.
-    expect(isAddressed({ mentioned: true, from: "dev" }, "dev")).toBe(false);
+    const me = ["dev", "dev_bot"];
+    expect(isAddressed({ mentioned: true, from: "andrew", mentions: ["dev_bot"] }, me)).toBe(true);
+    // A mention resolves to the HANDLE, which differs from the scramble name.
+    expect(isAddressed({ mentioned: true, from: "andrew", mentions: ["dev"] }, me)).toBe(true);
+    // Its own line, under either identity: never an obligation to answer.
+    expect(isAddressed({ mentioned: true, from: "dev" }, me)).toBe(false);
+    expect(isAddressed({ mentioned: true, from: "dev_bot" }, me)).toBe(false);
     // Traffic that merely passed through the channel is not a question.
-    expect(isAddressed({ mentioned: false, from: "andrew" }, "dev")).toBe(false);
-    expect(isAddressed({ from: "andrew" }, "dev")).toBe(false);
+    expect(isAddressed({ mentioned: false, from: "andrew" }, me)).toBe(false);
+    expect(isAddressed({ from: "andrew" }, me)).toBe(false);
+  });
+
+  test("a question addressed to SOMEONE ELSE in my thread is not mine to answer", () => {
+    // Delivery and obligation are different questions. A peer wrote
+    // "@alignment_benchmark there is a concrete overlap" inside a thread I had
+    // replied in, so it arrived with mentioned:true, and `inbox pending` told me
+    // someone was waiting on me for a question addressed to somebody else.
+    const me = ["dev", "dev_bot"];
+    expect(isAddressed({ mentioned: true, from: "peer", mentions: ["someone_else"] }, me)).toBe(false);
+    // Naming nobody, inside my thread, IS mine: that is a bare reply to me.
+    expect(isAddressed({ mentioned: true, from: "peer", mentions: [] }, me)).toBe(true);
+    expect(isAddressed({ mentioned: true, from: "peer" }, me)).toBe(true);
+    // Naming both of us is mine too.
+    expect(isAddressed({ mentioned: true, from: "peer", mentions: ["someone_else", "dev_bot"] }, me)).toBe(true);
   });
 
   test("a half-written row does not take the whole ledger down", () => {

@@ -1413,7 +1413,13 @@ async function cmdInbox(argv: string[], io: Io): Promise<number> {
  *  quietly counts nothing does not read as an inbox with nothing in it. */
 function emitDelivery(io: Io, agent: string, line: Record<string, unknown>): void {
   io.write(JSON.stringify(line));
-  if (!isAddressed(line, agent)) return;
+  // THIS AGENT'S IDENTITIES: its scramble name and the Slack handle a mention
+  // resolves to, which differ (`scramble-dev` is mentioned as `scramble_dev`).
+  // Comparing against the name alone is what once made a real mention arrive
+  // with mentioned:false.
+  const handle = loadSlackConfig(io)?.agents[agent]?.handle;
+  const names = handle === undefined || handle === "" ? [agent] : [agent, handle];
+  if (!isAddressed(line, names)) return;
   try {
     recordInboxItem(inboxPath(slackConfigPath(io), agent), {
       id: String(line.id ?? line.ts ?? line.seq ?? ""),

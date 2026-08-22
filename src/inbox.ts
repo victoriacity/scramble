@@ -151,8 +151,28 @@ export function pendingReport(items: InboxItem[], agent: string): string {
 }
 
 /** Should this delivered line become an item? Only lines ADDRESSED to this agent
- *  by someone else. An agent's own line never reaches the delivery path, and a
- *  line that merely passed through a channel is not a question. */
-export function isAddressed(d: { mentioned?: unknown; from?: unknown }, agent: string): boolean {
-  return d.mentioned === true && typeof d.from === "string" && d.from !== agent;
+ *  by someone else.
+ *
+ *  DELIVERY AND OBLIGATION ARE DIFFERENT QUESTIONS. A message in a thread this
+ *  agent is part of is delivered with `mentioned:true`, which is right: a reply
+ *  in your own thread reaches you. It is NOT automatically yours to answer. A
+ *  peer wrote "@alignment_benchmark there is a concrete overlap" inside a thread
+ *  I had replied in, and `inbox pending` told me someone was waiting on me for a
+ *  question addressed to somebody else. A list that names other people's
+ *  questions is one I learn to scroll past, which costs the whole mechanism.
+ *
+ *  So: named here, or naming nobody. A line that names OTHER agents and not this
+ *  one is someone else's to answer, however visible it is.
+ *
+ *  `names` is this agent's identities, its scramble name and its Slack handle,
+ *  because a mention resolves to the handle and the two differ. */
+export function isAddressed(
+  d: { mentioned?: unknown; from?: unknown; mentions?: unknown },
+  names: string[],
+): boolean {
+  if (d.mentioned !== true || typeof d.from !== "string") return false;
+  if (names.includes(d.from)) return false;
+  const mentions = Array.isArray(d.mentions) ? d.mentions.filter((m): m is string => typeof m === "string") : [];
+  if (mentions.length === 0) return true;
+  return mentions.some((m) => names.includes(m));
 }
