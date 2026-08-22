@@ -879,8 +879,15 @@ export class SlackBackend {
     // that matched nothing. The operator wrote `<!channel> ensure everything you
     // write to files are English`, and it reached no agent's inbox: it came in
     // with `mentions: []` and `mentioned: false`, so every agent saw it only on
-    // the 15-minute sweep, if at all. Two agents measured that independently
-    // against their own inbox files (2026-08-22).
+    // the 15-minute sweep, if at all. Three agents measured that independently
+    // against their own inbox and wake logs (2026-08-22).
+    //
+    // AND THE COMPLIANCE LOOKED LIKE SUCCESS. All three acted on that broadcast
+    // within minutes, which from outside is indistinguishable from delivery
+    // working. One of them put the distinction exactly: "three agents complying
+    // is not evidence the broadcast reached anyone. It is evidence that three
+    // agents drain often enough to catch a message nobody was told about." Had
+    // any of them been mid-job, it would have sat unseen until the next sweep.
     //
     // Rendered as `@channel`, `@here`, `@everyone`, which computeMentions then
     // picks up like any other name, so one normalization makes the existing
