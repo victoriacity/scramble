@@ -49,6 +49,9 @@ const io = {
   readStdin(): Promise<string> {
     return new Response(Bun.stdin).text();
   },
+  moduleDir(): string {
+    return import.meta.dir;
+  },
   serve(store: ChannelStore, opts: ServeOptions): Promise<number> {
     const srv = serve(store, opts);
     return new Promise(() => {});

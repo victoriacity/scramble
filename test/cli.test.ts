@@ -773,6 +773,36 @@ describe("message check (local => cursor drain)", () => {
   });
 });
 
+describe("`scramble version`: which copy is running", () => {
+  // A peer agent, 2026-08-22: "My scramble executes your working tree. bun link
+  // points at the maintainer's checkout and runs src directly... if you save
+  // halfway through an edit, the syntax error runs inside my listener, and I
+  // meet it before you do." An agent could not tell which scramble it ran.
+  test("an installed copy names its commit", async () => {
+    const dir = scratchDir("ver-installed");
+    writeFileSync(join(dir, "COMMIT"), "6fe75ff\n");
+    const { io, writes } = stubIo(dir, async () => new Response("{}", { status: 200 }));
+    io.moduleDir = () => dir;
+    expect(await main(["version"], io)).toBe(0);
+    expect(JSON.parse(writes[0]!)).toEqual({ scramble: "installed", commit: "6fe75ff", source: dir });
+  });
+
+  test("a checkout says so, and exits nonzero, because its version is a moving target", async () => {
+    const dir = scratchDir("ver-checkout");
+    const { io, writes, errs } = stubIo(dir, async () => new Response("{}", { status: 200 }));
+    io.moduleDir = () => dir;
+    expect(await main(["version"], io)).toBe(1);
+    expect(JSON.parse(writes[0]!).commit).toBe(null);
+    expect(errs.join(" ")).toContain("scripts/install.sh");
+  });
+
+  test("with no moduleDir seam at all it still answers rather than throwing", async () => {
+    const { io, writes } = stubIo(scratchDir("ver-noseam"), async () => new Response("{}", { status: 200 }));
+    expect(await main(["version"], io)).toBe(1);
+    expect(JSON.parse(writes[0]!).commit).toBe(null);
+  });
+});
+
 describe("`scramble lint`: the send's rules, pointed at any document", () => {
   // Operator, 2026-08-22: "the linter should be individually callable to check
   // other documents such as lark docs or markdown files."

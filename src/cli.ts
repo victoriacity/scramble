@@ -55,6 +55,10 @@ export interface Io {
    *  real read lives in src/bin.ts; tests inject a fake. When absent, `message
    *  send` reads stdin as empty and reports it. */
   readStdin?(): Promise<string>;
+  /** The directory this CLI's source sits in, so `version` can read the COMMIT
+   *  file an install writes beside it. The real value comes from src/bin.ts;
+   *  absent under test, which reads as a checkout. */
+  moduleDir?(): string;
 }
 
 /** The CLI owns --bind string parsing. The one interpretation site: it turns a
@@ -1244,6 +1248,35 @@ async function cmdAttachment(args: string[], io: Io): Promise<number> {
   return 1;
 }
 
+/** `scramble version`: which commit this CLI IS, read from the COMMIT file the
+ *  installer writes beside the source.
+ *
+ *  An agent could not answer this before. `bun link` points the name on PATH at
+ *  the maintainer's checkout, so `scramble` was whatever that tree happened to
+ *  hold at the moment of the call, including a half-saved edit. The answer here
+ *  says which copy is running and where it lives, and says RUNNING FROM A
+ *  CHECKOUT when there is no COMMIT file, because that is the case where the
+ *  version is a moving target. */
+function cmdVersion(io: Io): number {
+  const dir = io.moduleDir ? io.moduleDir() : "";
+  let commit = "";
+  try {
+    commit = readFileSync(join(dir, "COMMIT"), "utf8").trim();
+  } catch {
+    /* no COMMIT file: this is a checkout, reported as such below */
+  }
+  if (commit === "") {
+    io.write(JSON.stringify({ scramble: "running from a checkout", source: dir, commit: null }));
+    io.writeErr(
+      `scramble is running from a checkout at ${dir}, so its behaviour changes when that tree ` +
+        `changes, with no pull and no signal. Install a copy you hold: bash scripts/install.sh`,
+    );
+    return 1;
+  }
+  io.write(JSON.stringify({ scramble: "installed", commit, source: dir }));
+  return 0;
+}
+
 /** `scramble lint <file>...`, or the text on stdin: the SAME rules `message send`
  *  enforces, pointed at anything else worth checking.
  *
@@ -1968,6 +2001,8 @@ export async function main(argv: string[], io: Io): Promise<number> {
       return cmdInbox(argv.slice(1), io);
     case "lint":
       return cmdLint(argv.slice(1), io);
+    case "version":
+      return cmdVersion(io);
     case "doctor":
       return cmdDoctor(argv.slice(1), io);
     case "join":
