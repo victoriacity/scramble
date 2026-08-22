@@ -627,14 +627,14 @@ export class SlackBackend {
     text: string,
     as: string,
     thread?: string,
-  ): Promise<{ ok: true } | { ok: false; error: string }> {
+  ): Promise<{ ok: true; problem?: string } | { ok: false; error: string }> {
     const resolved = await this.slackChannelFor(this.tokenOrDefault(as), channel);
     if (resolved.id === undefined) return { ok: false, error: resolved.error };
     const slackChannel = resolved.id;
     const t = this.agentToken(as);
     if (!t.ok) return { ok: false, error: t.error };
     const token = t.token;
-    const r = await readOk<{ error?: string }>(this.fetch, POST_URL, {
+    const r = await readOk<{ error?: string; ts?: string; message?: { thread_ts?: string } }>(this.fetch, POST_URL, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
       body: JSON.stringify({
@@ -644,6 +644,25 @@ export class SlackBackend {
       }),
     });
     if (!r.ok) return { ok: false, error: r.error };
+    // A THREAD_TS THAT IS NOT A MESSAGE IS ACCEPTED IN SILENCE. Measured against
+    // this workspace: posting with a ts that names no message answers ok:true,
+    // puts the line at the TOP LEVEL of the channel, and the response carries no
+    // message.thread_ts. One mistyped digit put a reply to the operator outside
+    // the thread it answered, and the send reported success.
+    //
+    // The response is the evidence and it costs nothing to read: a threaded post
+    // that comes back without message.thread_ts was not threaded. Reported as a
+    // PROBLEM rather than an error, because the message did reach the channel and
+    // a caller that retries would say everything twice.
+    if (thread !== undefined && thread !== "" && r.data.message?.thread_ts === undefined) {
+      return {
+        ok: true,
+        problem:
+          `posted to ${channel} at TOP LEVEL, not in thread ${thread}: Slack accepted that ` +
+          `thread_ts and threaded nothing, which means it names no message in this channel. ` +
+          `The message IS in the channel, at ts ${String(r.data.ts ?? "unknown")}.`,
+      };
+    }
     return { ok: true };
   }
 

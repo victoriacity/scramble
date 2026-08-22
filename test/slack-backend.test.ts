@@ -172,6 +172,37 @@ describe("post", () => {
     expect((call.init?.headers as Record<string, string>).authorization).toBe("Bearer xoxb-app");
   });
 
+  test("a thread_ts Slack accepts and IGNORES is reported, not read as success", async () => {
+    // Measured against the real workspace: posting with a ts that names no
+    // message answers ok:true, puts the line at the top level, and returns no
+    // message.thread_ts. One mistyped digit put a reply to the operator outside
+    // the thread it answered and the send reported success.
+    const h = make({}, async (url) =>
+      url.includes("chat.postMessage")
+        ? new Response(JSON.stringify({ ok: true, ts: "9.9", message: {} }), { status: 200 })
+        : new Response(JSON.stringify({ ok: true }), { status: 200 }),
+    );
+    const r = await h.backend.post("general", "hi", "bob", "1787359458.075769");
+    expect(r.ok).toBe(true);
+    // ok, because the message DID reach the channel: a caller that retried on a
+    // failure here would say everything twice.
+    expect(r.ok ? r.problem : "").toContain("TOP LEVEL");
+    expect(r.ok ? r.problem : "").toContain("1787359458.075769");
+    expect(r.ok ? r.problem : "").toContain("9.9");
+  });
+
+  test("a thread that DID take carries no problem", async () => {
+    const h = make({}, async (url) =>
+      url.includes("chat.postMessage")
+        ? new Response(JSON.stringify({ ok: true, ts: "9.9", message: { thread_ts: "root-1" } }), { status: 200 })
+        : new Response(JSON.stringify({ ok: true }), { status: 200 }),
+    );
+    const r = await h.backend.post("general", "hi", "bob", "root-1");
+    expect(r).toEqual({ ok: true });
+    // And an unthreaded post is never asked about threading.
+    expect(await h.backend.post("general", "hi", "bob")).toEqual({ ok: true });
+  });
+
   test("an unknown channel is a failure naming the channel AND what was asked", async () => {
     const h = make();
     const r = await h.backend.post("nope", "hi", "bob");
@@ -289,7 +320,14 @@ describe("post", () => {
   });
 
   test("posts into a thread by passing thread_ts", async () => {
-    const h = make();
+    // The fake answers the way Slack answers a thread that TOOK: with the
+    // message's thread_ts echoed back. Without it this is the dropped-thread
+    // case, which the test below covers.
+    const h = make({}, async (url) =>
+      url.includes(POST)
+        ? new Response(JSON.stringify({ ok: true, ts: "9.9", message: { thread_ts: "1.1" } }), { status: 200 })
+        : new Response(JSON.stringify({ ok: true }), { status: 200 }),
+    );
     const r = await h.backend.post("general", "hi", "alice", "1.1");
     expect(r).toEqual({ ok: true });
     const call = h.fetches.find((f) => f.url.includes(POST))!;

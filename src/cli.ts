@@ -334,6 +334,9 @@ async function postText(
       io.writeErr(`post failed: ${r.error}`);
       return 1;
     }
+    // A post that landed somewhere other than where it was aimed is REPORTED,
+    // never inferred from a clean exit.
+    if (r.problem !== undefined) io.writeErr(`slack: ${r.problem}`);
     // A REPLY CLOSES WHAT IT ANSWERS. Here, after Slack accepted it, so a
     // refused post never retires an item that is still waiting.
     try {

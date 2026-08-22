@@ -108,8 +108,8 @@ describe("the inbox ledger: one row per addressed line, one reply owed", () => {
   });
 
   test("the ledger sits beside the config, one file per agent", () => {
-    expect(inboxPath("/home/x/.config/scramble/slack.json", "scramble-dev")).toBe(
-      "/home/x/.config/scramble/inbox/scramble-dev.jsonl",
+    expect(inboxPath(join("cfgroot", "slack.json"), "scramble-dev")).toBe(
+      join("cfgroot", "inbox", "scramble-dev.jsonl"),
     );
   });
 
