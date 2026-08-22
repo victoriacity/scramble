@@ -1029,7 +1029,16 @@ async function messageCheckSlack(flags: Map<string, string>, io: Io): Promise<nu
   let drained = 0;
   // What I have already said that today's rules would refuse.
   const selfHits: string[] = [];
-  for (const channel of Object.keys(cfg.channels).sort()) {
+  // WHAT THIS AGENT IS IN, unioned with what the config names. The sweep used to
+  // walk cfg.channels alone, a hand-kept map in a config several agents share:
+  // a peer removed two entries while testing resolution and this sweep stopped
+  // covering the channel the operator talks to me in, reporting "none of the 3
+  // configured channels are readable" while the listener kept delivering, so
+  // nothing looked broken. The config still contributes, because a name mapped
+  // there may be a DM or a conversation the listing does not return.
+  const mine = await s.backend.myChannels(name);
+  if (mine.problem !== undefined) io.writeErr(`slack: ${mine.problem}`);
+  for (const channel of [...new Set([...Object.keys(cfg.channels), ...mine.names])].sort()) {
     const cursor = started[channel];
     // `oldest` is inclusive in Slack, so re-filter to strictly-newer lines: the
     // cursor line itself must not re-drain on a repeat `message check`.

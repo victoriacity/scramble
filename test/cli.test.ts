@@ -1143,6 +1143,51 @@ describe("message check under the slack backend", () => {
     expect(code).toBe(0);
   });
 
+  test("the sweep covers channels this agent is IN, beyond what the config maps", async () => {
+    // 2026-08-22: a peer removed two entries from the SHARED config while
+    // testing name resolution, and this sweep stopped covering the channel the
+    // operator talks to me in. It reported "none of the 3 configured channels
+    // are readable" and swept nothing that mattered, while the listener kept
+    // delivering, so nothing looked broken.
+    const asked: string[] = [];
+    const io = slackCheckIo(scratchDir("mslack-membership"), {
+      fetch: async (url) => {
+        const u = String(url);
+        if (u.includes("users.conversations")) {
+          return new Response(
+            JSON.stringify({ ok: true, channels: [{ id: "C9", name: "unmapped-but-mine" }] }),
+            { status: 200 },
+          );
+        }
+        if (u.includes("conversations.history")) {
+          asked.push(new URL(u).searchParams.get("channel") ?? "");
+          return new Response(JSON.stringify({ ok: true, messages: [] }), { status: 200 });
+        }
+        return new Response(JSON.stringify({ ok: true, teams: [{ id: "T1" }], messages: [] }), { status: 200 });
+      },
+    });
+    expect(await main(["message", "check", "--as", "dev", "--backend", "slack"], io)).toBe(0);
+    // C1 is the configured `general`; C9 is the channel only membership knows.
+    expect(asked).toContain("C1");
+    expect(asked).toContain("C9");
+  });
+
+  test("a refused membership listing is REPORTED, never read as being in nothing", async () => {
+    // An agent in no channels and an agent whose listing was refused look the
+    // same from the outside, and one of them is a broken credential.
+    const errs: string[] = [];
+    const io = slackCheckIo(scratchDir("mslack-memberfail"), {
+      writeErr: (l) => errs.push(l),
+      fetch: async (url) =>
+        String(url).includes("users.conversations")
+          ? new Response(JSON.stringify({ ok: false, error: "invalid_auth" }), { status: 200 })
+          : new Response(JSON.stringify({ ok: true, messages: [] }), { status: 200 }),
+    });
+    await main(["message", "check", "--as", "dev", "--backend", "slack"], io);
+    expect(errs.join(" ")).toContain("listing this agent's channels failed");
+    expect(errs.join(" ")).toContain("invalid_auth");
+  });
+
   test("the sweep reads MY OWN sent lines back against today's rules", async () => {
     // Operator, 2026-08-22, after catching three style defects in a row: "You
     // need to understand this general pattern and use the message check to

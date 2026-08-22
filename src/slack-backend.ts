@@ -590,6 +590,47 @@ export class SlackBackend {
     return { ok: true };
   }
 
+  /** Every channel this agent is a MEMBER of, by name.
+   *
+   *  The sweep used to walk `cfg.channels`, a hand-kept map in a config several
+   *  agents share and edit. On 2026-08-22 a peer removed two entries while
+   *  testing name resolution, and my own `message check` stopped covering the
+   *  channel the operator talks to me in: it reported "none of the 3 configured
+   *  channels are readable" and swept nothing that mattered, while the listener
+   *  kept delivering, so nothing looked broken.
+   *
+   *  Membership is a fact Slack holds. Asking it is one call, and it cannot fall
+   *  out of date the way a map maintained by hand does. */
+  async myChannels(as: string): Promise<{ names: string[]; problem?: string }> {
+    const token = this.tokenOrDefault(as);
+    const team = await this.teamIdFor(token);
+    const names: string[] = [];
+    let cursor = "";
+    for (let page = 0; page < 10; page++) {
+      const q =
+        `${USERS_CONVERSATIONS_URL}?types=public_channel,private_channel&exclude_archived=true&limit=200` +
+        (team === "" ? "" : `&team_id=${encodeURIComponent(team)}`) +
+        (cursor === "" ? "" : `&cursor=${encodeURIComponent(cursor)}`);
+      const r = await readOk<{
+        channels?: Array<{ id?: string; name?: string }>;
+        response_metadata?: { next_cursor?: string };
+      }>(this.fetch, q, { headers: { authorization: `Bearer ${token}` } });
+      // REPORTED, never an empty list read as "in nothing": an agent in no
+      // channels and an agent whose membership call was refused look identical
+      // from the outside, and one of them is a broken credential.
+      if (!r.ok) return { names, problem: `listing this agent's channels failed: ${r.error}` };
+      for (const c of r.data.channels ?? []) {
+        if (typeof c.name === "string" && c.name !== "") {
+          names.push(c.name);
+          if (typeof c.id === "string") this.channelIdCache.set(c.name, c.id);
+        }
+      }
+      cursor = r.data.response_metadata?.next_cursor ?? "";
+      if (cursor === "") break;
+    }
+    return { names };
+  }
+
   /** Is this agent's app IN the conversation, and what is its handle? An app
    *  cannot add itself to a Slack conversation, public or private: a member
    *  invites it. So the useful answer to "join" is whether the invite has
