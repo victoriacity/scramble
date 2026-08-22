@@ -737,13 +737,17 @@ export class SlackBackend {
   /** POST one post to the Slack channel a channel maps to, with the agent's own bot
    *  token when it has one, else the config token. A Slack failure (`ok:false`
    *  with error text) is surfaced as a FAILURE carrying that text, never read
-   *  as a success. */
+   *  as a success.
+ *
+ *  It returns the ts Slack gave the message, so the ledger can name the actual
+ *  reply that closed an item. Without it `answeredBy` held a wall-clock string
+ *  pointing at nothing, which `inbox trace` printed and made obvious. */
   async post(
     channel: string,
     text: string,
     as: string,
     thread?: string,
-  ): Promise<{ ok: true; problem?: string } | { ok: false; error: string }> {
+  ): Promise<{ ok: true; ts?: string; problem?: string } | { ok: false; error: string }> {
     const resolved = await this.slackChannelFor(this.tokenOrDefault(as), channel);
     if (resolved.id === undefined) return { ok: false, error: resolved.error };
     const slackChannel = resolved.id;
@@ -778,6 +782,7 @@ export class SlackBackend {
       if (landed === undefined) {
         return {
           ok: true,
+          ...(typeof r.data.ts === "string" ? { ts: r.data.ts } : {}),
           problem:
             `posted to ${channel} at TOP LEVEL, and NOT in thread ${thread}: Slack accepted that ` +
             `thread_ts and threaded nothing, which means it names no message in this channel. ` +
@@ -794,6 +799,7 @@ export class SlackBackend {
       if (landed !== thread) {
         return {
           ok: true,
+          ...(typeof r.data.ts === "string" ? { ts: r.data.ts } : {}),
           problem:
             `posted to ${channel} in thread ${landed}, and NOT in ${thread} as asked: Slack has no ` +
             `nested threads, so a thread_ts naming a REPLY is hoisted into that reply's root. ` +
@@ -802,7 +808,7 @@ export class SlackBackend {
         };
       }
     }
-    return { ok: true };
+    return { ok: true, ...(typeof r.data.ts === "string" ? { ts: r.data.ts } : {}) };
   }
 
   /** Upload a file to a channel, through the SAME resolution and the SAME

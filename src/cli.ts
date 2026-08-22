@@ -389,7 +389,10 @@ async function postText(
     // A REPLY CLOSES WHAT IT ANSWERS. Here, after Slack accepted it, so a
     // refused post never retires an item that is still waiting.
     try {
-      closeInboxItems(inboxPath(slackConfigPath(io), from), channel, new Date().toISOString(), thread);
+      // NAMED BY THE REPLY'S OWN ts, so `inbox trace` on a closed item points at
+      // the message that closed it. It held a wall-clock ISO string before,
+      // which named nothing anyone could look up.
+      closeInboxItems(inboxPath(slackConfigPath(io), from), channel, r.ts ?? new Date().toISOString(), thread);
     } catch (e) {
       io.writeErr(`inbox ledger not updated after posting to ${channel}: ${String(e)}`);
     }

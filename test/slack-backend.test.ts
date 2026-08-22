@@ -375,9 +375,12 @@ describe("post", () => {
         : new Response(JSON.stringify({ ok: true }), { status: 200 }),
     );
     const r = await h.backend.post("general", "hi", "bob", "root-1");
-    expect(r).toEqual({ ok: true });
+    // THE REPLY'S OWN ts COMES BACK, so the ledger can record which message
+    // closed an item. It recorded a wall-clock string before, which named
+    // nothing anybody could look up, and `inbox trace` printed that.
+    expect(r).toEqual({ ok: true, ts: "9.9" });
     // And an unthreaded post is never asked about threading.
-    expect(await h.backend.post("general", "hi", "bob")).toEqual({ ok: true });
+    expect(await h.backend.post("general", "hi", "bob")).toEqual({ ok: true, ts: "9.9" });
   });
 
   test("an unknown channel is a failure naming the channel AND what was asked", async () => {
@@ -506,7 +509,7 @@ describe("post", () => {
         : new Response(JSON.stringify({ ok: true }), { status: 200 }),
     );
     const r = await h.backend.post("general", "hi", "alice", "1.1");
-    expect(r).toEqual({ ok: true });
+    expect(r).toEqual({ ok: true, ts: "9.9" });
     const call = h.fetches.find((f) => f.url.includes(POST))!;
     expect(JSON.parse(call.init?.body as string)).toEqual({ channel: "C1", text: "hi", thread_ts: "1.1" });
   });
