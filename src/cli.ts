@@ -405,6 +405,15 @@ async function postText(
     // A REPLY CLOSES WHAT IT ANSWERS. Here, after Slack accepted it, so a
     // refused post never retires an item that is still waiting.
     try {
+      // WHAT ARRIVED WHILE YOU WERE WRITING. The local backend answers a send
+      // with its crossings and the skill tells every agent to read them; on
+      // Slack the send returned nothing, so the promise held on the backend
+      // nobody uses.
+      //
+      // The operator, 2026-08-22, on two agents posting near-identical plans one
+      // second apart: "one task/topic is owned by one agent." Neither could see
+      // the other coming. This is the surface that would have shown it.
+      await reportCrossings(io, s.backend, channel, from, r.ts);
       // NAMED BY THE REPLY'S OWN ts, so `inbox trace` on a closed item points at
       // the message that closed it. It held a wall-clock ISO string before,
       // which named nothing anyone could look up.
@@ -1652,6 +1661,45 @@ function emitDelivery(io: Io, agent: string, line: Record<string, unknown>, addr
   } catch (e) {
     io.writeErr(`inbox ledger not written for ${String(line.id ?? "")}: ${String(e)}`);
   }
+}
+
+/** Say what arrived in this channel between the last line this agent saw and the
+ *  line it just sent.
+ *
+ *  Bounded by the DELIVERY cursor, so it reports what this agent has not read.
+ *  It repeats until a `message check` moves that cursor, which is the honest
+ *  behaviour: those messages are still unread, and a sender about to write a
+ *  second message on the same subject wants to know a second time.
+ *
+ *  Reported and never fatal: a failed lookup here must not turn a delivered
+ *  message into an error, so it says what it could not do and stops. */
+async function reportCrossings(
+  io: Io,
+  backend: SlackBackend,
+  channel: string,
+  from: string,
+  ownTs: string | undefined,
+): Promise<void> {
+  if (ownTs === undefined) return;
+  const cursor = readSlackCursor(io, from)[channel];
+  const r = await backend.history(channel, cursor, from, false);
+  if (r.code !== 0) {
+    io.writeErr(`crossings unread for ${channel}: ${r.error ?? "history failed"}`);
+    return;
+  }
+  const crossed = r.messages.filter(
+    (m) =>
+      m.from !== from &&
+      slackTs(m.ts) < slackTs(ownTs) &&
+      (cursor === undefined || slackTs(m.ts) > slackTs(cursor)),
+  );
+  if (crossed.length === 0) return;
+  const lines = crossed.map((m) => `  ${m.from}: ${(m.text ?? "").replace(/\s+/g, " ").slice(0, 100)}`);
+  io.writeErr(
+    `${crossed.length} message(s) arrived in ${channel} before yours and you have not read them:\n` +
+      `${lines.join("\n")}\n` +
+      `If one of them already made your point, or already claimed the work, say nothing further.`,
+  );
 }
 
 async function cmdMessage(args: string[], io: Io, backend: "local" | "slack"): Promise<number> {

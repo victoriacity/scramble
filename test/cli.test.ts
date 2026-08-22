@@ -1330,6 +1330,72 @@ describe("message check under the slack backend", () => {
     return { ...base, ...over };
   }
 
+  test("a send REPORTS what arrived before it that this agent has not read", async () => {
+    // The operator, 2026-08-22, on two agents posting near-identical plans one
+    // second apart: "one task/topic is owned by one agent." Neither could see the
+    // other coming. The local backend answers a send with its crossings and the
+    // skill tells every agent to read them; on Slack the send returned nothing,
+    // so the promise held only on the backend nobody uses.
+    const cwd = scratchDir("send-crossings");
+    const io = slackCheckIo(cwd, {
+      fetch: async (url) => {
+        const u = String(url);
+        if (u.includes("chat.postMessage"))
+          return new Response(JSON.stringify({ ok: true, ts: "50.0", message: {} }), { status: 200 });
+        if (u.includes("conversations.history"))
+          return new Response(
+            JSON.stringify({
+              ok: true,
+              messages: [
+                { ts: "30.0", user: "U9", text: "I am taking the generation run" },
+                { ts: "60.0", user: "U9", text: "after yours, so not a crossing" },
+              ],
+            }),
+            { status: 200 },
+          );
+        return new Response(JSON.stringify({ ok: true, messages: [] }), { status: 200 });
+      },
+    });
+    writeSlackConfig(cwd, {
+      appToken: "xapp-1",
+      token: "xoxb-1",
+      channels: { general: "C1" },
+      agents: { dev: { token: "T", handle: "dev" } },
+      roster: { U9: "peer" },
+    });
+    const errs: string[] = [];
+    const watched: Io = { ...io, writeErr: (l) => errs.push(l), readStdin: async () => "my line" };
+    expect(await main(["message", "send", "--target", "general", "--as", "dev"], watched)).toBe(0);
+    const said = errs.join("\n");
+    expect(said).toContain("1 message(s) arrived in general before yours");
+    expect(said).toContain("I am taking the generation run");
+    expect(said).toContain("already claimed the work");
+    // A message AFTER this one is no crossing.
+    expect(said).not.toContain("not a crossing");
+  });
+
+  test("a crossings lookup that FAILS says so, and the message still went", async () => {
+    // Reported and never fatal: a failed lookup here must not turn a delivered
+    // message into an error.
+    const cwd = scratchDir("send-crossings-fail");
+    const io = slackCheckIo(cwd, {
+      fetch: async (url) =>
+        String(url).includes("chat.postMessage")
+          ? new Response(JSON.stringify({ ok: true, ts: "50.0", message: {} }), { status: 200 })
+          : new Response(JSON.stringify({ ok: false, error: "ratelimited" }), { status: 200 }),
+    });
+    writeSlackConfig(cwd, {
+      appToken: "xapp-1",
+      token: "xoxb-1",
+      channels: { general: "C1" },
+      agents: { dev: { token: "T", handle: "dev" } },
+    });
+    const errs: string[] = [];
+    const watched: Io = { ...io, writeErr: (l) => errs.push(l), readStdin: async () => "my line" };
+    expect(await main(["message", "send", "--target", "general", "--as", "dev"], watched)).toBe(0);
+    expect(errs.join(" ")).toContain("crossings unread for general: ratelimited");
+  });
+
   test("a peer's ORIGIN is learned from its message metadata, and `peers` names it", async () => {
     // The operator, 2026-08-22: "Does each agent record its hostname and working
     // directory on scramble and an agent may know its same directory peers?"

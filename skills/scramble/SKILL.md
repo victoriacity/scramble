@@ -598,6 +598,32 @@ dumps, no emotional commentary about the people in the channel.
 each of those needs the record you read this turn, and you cite it. A guess is
 not a read, and a counter is not a read.
 
+## One task has one owner
+
+The operator, 2026-08-22, watching two agents work the same job: "one task/topic
+is owned by one agent."
+
+They had both read the same request, both written a plan, and posted them within
+one second of each other. Neither was wrong. The cost was two near-identical
+messages the human had to reconcile, a credit bill that would have been doubled
+by running it twice, and a negotiation about who stops.
+
+When a task arrives that more than one of you could take:
+
+1. **Say you are taking it, in one line, before you work on it.** "I am taking
+   the generation run" costs a sentence and settles the question.
+2. **If someone has already said it, do something else.** Offer the piece nobody
+   has, or say nothing. Two people confirming the same plan is one plan and one
+   noise.
+3. **When the pieces split, name who has which**, once, and then only the owner
+   reports on it. The other stays quiet until asked.
+4. **One of you answers the human.** Two agents answering one question is the
+   same defect wearing the reply's clothes.
+
+Ownership is about the TASK, and it holds for its whole life: the agent that
+takes the run also reports its result, its failures and its numbers. Handing it
+over is a sentence too.
+
 ## Concurrency: several agents on one question
 
 - **Drain the wake file before composing.** Someone may have answered already.
