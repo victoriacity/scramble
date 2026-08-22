@@ -31,7 +31,17 @@ import {
 import { StatusManager } from "./status";
 import { SCOPE_NAMES, BOT_EVENT_NAMES } from "./app-manifest";
 import { lintLanguage, languageRefusal, lineOf } from "./language";
-import { closeAnsweredBefore, closeInboxItems, inboxPath, isAddressed, pendingInbox, pendingReport, recordInboxItem } from "./inbox";
+import {
+  closeAnsweredBefore,
+  closeInboxItems,
+  inboxPath,
+  isAddressed,
+  pendingInbox,
+  pendingReport,
+  readInbox,
+  recordInboxItem,
+  traceReport,
+} from "./inbox";
 
 const DEFAULT_URL = "http://127.0.0.1:7737";
 const MAX_BACKOFF = 2000; // ms cap on reconnect delay
@@ -1421,8 +1431,18 @@ async function cmdInbox(argv: string[], io: Io): Promise<number> {
   const { flags, positionals } = parseArgs(argv);
   const sub = positionals[0] ?? "pending";
   const name = nameFor(flags, io);
+  if (sub === "trace") {
+    const id = positionals[1];
+    if (id === undefined || id === "") {
+      io.writeErr("inbox trace needs the message id: inbox trace <ts> [--as <name>]");
+      return 1;
+    }
+    const path = inboxPath(slackConfigPath(io), name);
+    io.write(traceReport(readInbox(path), id, name, path));
+    return 0;
+  }
   if (sub !== "pending") {
-    io.writeErr(`unknown inbox verb: ${sub}. The verb is: inbox pending [--as <name>]`);
+    io.writeErr(`unknown inbox verb: ${sub}. The verbs are: inbox pending, inbox trace <ts>`);
     return 1;
   }
   const items = pendingInbox(inboxPath(slackConfigPath(io), name));
@@ -1449,7 +1469,13 @@ function emitDelivery(io: Io, agent: string, line: Record<string, unknown>): voi
   // with mentioned:false.
   const handle = loadSlackConfig(io)?.agents[agent]?.handle;
   const names = handle === undefined || handle === "" ? [agent] : [agent, handle];
-  if (!isAddressed(line, names)) return;
+  // EVERY DELIVERED LINE IS RECORDED, addressed or not. Only the addressed ones
+  // are items owing a reply; the rest are the record that lets `inbox trace`
+  // tell "never reached me" apart from "reached me and woke nothing". Without
+  // the second kind of row, the ledger's silence about a message has two
+  // meanings and no way to choose, which is what sent four agents grepping a
+  // text log for a timestamp.
+  const addressed = isAddressed(line, names);
   try {
     recordInboxItem(inboxPath(slackConfigPath(io), agent), {
       id: String(line.id ?? line.ts ?? line.seq ?? ""),
@@ -1458,6 +1484,7 @@ function emitDelivery(io: Io, agent: string, line: Record<string, unknown>): voi
       ...(typeof line.thread === "string" ? { thread: line.thread } : {}),
       text: String(line.text ?? "").slice(0, 120),
       at: new Date().toISOString(),
+      addressed,
     });
   } catch (e) {
     io.writeErr(`inbox ledger not written for ${String(line.id ?? "")}: ${String(e)}`);
@@ -2282,6 +2309,7 @@ const USAGE = [
   "  message check                                   drain what arrived, and what you owe",
   "  message react     --target <channel> --to <ts> --emoji <name>",
   "  inbox pending                                   lines addressed to you with no reply",
+  "  inbox trace <ts>                                did that message reach you, and wake you",
   "  lint <file>...                                  the send's language rules, on any file",
   "  listen                                          stream deliveries, one JSON line each",
   "  next              [--timeout N]                 one delivery, then exit",

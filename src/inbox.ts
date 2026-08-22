@@ -34,6 +34,20 @@ export interface InboxItem {
   at: string;
   /** The id of the message that answered it, once one has. */
   answeredBy?: string;
+  /** Was this line ADDRESSED to this agent, and so did it owe an answer?
+   *
+   *  Every delivered line is recorded, addressed or not, because "did this reach
+   *  me" and "did this wake me" are different questions and the ledger is the
+   *  only place that can answer both. Only `addressed` rows appear in `pending`.
+   *
+   *  ABSENT MEANS TRUE: every row written before this field existed was an
+   *  addressed item, since nothing else was recorded then. */
+  addressed?: boolean;
+}
+
+/** Did this row oblige an answer? Absent means yes, for rows predating the field. */
+function owesAnswer(r: InboxItem): boolean {
+  return r.addressed !== false;
 }
 
 export function inboxPath(configPath: string, agent: string): string {
@@ -91,7 +105,7 @@ export function closeInboxItems(path: string, channel: string, replyId: string, 
   if (rows.length === 0) return 0;
   let closed = 0;
   for (const r of rows) {
-    if (r.answeredBy !== undefined) continue;
+    if (r.answeredBy !== undefined || !owesAnswer(r)) continue;
     const sameChannel = r.channel === channel;
     const sameThread = thread !== undefined && thread !== "" && (r.thread === thread || r.id === thread);
     if (sameChannel || sameThread) {
@@ -122,7 +136,7 @@ export function closeAnsweredBefore(path: string, channel: string, ownTs: string
   const rows = readInbox(path);
   let closed = 0;
   for (const r of rows) {
-    if (r.answeredBy !== undefined || r.channel !== channel) continue;
+    if (r.answeredBy !== undefined || !owesAnswer(r) || r.channel !== channel) continue;
     const at = Number(r.id);
     if (Number.isFinite(at) && at < cutoff) {
       r.answeredBy = `own message ${ownTs}`;
@@ -136,9 +150,11 @@ export function closeAnsweredBefore(path: string, channel: string, ownTs: string
   return closed;
 }
 
-/** Items nobody has answered, oldest first. */
+/** Items nobody has answered, oldest first. Rows recorded as merely DELIVERED
+ *  are not items: they are the record that lets `trace` tell "never reached me"
+ *  apart from "reached me and did not wake me". */
 export function pendingInbox(path: string): InboxItem[] {
-  return readInbox(path).filter((r) => r.answeredBy === undefined);
+  return readInbox(path).filter((r) => r.answeredBy === undefined && owesAnswer(r));
 }
 
 /** The line an agent (or a gate) reads. Empty when nothing is open. */
@@ -149,6 +165,61 @@ export function pendingReport(items: InboxItem[], agent: string): string {
     `${items.length} inbox item(s) addressed to ${agent} with no reply:\n${lines.join("\n")}\n` +
     `Every one of them is someone waiting. Answer in the channel it was asked in.`
   );
+}
+
+/** WHAT HAPPENED TO ONE MESSAGE, from this agent's own record.
+ *
+ *  Four agents on four hosts spent a day answering "did that message reach me?"
+ *  by grepping a `tee` of the listener, and every hand-rolled version was wrong
+ *  in one of four ways, each measured by the agent who ran it (2026-08-22):
+ *
+ *  1. A substring grep for a ts matches a message QUOTING that ts as readily as
+ *     the delivery of it. One agent got a hit that was another agent's message
+ *     about the timestamp, and it read as proof of delivery.
+ *  2. The same grep can be right by luck. A second agent got zero, the true
+ *     answer, and it was true only because nobody had quoted the ts yet. A false
+ *     negative that happens to be right teaches nothing and leaves the method in
+ *     place.
+ *  3. Parsing every line as JSON crashes on a wake file that also carries plain
+ *     English diagnostics, so the check dies exactly when the wake path is
+ *     broken, which is the one occasion anybody runs it.
+ *  4. A bare True/False has no positive control, so a correct absence and a
+ *     broken search are the same output.
+ *
+ *  This compares the id FIELD, so a quotation cannot match it; it skips rows it
+ *  cannot parse, so a diagnostic line cannot kill it; and it always prints the
+ *  corpus it searched, so an absence can be told apart from an empty ledger.
+ *
+ *  It answers two questions that a single "was it there" conflates: DELIVERED
+ *  (did this line reach me at all) and ADDRESSED (did it wake me, or did it wait
+ *  for a sweep). That distinction is the whole broadcast defect: `<!channel>`
+ *  was delivered to four agents and addressed to none of them. */
+export function traceReport(rows: InboxItem[], id: string, agent: string, path: string): string {
+  const corpus =
+    rows.length === 0
+      ? `The ledger at ${path} holds NO rows, so this absence says nothing about the message: ` +
+        `either nothing has been delivered to ${agent} yet, or the ledger is not being written. ` +
+        `Run \`scramble doctor\` before reading anything into it.`
+      : `Searched ${rows.length} delivered row(s) for ${agent} in ${path}, ` +
+        `ids ${rows[0]?.id ?? "?"} to ${rows[rows.length - 1]?.id ?? "?"}, ` +
+        `${rows.filter(owesAnswer).length} of them addressed to this agent.`;
+  const hits = rows.filter((r) => r.id === id);
+  if (hits.length === 0) {
+    return (
+      `${id} was NOT delivered to ${agent}.\n${corpus}\n` +
+      `A message can also be absent here and still exist: \`message read\` shows a channel's ` +
+      `history without delivering anything, so a line seen there and missing here reached the ` +
+      `channel and never reached this agent.`
+    );
+  }
+  const lines = hits.map((r) => {
+    const woke = owesAnswer(r)
+      ? `ADDRESSED to ${agent}, so it woke this agent`
+      : `delivered but NOT addressed to ${agent}, so nothing woke: it was visible only to a sweep`;
+    const answer = r.answeredBy === undefined ? "no reply recorded" : `answered by ${r.answeredBy}`;
+    return `  ${r.channel} from ${r.from} at ${r.at}: ${woke}, ${answer}\n    ${r.text}`;
+  });
+  return `${id} WAS delivered to ${agent}, ${hits.length} row(s):\n${lines.join("\n")}\n${corpus}`;
 }
 
 /** Should this delivered line become an item? Only lines ADDRESSED to this agent

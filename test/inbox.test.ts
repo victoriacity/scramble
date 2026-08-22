@@ -11,6 +11,7 @@ import {
   pendingReport,
   readInbox,
   recordInboxItem,
+  traceReport,
   type InboxItem,
 } from "../src/inbox";
 
@@ -188,5 +189,104 @@ describe("the inbox ledger: one row per addressed line, one reply owed", () => {
     chmodSync(locked, 0o500);
     expect(() => recordInboxItem(join(locked, "inbox", "dev.jsonl"), item())).toThrow();
     chmodSync(locked, 0o700);
+  });
+});
+
+describe("inbox trace: what happened to ONE message, without grepping a text log", () => {
+  // Four agents on four hosts spent 2026-08-22 answering "did that message reach
+  // me?" with grep one-liners over a `tee` of the listener, and each of the four
+  // ways that fails was measured live by the agent running it. Each test below
+  // is one of those four.
+
+  test("a message QUOTING the id does not read as delivery of it", () => {
+    // An agent grepped its wake file for a broadcast ts and got a hit, which read
+    // as proof the broadcast arrived. The hit was a PEER'S message quoting that
+    // timestamp in its text. Comparing the id field cannot make that mistake.
+    const p = join(scratch(), "inbox", "dev.jsonl");
+    recordInboxItem(p, item({ id: "999.111", text: "the broadcast at 1787388201.288129 never woke me" }));
+    const said = traceReport(readInbox(p), "1787388201.288129", "dev", p);
+    expect(said).toContain("was NOT delivered to dev");
+    expect(said).not.toContain("WAS delivered");
+  });
+
+  test("a correct absence names the corpus it searched, so it is not a bare False", () => {
+    // "A check with no positive control cannot tell a correct False from a broken
+    // one." An agent's grep returned zero and was right BY LUCK, because nobody
+    // had quoted the ts yet.
+    const p = join(scratch(), "inbox", "dev.jsonl");
+    recordInboxItem(p, item({ id: "100.1" }));
+    recordInboxItem(p, item({ id: "200.2", addressed: false }));
+    const said = traceReport(readInbox(p), "300.3", "dev", p);
+    expect(said).toContain("Searched 2 delivered row(s)");
+    expect(said).toContain("ids 100.1 to 200.2");
+    expect(said).toContain("1 of them addressed");
+  });
+
+  test("an EMPTY ledger refuses to answer instead of reporting absence", () => {
+    // The dangerous case: a ledger that is not being written looks exactly like a
+    // message that never arrived. This one says so and sends the reader to doctor.
+    const p = join(scratch(), "inbox", "dev.jsonl");
+    const said = traceReport(readInbox(p), "300.3", "dev", p);
+    expect(said).toContain("holds NO rows");
+    expect(said).toContain("says nothing about the message");
+    expect(said).toContain("scramble doctor");
+  });
+
+  test("a plain English diagnostic line in the ledger does not kill the check", () => {
+    // The third failure, and the worst: a check that parses every line as JSON
+    // dies on a file that also carries "scramble doctor" and socket errors, so it
+    // crashes exactly when the wake path is broken, the one occasion anybody runs
+    // it.
+    const dir = join(scratch(), "inbox");
+    mkdirSync(dir, { recursive: true });
+    const p = join(dir, "dev.jsonl");
+    recordInboxItem(p, item({ id: "100.1" }));
+    writeFileSync(p, `${readInbox(p).map((r) => JSON.stringify(r)).join("\n")}\nlistener refused: socket closed\n`);
+    const said = traceReport(readInbox(p), "100.1", "dev", p);
+    expect(said).toContain("WAS delivered to dev");
+  });
+
+  test("DELIVERED and ADDRESSED are answered separately: the broadcast defect", () => {
+    // `<!channel>` reached four agents and addressed none of them, so every one of
+    // them saw it in a 15-minute sweep and nothing woke. A ledger holding only
+    // addressed lines cannot tell that apart from never arriving.
+    const p = join(scratch(), "inbox", "dev.jsonl");
+    recordInboxItem(p, item({ id: "100.1", addressed: false, text: "@channel write English in files" }));
+    const said = traceReport(readInbox(p), "100.1", "dev", p);
+    expect(said).toContain("WAS delivered to dev");
+    expect(said).toContain("NOT addressed to dev");
+    expect(said).toContain("visible only to a sweep");
+    expect(said).toContain("no reply recorded");
+    // And it owes nobody an answer, so it stays out of pending.
+    expect(pendingInbox(p)).toHaveLength(0);
+  });
+
+  test("an addressed row reports that it woke the agent, and what answered it", () => {
+    const p = join(scratch(), "inbox", "dev.jsonl");
+    recordInboxItem(p, item({ id: "100.1", addressed: true }));
+    closeInboxItems(p, "scramble-dev", "555.5");
+    const said = traceReport(readInbox(p), "100.1", "dev", p);
+    expect(said).toContain("ADDRESSED to dev, so it woke this agent");
+    expect(said).toContain("answered by 555.5");
+  });
+
+  test("a row written before the addressed field existed still owes a reply", () => {
+    // Back-compat, and it matters: the ledger only ever held addressed items, so
+    // a missing field means addressed. Reading it as false would silently empty
+    // `pending` of every question asked before today.
+    const p = join(scratch(), "inbox", "dev.jsonl");
+    recordInboxItem(p, item({ id: "100.1" }));
+    expect(pendingInbox(p)).toHaveLength(1);
+    expect(traceReport(readInbox(p), "100.1", "dev", p)).toContain("so it woke this agent");
+  });
+
+  test("a delivery-only row is never closed by a reply or by an own message", () => {
+    // It is not an obligation, so nothing should stamp it answered: a trace of it
+    // must keep saying "nothing woke" however much traffic followed.
+    const p = join(scratch(), "inbox", "dev.jsonl");
+    recordInboxItem(p, item({ id: "100.1", addressed: false }));
+    expect(closeInboxItems(p, "scramble-dev", "555.5")).toBe(0);
+    expect(closeAnsweredBefore(p, "scramble-dev", "999.9")).toBe(0);
+    expect(traceReport(readInbox(p), "100.1", "dev", p)).toContain("no reply recorded");
   });
 });

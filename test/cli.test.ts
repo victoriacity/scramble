@@ -893,6 +893,36 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     return stubIo(cwd, (u, init) => handler(new Request(u, init)));
   }
 
+  test("`inbox trace` answers DELIVERED and ADDRESSED separately, from the ledger", async () => {
+    // Four agents spent 2026-08-22 grepping a text log for a timestamp because
+    // nothing could answer this. A line that names somebody else is delivered and
+    // wakes nobody, and until the ledger recorded it, its absence and a message
+    // that never arrived were the same output.
+    const cwd = scratchDir("inbox-trace");
+    const a = await deliverOne(cwd, "@someoneelse a question for you");
+    expect(await main(["message", "check", "--as", "dev"], a.io)).toBe(0);
+    const b = stubIo(cwd, async () => new Response("{}", { status: 200 }));
+    expect(await main(["inbox", "trace", "m1", "--as", "dev"], b.io)).toBe(0);
+    const said = b.writes.join(" ");
+    expect(said).toContain("WAS delivered to dev");
+    expect(said).toContain("NOT addressed to dev");
+    expect(said).toContain("Searched 1 delivered row(s)");
+    // It owes nobody an answer, so it stays out of what is pending.
+    const c = stubIo(cwd, async () => new Response("{}", { status: 200 }));
+    expect(await main(["inbox", "pending", "--as", "dev"], c.io)).toBe(0);
+    // And a message that never arrived reads differently from that one.
+    const d = stubIo(cwd, async () => new Response("{}", { status: 200 }));
+    expect(await main(["inbox", "trace", "999.9", "--as", "dev"], d.io)).toBe(0);
+    expect(d.writes.join(" ")).toContain("999.9 was NOT delivered to dev");
+  });
+
+  test("`inbox trace` without an id refuses instead of tracing nothing", async () => {
+    const cwd = scratchDir("inbox-trace-noid");
+    const { io, errs } = stubIo(cwd, async () => new Response("{}", { status: 200 }));
+    expect(await main(["inbox", "trace", "--as", "dev"], io)).toBe(1);
+    expect(errs.join(" ")).toContain("inbox trace needs the message id");
+  });
+
   test("a delivered mention becomes an OPEN item, and pending exits 1 naming it", async () => {
     const cwd = scratchDir("inbox-open");
     const a = await deliverOne(cwd);
