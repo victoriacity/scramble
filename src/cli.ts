@@ -1642,6 +1642,21 @@ async function cmdDoctor(argv: string[], io: Io): Promise<number> {
   const staleProblem = staleListenerProblem(staleListeners(io, name), name);
   if (staleProblem !== undefined) problems.push(staleProblem);
 
+  // AND FOR AN INSTALLED AGENT, the commit is a fact rather than an inference.
+  // The launcher execs the resolved commit directory, so a listener carries its
+  // version in its own command line; comparing that against the installed one
+  // answers "is this process running the code I have" without touching mtimes,
+  // which for an installed copy describe the wrong tree entirely.
+  const installedNow = installedCommit(io);
+  const behind = listenersBehind(readProcesses(io.env("SCRAMBLE_PROC") ?? "/proc"), name, installedNow);
+  if (behind.length > 0) {
+    problems.push(
+      `${behind.length} listener(s) for ${name} run a different commit than the installed ${installedNow}: ` +
+        `${behind.map((b) => `pid ${b.pid} on ${b.commit}`).join(", ")}. They hold the code they started ` +
+        `with, so a fix you installed has not reached them. Stop them and arm the inbox again.`,
+    );
+  }
+
   const missing = SCOPE_NAMES.filter((sc) => !granted.has(sc));
   if (missing.length > 0) {
     problems.push(
@@ -1831,6 +1846,52 @@ export function staleListenerProblem(
     `(pid ${stale.map((x) => `${x.pid}, ${x.ageBehind}s behind`).join("; ")}). They are running code ` +
     `that no longer exists, so a landed fix has not reached them. Stop them and arm the inbox again.`
   );
+}
+
+/** The commit the launcher on PATH would run now, read from the COMMIT file of
+ *  the directory `current` resolves to. Empty when nothing is installed, which
+ *  makes every comparison against it a no-op. */
+export function installedCommit(io: Io): string {
+  const home = io.env("HOME");
+  const root = io.env("SCRAMBLE_HOME") ?? (home === undefined ? "" : join(home, ".local", "share", "scramble"));
+  if (root === "") return "";
+  try {
+    return readFileSync(join(root, "current", "src", "COMMIT"), "utf8").trim();
+  } catch {
+    return "";
+  }
+}
+
+/** The commit a listener is RUNNING, taken from its own command line.
+ *
+ *  The installed launcher execs the resolved commit directory, so a long-lived
+ *  process carries its version where anyone can read it. Empty for a listener
+ *  started from a checkout, which has no commit to name and is the case worth
+ *  reporting differently.
+ *
+ *  This replaces guessing from file mtimes for installed agents: mtimes compare
+ *  a process against whatever `src` happens to sit in the CURRENT directory,
+ *  which for an agent running an installed copy is not the code it loaded. */
+export function listenerCommit(cmd: string): string {
+  const m = /\/scramble\/([0-9a-f]{7,40})\/src\/bin\.ts/.exec(cmd);
+  return m?.[1] ?? "";
+}
+
+/** Listeners for this agent running a commit OTHER than the one installed now,
+ *  as `pid → commit`. Empty when nothing is behind, and a listener with no
+ *  commit in its command line is left out: it is a checkout, which the stale
+ *  mtime check already reports. */
+export function listenersBehind(
+  procs: Array<{ pid: string; cmd: string }>,
+  agent: string,
+  installed: string,
+): Array<{ pid: string; commit: string }> {
+  if (installed === "") return [];
+  const asFlag = `--as ${agent}`;
+  return procs
+    .filter((p) => p.cmd.includes("bin.ts listen") && p.cmd.includes(asFlag))
+    .map((p) => ({ pid: p.pid, commit: listenerCommit(p.cmd) }))
+    .filter((p) => p.commit !== "" && p.commit !== installed);
 }
 
 /** Every LIVE listener for this agent, whatever its age. Pure, and separate from

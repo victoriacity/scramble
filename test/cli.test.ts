@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import type { ChannelStore } from "../src/store";
 import { createStore } from "../src/store";
 import { createHandler } from "../src/server";
-import { main, parseBind, loadSlackConfig, slackConfigPath, slackCliToken, staleConfigWarning, staleListeners, pickStale, staleListenerProblem, readProcesses, liveListeners, type Io } from "../src/cli";
+import { main, parseBind, loadSlackConfig, slackConfigPath, slackCliToken, staleConfigWarning, staleListeners, pickStale, staleListenerProblem, readProcesses, liveListeners, listenerCommit, listenersBehind, type Io } from "../src/cli";
 import { SCOPE_NAMES, BOT_EVENT_NAMES } from "../src/app-manifest";
 
 function scratchDir(name: string): string {
@@ -1749,6 +1749,28 @@ describe("staleListeners", () => {
     expect(pickStale([proc("102", "bun src/bin.ts listen --as other", 1_000)], "dev", 5_000)).toEqual([]);
   });
 
+  test("a listener names the COMMIT it runs, and only an installed one can", () => {
+    // The launcher execs the resolved commit directory, so the version is in the
+    // process's own command line. Exec'ing `current` would have every listener
+    // on the host say `current`, which names a symlink that has since moved.
+    expect(listenerCommit("bun /s/share/scramble/995edba/src/bin.ts listen --as dev")).toBe("995edba");
+    // A checkout has no commit to name, which is the case reported differently.
+    expect(listenerCommit("bun src/bin.ts listen --as dev")).toBe("");
+    expect(listenerCommit("bun /somewhere/else/src/bin.ts listen --as dev")).toBe("");
+  });
+
+  test("a listener on another commit than the installed one is named, with both", () => {
+    const procs = [
+      { pid: "10", cmd: "bun /s/scramble/4f7b942/src/bin.ts listen --as dev" },
+      { pid: "11", cmd: "bun /s/scramble/995edba/src/bin.ts listen --as dev" },
+      { pid: "12", cmd: "bun /s/scramble/4f7b942/src/bin.ts listen --as other" },
+      { pid: "13", cmd: "bun src/bin.ts listen --as dev" },
+    ];
+    expect(listenersBehind(procs, "dev", "995edba")).toEqual([{ pid: "10", commit: "4f7b942" }]);
+    // Nothing installed means no comparison to make, never a false accusation.
+    expect(listenersBehind(procs, "dev", "")).toEqual([]);
+  });
+
   test("a LIVE listener is found whatever its age, which is a different question", () => {
     // pickStale asks which listeners are behind the code. liveListeners asks
     // whether anything holds the socket at all, which is what decides whether
@@ -1964,6 +1986,14 @@ describe("the automatic status posts as the ACTING agent", () => {
 });
 
 describe("doctor, and the warning an agent gets without asking", () => {
+  // AN EMPTY PROCESS TABLE, injected, because these tests otherwise scan the
+  // REAL /proc. The listener matcher looks for `bin.ts listen` and `--as <name>`
+  // in a command line, and a shell command that merely QUOTES those strings
+  // matches: four of these tests went red whenever one of my own debugging
+  // shells happened to hold them, and green when it did not. A test that reads
+  // the machine reports the machine.
+  const EMPTY_PROC = scratchDir("doctor-empty-proc");
+
   // An agent onboarded before a fix keeps running and silently lacks it. Nothing
   // else tells a RUNNING agent its own config went out of date, which is what
   // this verb and this warning exist for.
@@ -1974,7 +2004,7 @@ describe("doctor, and the warning an agent gets without asking", () => {
       write: (l) => writes.push(l),
       writeErr: (l) => errs.push(l),
       fetch: async () => new Response(JSON.stringify(body), { status: 200, headers }),
-      env: () => undefined,
+      env: (n) => (n === "SCRAMBLE_PROC" ? EMPTY_PROC : undefined),
       cwd: () => cwd,
       sleep: async () => {},
       serve: async () => 0,
@@ -2286,6 +2316,43 @@ describe("doctor, and the warning an agent gets without asking", () => {
     expect(await main(["doctor", "--as", "dev", "--backend", "slack"], io)).toBe(0);
   });
 
+  test("a listener on a DIFFERENT commit than the install is reported, with both", async () => {
+    // For an installed agent the commit is a fact in the process's own command
+    // line, so this needs no mtimes: those describe whatever `src` sits in the
+    // current directory, which for an installed copy is a different tree.
+    const cwd = scratchDir("doc-behind");
+    const home = scratchDir("doc-behind-home");
+    const share = join(home, ".local", "share", "scramble");
+    mkdirSync(join(share, "current", "src"), { recursive: true });
+    writeFileSync(join(share, "current", "src", "COMMIT"), "995edba\n");
+    writeSlackConfig(cwd, { token: "xoxb-d", channels: {}, agents: { dev: { token: "T", handle: "dev_bot" } } });
+    const procRoot = scratchDir("doc-behind-proc");
+    mkdirSync(join(procRoot, "88"), { recursive: true });
+    writeFileSync(join(procRoot, "88", "cmdline"), "bun /s/share/scramble/4f7b942/src/bin.ts listen --as dev\0");
+    const errs: string[] = [];
+    const io: Io = {
+      write: () => {},
+      writeErr: (l) => errs.push(l),
+      fetch: async () =>
+        new Response(JSON.stringify({ ok: true, user: "dev_bot" }), { status: 200, headers: { "x-oauth-scopes": ALL } }),
+      // HOME points at the fake install; the config is named explicitly, since
+      // HOME also decides where the config is looked for.
+      env: (n) =>
+        n === "SCRAMBLE_PROC" ? procRoot
+        : n === "HOME" ? home
+        : n === "SCRAMBLE_SLACK_CONFIG" ? join(cwd, ".scramble", "slack.json")
+        : undefined,
+      cwd: () => cwd,
+      sleep: async () => {},
+      serve: async () => 0,
+      createSocket: () => ({ send: () => {}, close: () => {}, onopen: null, onmessage: null, onclose: null, onerror: null }),
+    };
+    expect(await main(["doctor", "--as", "dev", "--backend", "slack"], io)).toBe(1);
+    const said = errs.join(" ");
+    expect(said).toContain("pid 88 on 4f7b942");
+    expect(said).toContain("installed 995edba");
+  });
+
   test("doctor --wake REFUSES to run while a listener holds the socket", async () => {
     // Measured 2026-08-22: with the inbox armed, `doctor --wake` reported "The
     // wake path is DEAD" and told me to re-onboard, which rotates the bot token
@@ -2355,7 +2422,7 @@ describe("doctor, and the warning an agent gets without asking", () => {
         }
         return new Response(JSON.stringify({ ok: true }), { status: 200 });
       },
-      env: () => undefined,
+      env: (n) => (n === "SCRAMBLE_PROC" ? EMPTY_PROC : undefined),
       cwd: () => cwd,
       sleep: async () => {},
       serve: async () => 0,
@@ -2397,7 +2464,7 @@ describe("doctor, and the warning an agent gets without asking", () => {
         }
         return new Response(JSON.stringify({ ok: true }), { status: 200 });
       },
-      env: () => undefined,
+      env: (n) => (n === "SCRAMBLE_PROC" ? EMPTY_PROC : undefined),
       cwd: () => cwd,
       sleep: async () => {},
       serve: async () => 0,
@@ -2415,7 +2482,7 @@ describe("doctor, and the warning an agent gets without asking", () => {
       write: () => {},
       writeErr: (l) => errs.push(l),
       fetch: async () => new Response(JSON.stringify({ ok: true, user: "dev_bot" }), { status: 200, headers: { "x-oauth-scopes": ALL } }),
-      env: () => undefined,
+      env: (n) => (n === "SCRAMBLE_PROC" ? EMPTY_PROC : undefined),
       cwd: () => cwd,
       sleep: async () => {},
       serve: async () => 0,
@@ -2433,7 +2500,7 @@ describe("doctor, and the warning an agent gets without asking", () => {
       const io: Io = {
         write: () => {}, writeErr: (l) => errs.push(l),
         fetch: (input) => fetch(String(input)),
-        env: () => undefined, cwd: () => cwd, sleep: async () => {}, serve: async () => 0,
+        env: (n) => (n === "SCRAMBLE_PROC" ? EMPTY_PROC : undefined), cwd: () => cwd, sleep: async () => {}, serve: async () => 0,
         createSocket: () => ({ send: () => {}, close: () => {}, onopen: null, onmessage: null, onclose: null, onerror: null }),
       };
       return { io, errs };

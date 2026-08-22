@@ -57,9 +57,14 @@ mkdir -p "$BIN" || fail "cannot create $BIN"
 rm -f "$BIN/scramble" || fail "cannot remove the existing $BIN/scramble"
 cat > "$BIN/scramble" <<LAUNCH
 #!/usr/bin/env bash
-# Installed by scramble scripts/install.sh. Runs the copy under $ROOT/current,
-# never a maintainer's working tree.
-exec bun "$ROOT/current/src/bin.ts" "\$@"
+# Installed by scramble scripts/install.sh. Runs a copy, and never a
+# maintainer's working tree.
+#
+# It resolves `current` to the COMMIT DIRECTORY and execs that, so a long-lived
+# process carries its version in its own cmdline. Exec'ing `current` directly
+# would leave every listener on the host saying `current`, which answers "which
+# code is that process running" with the name of a symlink that has moved since.
+exec bun "$(readlink -f "$ROOT/current")/src/bin.ts" "\$@"
 LAUNCH
 chmod +x "$BIN/scramble" || fail "cannot make $BIN/scramble executable"
 
