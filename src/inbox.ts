@@ -62,12 +62,17 @@ export function readInbox(path: string): InboxItem[] {
   return out;
 }
 
-/** Record an addressed line as OPEN. Appending is idempotent by id: the same
- *  message delivered twice (a listener and a sweep both seeing it) is one item,
- *  not two, or every duplicate delivery would demand its own reply. */
+/** Record an addressed line as OPEN. Appending is idempotent by CHANNEL AND id:
+ *  the same message delivered twice (a listener and a sweep both seeing it) is
+ *  one item, and every duplicate delivery would otherwise demand its own reply.
+ *
+ *  Both halves of the key are needed. A Slack ts is unique within a channel and
+ *  says nothing across channels, so keying on the id alone drops a real question
+ *  from one channel because another channel happened to carry a message at the
+ *  same instant. A test found that by asserting two channels at one ts. */
 export function recordInboxItem(path: string, item: InboxItem): void {
   const existing = readInbox(path);
-  if (existing.some((r) => r.id === item.id)) return;
+  if (existing.some((r) => r.id === item.id && r.channel === item.channel)) return;
   mkdirSync(dirname(path), { recursive: true });
   appendFileSync(path, `${JSON.stringify(item)}\n`);
 }
@@ -90,6 +95,36 @@ export function closeInboxItems(path: string, channel: string, replyId: string, 
     const sameThread = thread !== undefined && thread !== "" && (r.thread === thread || r.id === thread);
     if (sameChannel || sameThread) {
       r.answeredBy = replyId;
+      closed += 1;
+    }
+  }
+  if (closed > 0) {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, rows.map((r) => `${JSON.stringify(r)}\n`).join(""));
+  }
+  return closed;
+}
+
+/** Close every open item OLDER than a message this agent already sent in that
+ *  channel. Returns how many it closed.
+ *
+ *  A reply is a reply whether or not it went through this CLI while the ledger
+ *  existed. Without this, five questions answered hours before the ledger was
+ *  written sat in `pending` forever, and a list that names answered questions is
+ *  one an agent learns to scroll past.
+ *
+ *  Timestamps compare as NUMBERS: a Slack ts is "1787359081.749909", and string
+ *  order breaks the moment the integer part changes width. */
+export function closeAnsweredBefore(path: string, channel: string, ownTs: string): number {
+  const cutoff = Number(ownTs);
+  if (!Number.isFinite(cutoff)) return 0;
+  const rows = readInbox(path);
+  let closed = 0;
+  for (const r of rows) {
+    if (r.answeredBy !== undefined || r.channel !== channel) continue;
+    const at = Number(r.id);
+    if (Number.isFinite(at) && at < cutoff) {
+      r.answeredBy = `own message ${ownTs}`;
       closed += 1;
     }
   }

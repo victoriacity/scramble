@@ -13,7 +13,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { createStore, type ChannelStore } from "./store";
 import type { Message, PostResult } from "./types";
 import type { ServeOptions } from "./server";
@@ -30,7 +30,7 @@ import {
 import { StatusManager } from "./status";
 import { SCOPE_NAMES, BOT_EVENT_NAMES } from "./app-manifest";
 import { lintLanguage, languageRefusal, lineOf } from "./language";
-import { closeInboxItems, inboxPath, isAddressed, pendingInbox, pendingReport, recordInboxItem } from "./inbox";
+import { closeAnsweredBefore, closeInboxItems, inboxPath, isAddressed, pendingInbox, pendingReport, recordInboxItem } from "./inbox";
 
 const DEFAULT_URL = "http://127.0.0.1:7737";
 const MAX_BACKOFF = 2000; // ms cap on reconnect delay
@@ -197,8 +197,23 @@ function requireTarget(flags: Map<string, string>, io: Io): { ok: true; channel:
  *  absent key reads as 0. */
 const CURSOR_FILE = "cursor.json";
 
+/** Where the drain cursor lives.
+ *
+ *  BESIDE THE CONFIG for the slack backend, because the cursor belongs to the
+ *  AGENT and not to whatever directory it was invoked from. Keyed by cwd, the
+ *  same agent sweeping from two places has two cursors and re-drains whole
+ *  channels: moving a sweep monitor onto the installed CLI changed its cwd, and
+ *  the next sweep re-delivered the entire history of two channels, hundreds of
+ *  lines, until the harness suppressed it for rate (2026-08-22).
+ *
+ *  The local backend keeps its cwd-relative file, since a local daemon's store
+ *  is per workspace. When the config-side file is absent and a cwd one exists,
+ *  the cwd one is read, so an existing agent does not re-drain once on upgrade. */
 function cursorPath(io: Io): string {
-  return join(io.cwd(), ".scramble", CURSOR_FILE);
+  const beside = join(dirname(slackConfigPath(io)), CURSOR_FILE);
+  if (existsSync(beside)) return beside;
+  const local = join(io.cwd(), ".scramble", CURSOR_FILE);
+  return existsSync(local) ? local : beside;
 }
 
 function readCursor(io: Io, name: string): number {
@@ -1039,6 +1054,7 @@ async function messageCheckSlack(flags: Map<string, string>, io: Io): Promise<nu
   const mine = await s.backend.myChannels(name);
   if (mine.problem !== undefined) io.writeErr(`slack: ${mine.problem}`);
   for (const channel of [...new Set([...Object.keys(cfg.channels), ...mine.names])].sort()) {
+    let newestOwn: string | undefined;
     const cursor = started[channel];
     // `oldest` is inclusive in Slack, so re-filter to strictly-newer lines: the
     // cursor line itself must not re-drain on a repeat `message check`.
@@ -1089,6 +1105,9 @@ async function messageCheckSlack(flags: Map<string, string>, io: Io): Promise<nu
         // "You need to understand this general pattern and use the message check
         // to guard it." A rule that only guards the NEXT message leaves every
         // earlier one standing in the channel, unmarked, as though it were fine.
+        // MY NEWEST LINE HERE ANSWERS EVERYTHING OLDER. A reply is a reply
+        // whether or not it went through this CLI while the ledger existed.
+        newestOwn = newerTs(newestOwn, m.ts);
         const late = lintLanguage(m.text ?? "");
         if (late.length > 0) {
           selfHits.push(
@@ -1101,6 +1120,13 @@ async function messageCheckSlack(flags: Map<string, string>, io: Io): Promise<nu
       emitDelivery(io, name, line as unknown as Record<string, unknown>);
     }
     if (newest !== undefined) next[channel] = newest;
+    if (newestOwn !== undefined) {
+      try {
+        closeAnsweredBefore(inboxPath(slackConfigPath(io), name), channel, newestOwn);
+      } catch (e) {
+        io.writeErr(`inbox ledger not updated for ${channel}: ${String(e)}`);
+      }
+    }
     drained += 1;
   }
   writeSlackCursor(io, name, next);

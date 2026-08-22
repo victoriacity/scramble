@@ -1188,6 +1188,43 @@ describe("message check under the slack backend", () => {
     expect(errs.join(" ")).toContain("invalid_auth");
   });
 
+  test("a ledger it cannot update while closing answered items REPORTS itself", async () => {
+    // The close runs from the sweep, where the agent is not watching. A silent
+    // failure there leaves answered questions in `pending` and teaches the agent
+    // to scroll past the list.
+    const cwd = scratchDir("mslack-closefail");
+    const errs: string[] = [];
+    const io = slackCheckIo(cwd, {
+      writeErr: (l) => errs.push(l),
+      fetch: async (url) =>
+        String(url).includes("conversations.history")
+          ? new Response(JSON.stringify({ ok: true, messages: [{ ts: "9.9", user: "U1", text: "my own line" }] }), { status: 200 })
+          : new Response(JSON.stringify({ ok: true, user: "dev", messages: [] }), { status: 200 }),
+    });
+    writeSlackConfig(cwd, {
+      appToken: "xapp-1",
+      token: "xoxb-1",
+      channels: { general: "C1" },
+      agents: { dev: { token: "T", handle: "dev" } },
+      roster: { U1: "dev" },
+    });
+    // An open row must EXIST for the close to attempt a write, and the FILE is
+    // what gets locked: a directory's write bit governs create and unlink only.
+    mkdirSync(join(cwd, ".scramble", "inbox"), { recursive: true });
+    const ledger = join(cwd, ".scramble", "inbox", "dev.jsonl");
+    writeFileSync(
+      ledger,
+      `${JSON.stringify({ id: "1.0", channel: "general", from: "andrew", text: "q", at: "2026-08-22T00:00:00Z" })}\n`,
+    );
+    chmodSync(ledger, 0o400);
+    try {
+      expect(await main(["message", "check", "--as", "dev", "--backend", "slack"], io)).toBe(0);
+      expect(errs.join(" ")).toContain("inbox ledger not updated for general");
+    } finally {
+      chmodSync(ledger, 0o600);
+    }
+  });
+
   test("the sweep reads MY OWN sent lines back against today's rules", async () => {
     // Operator, 2026-08-22, after catching three style defects in a row: "You
     // need to understand this general pattern and use the message check to

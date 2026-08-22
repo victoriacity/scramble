@@ -3,6 +3,7 @@ import { mkdtempSync, writeFileSync, mkdirSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  closeAnsweredBefore,
   closeInboxItems,
   inboxPath,
   isAddressed,
@@ -69,13 +70,48 @@ describe("the inbox ledger: one row per addressed line, one reply owed", () => {
     expect(pendingInbox(p)).toHaveLength(0);
   });
 
-  test("the same message delivered twice is ONE item", () => {
+  test("a message I already sent closes every OLDER question in that channel", () => {
+    // Five questions answered hours before the ledger existed sat in `pending`
+    // forever, and a list naming answered questions is one an agent scrolls
+    // past. A reply is a reply whether or not it went through this CLI.
+    const p = join(scratch(), "inbox", "dev.jsonl");
+    recordInboxItem(p, item({ id: "1787359081.749909", channel: "room" }));
+    recordInboxItem(p, item({ id: "1787359443.824399", channel: "room" }));
+    recordInboxItem(p, item({ id: "1787999999.000000", channel: "room" }));
+    recordInboxItem(p, item({ id: "1787359081.749909", channel: "elsewhere" }));
+    expect(closeAnsweredBefore(p, "room", "1787360000.000000")).toBe(2);
+    expect(pendingInbox(p).map((r) => `${r.channel}:${r.id}`)).toEqual([
+      "room:1787999999.000000",
+      "elsewhere:1787359081.749909",
+    ]);
+    expect(readInbox(p)[0]!.answeredBy).toBe("own message 1787360000.000000");
+  });
+
+  test("timestamps compare as NUMBERS, so a width change does not reorder them", () => {
+    // "999.9" sorts after "1787360000.0" as a STRING, which would leave an old
+    // item open forever and close a new one by mistake.
+    const p = join(scratch(), "inbox", "dev.jsonl");
+    recordInboxItem(p, item({ id: "999.9", channel: "room" }));
+    expect(closeAnsweredBefore(p, "room", "1787360000.000000")).toBe(1);
+    // A ts that is not a number closes nothing, and never throws.
+    const q = join(scratch(), "inbox", "dev2.jsonl");
+    recordInboxItem(q, item({ id: "1.0", channel: "room" }));
+    expect(closeAnsweredBefore(q, "room", "not-a-ts")).toBe(0);
+    expect(closeAnsweredBefore(q, "room", "0.5")).toBe(0);
+    expect(pendingInbox(q)).toHaveLength(1);
+  });
+
+  test("the same message delivered twice is ONE item, per CHANNEL", () => {
     // A listener and a 15-minute sweep both see the same mention. Two rows would
     // demand two replies for one question.
     const p = join(scratch(), "inbox", "dev.jsonl");
     recordInboxItem(p, item());
     recordInboxItem(p, item());
     expect(readInbox(p)).toHaveLength(1);
+    // A Slack ts is unique WITHIN a channel and says nothing across channels, so
+    // the same ts elsewhere is a different question.
+    recordInboxItem(p, item({ channel: "elsewhere" }));
+    expect(readInbox(p)).toHaveLength(2);
   });
 
   test("only lines ADDRESSED to this agent by someone else become items", () => {
