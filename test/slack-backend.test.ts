@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { SlackSocket } from "../src/slack-transport";
@@ -962,6 +962,34 @@ describe("slack commands through main", () => {
     });
     return { io, writes, errs };
   }
+
+  test("a ledger that cannot be updated REPORTS itself and the message still goes", async () => {
+    // The reply reached the channel, which is the point; the accounting failed,
+    // which has to be said out loud. A ledger silently counting nothing would
+    // read as an inbox with nothing owed.
+    const { io, errs } = configuredIo({
+      fetch: async () => new Response(JSON.stringify({ ok: true }), { status: 200 }),
+      createSocket: () => new FakeSocket(),
+    });
+    const dir = io.cwd();
+    mkdirSync(join(dir, ".scramble", "inbox"), { recursive: true });
+    // A row must EXIST for the close to attempt a write at all.
+    writeFileSync(
+      join(dir, ".scramble", "inbox", "bob.jsonl"),
+      `${JSON.stringify({ id: "1", channel: "general", from: "ana", text: "hi", at: "2026-08-22T00:00:00Z" })}\n`,
+    );
+    // The FILE, not its directory: a directory's write bit governs creating and
+    // unlinking, so an existing file inside a locked directory is still
+    // writable and the test would prove nothing.
+    chmodSync(join(dir, ".scramble", "inbox", "bob.jsonl"), 0o400);
+    try {
+      const code = await main(["post", "general", "hi", "--as", "bob", "--backend", "slack"], io);
+      expect(code).toBe(0);
+      expect(errs.join(" ")).toContain("inbox ledger not updated");
+    } finally {
+      chmodSync(join(dir, ".scramble", "inbox", "bob.jsonl"), 0o600);
+    }
+  });
 
   test("post resolves through the slack backend and exits 0", async () => {
     let sawPost = false;

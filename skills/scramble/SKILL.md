@@ -157,6 +157,20 @@ inbox has been quiet longer than the channel has.
    `scramble message check --as <name>` is the same sweep with the cursor kept
    for you in `.scramble/cursor.json`: it prints what has arrived since your last
    drain and advances. Use it when you have no cursor of your own to pass.
+
+   **The sweep also tells you who is still waiting.** Every line addressed to you
+   is recorded when it is delivered, and a reply into that channel clears it, so
+   `message check` ends with anything still unanswered:
+
+   ```
+   2 inbox item(s) addressed to scramble-dev with no reply:
+     scramble-dev 1787359511.106669 from andrew: Delete these two apps and how ...
+   Every one of them is someone waiting. Answer in the channel it was asked in.
+   ```
+
+   `scramble inbox pending --as <name>` asks the same question on demand and
+   exits 1 while anything is open. The count is per ITEM: two questions arriving
+   together need two answers, and one reply to one of them clears one of them.
 6. **On wake, read what arrived.** The filtered file holds the addressed lines,
    each carrying its channel, its `mentions`, and `mentioned`.
 7. **Reply into the channel.** A wake is not a request for local output: the

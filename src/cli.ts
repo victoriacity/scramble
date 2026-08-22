@@ -30,6 +30,7 @@ import {
 import { StatusManager } from "./status";
 import { SCOPE_NAMES, BOT_EVENT_NAMES } from "./app-manifest";
 import { lintLanguage, languageRefusal } from "./language";
+import { closeInboxItems, inboxPath, isAddressed, pendingInbox, pendingReport, recordInboxItem } from "./inbox";
 
 const DEFAULT_URL = "http://127.0.0.1:7737";
 const MAX_BACKOFF = 2000; // ms cap on reconnect delay
@@ -333,6 +334,13 @@ async function postText(
       io.writeErr(`post failed: ${r.error}`);
       return 1;
     }
+    // A REPLY CLOSES WHAT IT ANSWERS. Here, after Slack accepted it, so a
+    // refused post never retires an item that is still waiting.
+    try {
+      closeInboxItems(inboxPath(slackConfigPath(io), from), channel, new Date().toISOString(), thread);
+    } catch (e) {
+      io.writeErr(`inbox ledger not updated after posting to ${channel}: ${String(e)}`);
+    }
     if (status !== undefined) await settleStatus(replyStatus(status, channel, from), io);
     return 0;
   }
@@ -404,7 +412,7 @@ async function cmdListen(argv: string[], io: Io): Promise<number> {
         (m) => {
           if (status !== undefined) void deliverStatus(status, m, name);
           if (m.seq > lastSeq) lastSeq = m.seq;
-          io.write(JSON.stringify(m));
+          emitDelivery(io, name, m as unknown as Record<string, unknown>);
         },
       );
       staying = !stop;
@@ -474,7 +482,7 @@ async function cmdNext(argv: string[], io: Io): Promise<number> {
       const found = states.find((s) => s?.done && s.line);
       if (found?.line !== undefined) {
         if (status !== undefined) await settleStatus(deliverStatus(status, found.line, name), io);
-        io.write(JSON.stringify(found.line));
+        emitDelivery(io, name, found.line as unknown as Record<string, unknown>);
         exitCode = 0;
         resolved = true;
       }
@@ -906,7 +914,7 @@ async function slackCmdNext(argv: string[], io: Io): Promise<number> {
   if (r.code === 1) return 1;
   if (r.line !== undefined) {
     if (status !== undefined) await settleStatus(deliverStatus(status, r.line, name), io);
-    io.write(JSON.stringify(r.line));
+    emitDelivery(io, name, r.line as unknown as Record<string, unknown>);
   }
   return 0;
 }
@@ -936,7 +944,7 @@ async function slackCmdListen(argv: string[], io: Io): Promise<number> {
       name,
       (d) => {
         if (status !== undefined) void deliverStatus(status, d, name);
-        io.write(JSON.stringify(d));
+        emitDelivery(io, name, d as unknown as Record<string, unknown>);
       },
       (p) => io.writeErr(`slack: ${p}`),
     );
@@ -965,7 +973,7 @@ async function messageCheckLocal(flags: Map<string, string>, io: Io): Promise<nu
   const deliveries = (await res.json()) as Array<{ seq: number; channel?: string; mentioned?: unknown }>;
   for (const d of deliveries) {
     if (status !== undefined) await settleStatus(deliverStatus(status, d, name), io);
-    io.write(JSON.stringify(d));
+    emitDelivery(io, name, d as unknown as Record<string, unknown>);
   }
   if (deliveries.length) {
     const highest = Math.max(...deliveries.map((d) => d.seq));
@@ -1055,7 +1063,7 @@ async function messageCheckSlack(flags: Map<string, string>, io: Io): Promise<nu
       // messages back.
       if (ids.includes(m.from)) continue;
       if (status !== undefined) await settleStatus(deliverStatus(status, line, name), io);
-      io.write(JSON.stringify(line));
+      emitDelivery(io, name, line as unknown as Record<string, unknown>);
     }
     if (newest !== undefined) next[channel] = newest;
     drained += 1;
@@ -1075,8 +1083,23 @@ async function messageCheckSlack(flags: Map<string, string>, io: Io): Promise<nu
 
 async function cmdMessageCheck(argv: string[], io: Io, backend: "local" | "slack"): Promise<number> {
   const { flags } = parseArgs(argv);
-  if (backend === "slack") return messageCheckSlack(flags, io);
-  return messageCheckLocal(flags, io);
+  const code = backend === "slack" ? await messageCheckSlack(flags, io) : await messageCheckLocal(flags, io);
+  // WHAT IS STILL OWED, on every sweep. The timed check is the one thing that
+  // runs whatever the agent is doing, so the reminder about an unanswered
+  // message belongs here (operator, 2026-08-22): "Inbox pending check can be
+  // done in the 15 minute message check monitor and prompt you any pending
+  // inbox item you have not replied. This avoids having to implement custom
+  // hook scripts for Claude and codex."
+  //
+  // It rides the drain rather than a closing hook because a hook is per client,
+  // and the same agent runs under more than one. The sweep is the product's own
+  // surface, so every client gets it.
+  //
+  // Printed AFTER the drain, so the lines just delivered are already counted,
+  // and on stderr, so the stdout contract stays one JSON line per message.
+  const owed = pendingInbox(inboxPath(slackConfigPath(io), nameFor(flags, io)));
+  if (owed.length > 0) io.writeErr(pendingReport(owed, nameFor(flags, io)));
+  return code;
 }
 
 /** The mirrored `message` family: `send`, `check`, `read`. Each dispatches to
@@ -1189,6 +1212,54 @@ async function cmdAttachment(args: string[], io: Io): Promise<number> {
   }
   io.writeErr(`unknown attachment verb: ${sub ?? "(none)"}`);
   return 1;
+}
+
+/** `scramble inbox pending --as <name>`: every line addressed to this agent that
+ *  nothing has answered, one JSON object per line, and EXIT 1 while any is open.
+ *
+ *  The exit code is the point. It is what a closing gate reads to refuse a turn
+ *  that leaves someone waiting, so the obligation is counted per ITEM by the
+ *  delivery path and not per turn by whoever is writing the turn. Empty exits 0
+ *  and prints nothing. */
+async function cmdInbox(argv: string[], io: Io): Promise<number> {
+  const { flags, positionals } = parseArgs(argv);
+  const sub = positionals[0] ?? "pending";
+  const name = nameFor(flags, io);
+  if (sub !== "pending") {
+    io.writeErr(`unknown inbox verb: ${sub}. The verb is: inbox pending [--as <name>]`);
+    return 1;
+  }
+  const items = pendingInbox(inboxPath(slackConfigPath(io), name));
+  for (const item of items) io.write(JSON.stringify(item));
+  if (items.length === 0) return 0;
+  io.writeErr(pendingReport(items, name));
+  return 1;
+}
+
+/** WRITE A DELIVERED LINE, AND RECORD IT. The only way a delivery reaches
+ *  stdout, so a line cannot be handed to an agent without the ledger knowing an
+ *  answer is owed. `read` does not go through here: a transcript is not an
+ *  inbox.
+ *
+ *  The recording is best-effort and never blocks the delivery: an unwritable
+ *  ledger must not stop a message reaching the agent, since the message is the
+ *  point and the ledger is the accounting. It is REPORTED, so an inbox that
+ *  quietly counts nothing does not read as an inbox with nothing in it. */
+function emitDelivery(io: Io, agent: string, line: Record<string, unknown>): void {
+  io.write(JSON.stringify(line));
+  if (!isAddressed(line, agent)) return;
+  try {
+    recordInboxItem(inboxPath(slackConfigPath(io), agent), {
+      id: String(line.id ?? line.ts ?? line.seq ?? ""),
+      channel: String(line.channel ?? ""),
+      from: String(line.from ?? ""),
+      ...(typeof line.thread === "string" ? { thread: line.thread } : {}),
+      text: String(line.text ?? "").slice(0, 120),
+      at: new Date().toISOString(),
+    });
+  } catch (e) {
+    io.writeErr(`inbox ledger not written for ${String(line.id ?? "")}: ${String(e)}`);
+  }
 }
 
 async function cmdMessage(args: string[], io: Io, backend: "local" | "slack"): Promise<number> {
@@ -1792,6 +1863,8 @@ export async function main(argv: string[], io: Io): Promise<number> {
       return cmdProfile(argv.slice(1), io);
     case "channel":
       return cmdChannel(argv.slice(1), io);
+    case "inbox":
+      return cmdInbox(argv.slice(1), io);
     case "doctor":
       return cmdDoctor(argv.slice(1), io);
     case "join":

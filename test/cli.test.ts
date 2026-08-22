@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { basename, join } from "node:path";
 import { tmpdir } from "node:os";
 import type { ChannelStore } from "../src/store";
 import { createStore } from "../src/store";
@@ -770,6 +770,69 @@ describe("message check (local => cursor drain)", () => {
     const code = await main(["message", "check", "--as", "dev"], io);
     expect(code).toBe(1);
     expect(errs[0]).toContain("500");
+  });
+});
+
+describe("`inbox pending`: the count of what is owed, per ITEM", () => {
+  /** Drive a real delivery through the local daemon, so the ledger is written by
+   *  the delivery path and never by the test. */
+  async function deliverOne(cwd: string, text = "@dev why are stale bots created") {
+    const handler = createHandler(createStore(scratchDir(`${basename(cwd)}-store`)));
+    await handler(
+      new Request("http://x/agents/dev", { method: "POST", body: JSON.stringify({ persona: "p", channel: "general" }) }),
+    );
+    await handler(
+      new Request("http://x/channels/general", {
+        method: "POST",
+        body: JSON.stringify({ from: "andrew", text, id: "m1", lastSeen: 0 }),
+      }),
+    );
+    return stubIo(cwd, (u, init) => handler(new Request(u, init)));
+  }
+
+  test("a delivered mention becomes an OPEN item, and pending exits 1 naming it", async () => {
+    const cwd = scratchDir("inbox-open");
+    const a = await deliverOne(cwd);
+    expect(await main(["message", "check", "--as", "dev"], a.io)).toBe(0);
+    const b = stubIo(cwd, async () => new Response("{}", { status: 200 }));
+    expect(await main(["inbox", "pending", "--as", "dev"], b.io)).toBe(1);
+    expect(b.writes.length).toBe(1);
+    expect(b.errs.join(" ")).toContain("with no reply");
+    expect(b.errs.join(" ")).toContain("why are stale bots created");
+  });
+
+  test("nothing owed prints nothing and exits 0", async () => {
+    const cwd = scratchDir("inbox-clean");
+    const { io, writes } = stubIo(cwd, async () => new Response("{}", { status: 200 }));
+    expect(await main(["inbox", "pending", "--as", "dev"], io)).toBe(0);
+    expect(writes).toHaveLength(0);
+  });
+
+  test("an unknown inbox verb names the one that exists", async () => {
+    const cwd = scratchDir("inbox-verb");
+    const { io, errs } = stubIo(cwd, async () => new Response("{}", { status: 200 }));
+    expect(await main(["inbox", "drain", "--as", "dev"], io)).toBe(1);
+    expect(errs.join(" ")).toContain("inbox pending");
+  });
+
+  test("an unwritable ledger REPORTS itself and still delivers the message", async () => {
+    // The message is the point and the ledger is the accounting, so a ledger
+    // that cannot be written must not swallow a delivery. It must also not go
+    // quiet: an inbox counting nothing would read as an inbox with nothing in
+    // it, which is the silent-success shape this whole day was about.
+    const cwd = scratchDir("inbox-locked");
+    const a = await deliverOne(cwd);
+    // Only the ledger's own directory: locking all of .scramble would break the
+    // cursor write too, and then the test would prove something else.
+    mkdirSync(join(cwd, ".scramble", "inbox"), { recursive: true });
+    chmodSync(join(cwd, ".scramble", "inbox"), 0o500);
+    try {
+      expect(await main(["message", "check", "--as", "dev"], a.io)).toBe(0);
+      expect(a.writes.length).toBeGreaterThan(0);
+      expect(a.errs.join(" ")).toContain("inbox ledger not written");
+    } finally {
+      chmodSync(join(cwd, ".scramble", "inbox"), 0o700);
+    }
   });
 });
 
