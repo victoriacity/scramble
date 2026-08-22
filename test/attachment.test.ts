@@ -478,6 +478,64 @@ describe("downloadFile (shared)", () => {
   });
 });
 
+describe("the ts of the message a completed upload posted", () => {
+  // Completing an upload posts its own message carrying the text, so it has a ts
+  // like any other message, and everything the send does afterwards needs it:
+  // closing what the reply answers, remembering what this agent said, and
+  // reporting what it raced with. The send path took a different route with an
+  // attachment and skipped all three, which my own ledger caught, holding two
+  // questions I had answered with files.
+  const okUpload = (complete: unknown) => async (url: string) => {
+    if (url.includes("getUploadURLExternal"))
+      return new Response(JSON.stringify({ ok: true, upload_url: "https://u/x", file_id: "F" }), { status: 200 });
+    if (url === "https://u/x") return new Response("", { status: 200 });
+    if (url.includes("completeUploadExternal")) return new Response(JSON.stringify(complete), { status: 200 });
+    return new Response(JSON.stringify({ ok: true }), { status: 200 });
+  };
+  const src = (): string => {
+    const d = scratchDir("uploadts");
+    const f = join(d, "f.txt");
+    writeFileSync(f, "bytes");
+    return f;
+  };
+
+  test("it is read out of the file's shares", async () => {
+    const r = await uploadToSlack(
+      okUpload({
+        ok: true,
+        files: [
+          {
+            id: "F",
+            permalink: "https://x.slack.com/files/U1/F/f.txt",
+            shares: { public: { C1: [{ ts: "1787404820.170699" }] } },
+          },
+        ],
+      }),
+      "tok",
+      src(),
+      "C1",
+    );
+    expect(r.ok).toBe(true);
+    expect(r.ok && r.out.ts).toBe("1787404820.170699");
+  });
+
+  test("no share means no ts, and the upload still succeeds", async () => {
+    // Absent rather than invented: the caller closes against a wall-clock marker
+    // and skips the sent record, since an id nobody can look up is worse.
+    for (const files of [
+      [{ id: "F", permalink: "https://x/f" }],
+      [{ id: "F", permalink: "https://x/f", shares: null }],
+      [{ id: "F", permalink: "https://x/f", shares: { public: { C1: [] } } }],
+      [{ id: "F", permalink: "https://x/f", shares: { public: { C1: [{ ts: "" }] } } }],
+      [{ id: "F", permalink: "https://x/f", shares: { public: "not a map" } }],
+    ]) {
+      const r = await uploadToSlack(okUpload({ ok: true, files }), "tok", src(), "C1");
+      expect(r.ok).toBe(true);
+      expect(r.ok && r.out.ts).toBeUndefined();
+    }
+  });
+});
+
 describe("uploadToSlack failure branches", () => {
   // A fetcher that answers get/put/complete ok; used where the size/read guard
   // returns before any network call is made.

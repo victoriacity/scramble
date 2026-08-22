@@ -858,7 +858,7 @@ export class SlackBackend {
     mimeOverride?: string,
     initialComment?: string,
     thread?: string,
-  ): Promise<{ ok: true; id: string; permalink?: string } | { ok: false; error: string }> {
+  ): Promise<{ ok: true; id: string; permalink?: string; ts?: string } | { ok: false; error: string }> {
     const resolved = await this.slackChannelFor(this.tokenOrDefault(as), channel);
     if (resolved.id === undefined) return { ok: false, error: resolved.error };
     const t = this.agentToken(as);
@@ -873,7 +873,14 @@ export class SlackBackend {
       initialComment === undefined ? undefined : denormalize(initialComment, this.roster),
       thread,
     );
-    return r.ok ? { ok: true, id: r.out.id, ...(r.out.permalink !== undefined ? { permalink: r.out.permalink } : {}) } : { ok: false, error: r.error };
+    return r.ok
+      ? {
+          ok: true,
+          id: r.out.id,
+          ...(r.out.permalink !== undefined ? { permalink: r.out.permalink } : {}),
+          ...(r.out.ts !== undefined ? { ts: r.out.ts } : {}),
+        }
+      : { ok: false, error: r.error };
   }
 
   /** Resolve a Slack user id to a name: the roster wins, then users.info (the

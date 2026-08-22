@@ -182,6 +182,9 @@ export async function downloadFile(
 export interface SlackUploadResult {
   /** the real Slack file id, so callers reference it in the sent message. */
   id: string;
+  /** The ts of the message the completed upload posted, when Slack reports a
+   *  share. The send path needs it for everything it does after posting. */
+  ts?: string;
   name: string;
   mime: string;
   size: number;
@@ -271,7 +274,33 @@ export async function uploadToSlack(
         `attach it to a message: ${JSON.stringify(complete.data).slice(0, 400)}`,
     };
   }
-  return { ok: true, out: { id: fileId, name, mime, size, permalink } };
+  return { ok: true, out: { id: fileId, name, mime, size, permalink, ts: shareTs(complete.data) } };
+}
+
+/** The ts of the MESSAGE completeUploadExternal posted, read from the file's
+ *  shares. Completing an upload posts its own message carrying the text, so that
+ *  message has a ts like any other, and everything the send path does afterwards
+ *  needs it: closing what the reply answers, remembering what this agent said,
+ *  and reporting what it raced with.
+ *
+ *  Absent when Slack returns no share, which happens for an upload into no
+ *  channel. The caller treats that as "no ts" and says so. */
+function shareTs(data: Record<string, unknown>): string | undefined {
+  const files = data.files;
+  if (!Array.isArray(files) || files.length === 0) return undefined;
+  const shares = (files[0] as { shares?: unknown }).shares;
+  if (typeof shares !== "object" || shares === null) return undefined;
+  for (const scope of Object.values(shares as Record<string, unknown>)) {
+    if (typeof scope !== "object" || scope === null) continue;
+    for (const entries of Object.values(scope as Record<string, unknown>)) {
+      if (!Array.isArray(entries)) continue;
+      for (const e of entries) {
+        const ts = (e as { ts?: unknown }).ts;
+        if (typeof ts === "string" && ts !== "") return ts;
+      }
+    }
+  }
+  return undefined;
 }
 
 /** The permalink of the first file in a completeUploadExternal reply, or

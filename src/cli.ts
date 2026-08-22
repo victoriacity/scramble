@@ -402,29 +402,7 @@ async function postText(
     // A post that landed somewhere other than where it was aimed is REPORTED,
     // never inferred from a clean exit.
     if (r.problem !== undefined) io.writeErr(`slack: ${r.problem}`);
-    // A REPLY CLOSES WHAT IT ANSWERS. Here, after Slack accepted it, so a
-    // refused post never retires an item that is still waiting.
-    try {
-      // WHAT ARRIVED WHILE YOU WERE WRITING. The local backend answers a send
-      // with its crossings and the skill tells every agent to read them; on
-      // Slack the send returned nothing, so the promise held on the backend
-      // nobody uses.
-      //
-      // The operator, 2026-08-22, on two agents posting near-identical plans one
-      // second apart: "one task/topic is owned by one agent." Neither could see
-      // the other coming. This is the surface that would have shown it.
-      await reportCrossings(io, s.backend, channel, from, r.ts);
-      // NAMED BY THE REPLY'S OWN ts, so `inbox trace` on a closed item points at
-      // the message that closed it. It held a wall-clock ISO string before,
-      // which named nothing anyone could look up.
-      closeInboxItems(inboxPath(slackConfigPath(io), from), channel, r.ts ?? new Date().toISOString(), thread);
-      // REMEMBER WHAT THIS AGENT SAID, so a reply to it is recognised as owed to
-      // this agent whoever it names. The operator answered a question of mine
-      // with one word, naming nobody, in a reply to my own message.
-      if (r.ts !== undefined) recordSent(sentPath(slackConfigPath(io), from), r.ts);
-    } catch (e) {
-      io.writeErr(`inbox ledger not updated after posting to ${channel}: ${String(e)}`);
-    }
+    await settleSend(io, channel, from, r.ts, thread);
     if (status !== undefined) await settleStatus(replyStatus(status, channel, from), io);
     return 0;
   }
@@ -1317,7 +1295,7 @@ type AttachResult =
    *  backend. The SEND path puts it in the message text, which is what makes
    *  Slack attach the file to that message; without it the bytes sit in Slack's
    *  storage attached to nothing. */
-  { ok: true; id: string; permalink?: string } | { ok: false; error: string };
+  { ok: true; id: string; permalink?: string; ts?: string } | { ok: false; error: string };
 
 /** Upload one local file under the selected backend and return the file id the
  *  backend assigned (Slack's file id or a local ledger id). The `path` carries
@@ -1342,7 +1320,7 @@ async function attachmentUpload(
       return { ok: false, error: s.error ?? "slack backend unavailable" };
     }
     const r = await s.backend.upload(targetChannel, path, as ?? "", mimeOverride, initialComment, threadTs);
-    return r.ok ? { ok: true, id: r.id, permalink: r.permalink } : { ok: false, error: r.error };
+    return r.ok ? { ok: true, id: r.id, permalink: r.permalink, ts: r.ts } : { ok: false, error: r.error };
   }
   const r = recordLocalUpload(slackFilesDir(io), path, mimeOverride);
   if (!r.ok) return { ok: false, error: r.error };
@@ -1663,6 +1641,38 @@ function emitDelivery(io: Io, agent: string, line: Record<string, unknown>, addr
   }
 }
 
+/** EVERYTHING A SEND DOES ONCE SLACK HAS ACCEPTED IT, in one place.
+ *
+ *  Three things, and each was written at the post path and reached nowhere else:
+ *  report what this send raced with, close what it answers, and remember its own
+ *  ts so a reply to it is recognised as owed to this agent.
+ *
+ *  It lives here because a send carrying a FILE takes a different route: the
+ *  upload posts the message, so the post path is skipped, and with it all three.
+ *  My own ledger caught that, holding two questions I had answered with
+ *  attachments.
+ *
+ *  Best-effort and reported: none of this may turn a delivered message into a
+ *  failure. `ts` is absent when Slack reports no share for an upload, and then
+ *  the close still runs against a wall-clock marker while the sent record is
+ *  skipped, since an id nobody can look up is worse than no id. */
+async function settleSend(
+  io: Io,
+  channel: string,
+  from: string,
+  ts: string | undefined,
+  thread: string | undefined,
+): Promise<void> {
+  const s = slackBackend(io);
+  try {
+    if (s.backend !== undefined) await reportCrossings(io, s.backend, channel, from, ts);
+    closeInboxItems(inboxPath(slackConfigPath(io), from), channel, ts ?? new Date().toISOString(), thread);
+    if (ts !== undefined) recordSent(sentPath(slackConfigPath(io), from), ts);
+  } catch (e) {
+    io.writeErr(`inbox ledger not updated after posting to ${channel}: ${String(e)}`);
+  }
+}
+
 /** Say what arrived in this channel between the last line this agent saw and the
  *  line it just sent.
  *
@@ -1791,6 +1801,7 @@ async function cmdMessage(args: string[], io: Io, backend: "local" | "slack"): P
       // sending, so the message and its files arrive together, then send the
       // text carrying the uploaded file metadata (the id + local path).
       const attachPaths = collectValues(args, "--attach");
+      let sentTs: string | undefined;
       let files: Attachment[] | undefined;
       const links: string[] = [];
       if (attachPaths.length > 0) {
@@ -1814,6 +1825,8 @@ async function cmdMessage(args: string[], io: Io, backend: "local" | "slack"): P
           files = files ?? [];
           files.push({ id: up.id, name: basename(p), mime: guessMime(p), size: sizeOf(p), path: p });
           if (up.permalink !== undefined) links.push(up.permalink);
+          // The FIRST upload carries the text, so its message is this send's.
+          if (sentTs === undefined) sentTs = up.ts;
         }
       }
       // The upload SHARES the file into the channel (channel_id on
@@ -1825,7 +1838,16 @@ async function cmdMessage(args: string[], io: Io, backend: "local" | "slack"): P
       void links;
       // With an attachment the upload already posted the message and its text,
       // so posting again would repeat the words beside the file.
-      if (backend === "slack" && attachPaths.length > 0) return 0;
+      //
+      // EVERYTHING A SEND DOES AFTER POSTING STILL HAS TO HAPPEN. This returned
+      // here and skipped all of it, so a reply carrying a file closed nothing,
+      // remembered nothing and reported nothing. Caught by my own ledger: two
+      // questions I had answered with attachments sat open in `inbox pending`,
+      // and a reply to either would not have been recognised as owed to me.
+      if (backend === "slack" && attachPaths.length > 0) {
+        await settleSend(io, req.channel, nameFor(flags, io), sentTs, flags.get("thread"));
+        return 0;
+      }
       return postText(req.channel, text, flags, io, backend, files);
     }
     case "react": {

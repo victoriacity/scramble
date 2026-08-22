@@ -967,6 +967,54 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     expect(d.writes.join(" ")).toContain("999.9 was NOT delivered to dev");
   });
 
+  test("a reply carrying a FILE closes what it answers, like any other reply", async () => {
+    // The attach path posts through the upload and returned before everything a
+    // send does afterwards, so a reply with a file closed nothing, remembered
+    // nothing and reported nothing. My own ledger caught it: two questions I had
+    // answered with attachments sat open in `inbox pending`.
+    const cwd = scratchDir("attach-closes");
+    mkdirSync(join(cwd, ".scramble", "inbox"), { recursive: true });
+    writeFileSync(
+      join(cwd, ".scramble", "inbox", "dev.jsonl"),
+      `${JSON.stringify({ id: "9.1", channel: "general", from: "andrew", text: "q", at: "2026-08-22T00:00:00Z", addressed: true })}\n`,
+    );
+    writeSlackConfig(cwd, {
+      appToken: "xapp-1",
+      token: "xoxb-1",
+      channels: { general: "C1" },
+      agents: { dev: { token: "T", handle: "dev" } },
+    });
+    const file = join(cwd, "note.md");
+    writeFileSync(file, "the answer");
+    const { io } = stubIo(cwd, async (url) => {
+      const u = String(url);
+      if (u.includes("getUploadURLExternal"))
+        return new Response(JSON.stringify({ ok: true, upload_url: "https://u/x", file_id: "F" }), { status: 200 });
+      if (u === "https://u/x") return new Response("", { status: 200 });
+      if (u.includes("completeUploadExternal"))
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            files: [{ id: "F", permalink: "https://x/f", shares: { public: { C1: [{ ts: "77.7" }] } } }],
+          }),
+          { status: 200 },
+        );
+      return new Response(JSON.stringify({ ok: true, messages: [] }), { status: 200 });
+    });
+    io.readStdin = async () => "here it is";
+    expect(
+      await main(["message", "send", "--target", "general", "--as", "dev", "--attach", file, "--backend", "slack"], io),
+    ).toBe(0);
+    // Closed, and named by the ts of the message the upload posted.
+    const p = stubIo(cwd, async () => new Response("{}", { status: 200 }));
+    expect(await main(["inbox", "pending", "--as", "dev"], p.io)).toBe(0);
+    const t = stubIo(cwd, async () => new Response("{}", { status: 200 }));
+    expect(await main(["inbox", "trace", "9.1", "--as", "dev"], t.io)).toBe(0);
+    expect(t.writes.join(" ")).toContain("answered by 77.7");
+    // And remembered, so a reply to it is recognised as owed to this agent.
+    expect(readFileSync(join(cwd, ".scramble", "sent", "dev.jsonl"), "utf8")).toContain("77.7");
+  });
+
   test("`inbox close` settles an item without sending, and demands a reason", async () => {
     const cwd = scratchDir("inbox-close");
     const a = await deliverOne(cwd);
