@@ -29,6 +29,7 @@ const REPLIES_URL = "https://slack.com/api/conversations.replies";
 const USERS_INFO_URL = "https://slack.com/api/users.info";
 const AUTH_TEST_URL = "https://slack.com/api/auth.test";
 const AUTH_TEAMS_LIST_URL = "https://slack.com/api/auth.teams.list";
+const USERS_LIST_URL = "https://slack.com/api/users.list";
 const REACT_URL = "https://slack.com/api/reactions.add";
 const CONV_INFO_URL = "https://slack.com/api/conversations.info";
 const USERS_CONVERSATIONS_URL = "https://slack.com/api/users.conversations";
@@ -260,6 +261,10 @@ export class SlackBackend {
   /** Channel name -> its Slack id, "" for a name this agent cannot reach. */
   private readonly channelIdCache = new Map<string, string>();
   private readonly teamIdCache = new Map<string, string>();
+  /** users.list is paged at most once per process; a name Slack does not have is
+   *  remembered as a miss so an unknown name costs one lookup, never one each. */
+  private rosterLoaded = false;
+  private readonly rosterMisses = new Set<string>();
   private readonly roster: Record<string, string>;
   private readonly filesDir: string;
   /** Cache of users.info answers so a repeat unknown id never re-queries. The
@@ -413,6 +418,57 @@ export class SlackBackend {
   private tokenOrDefault(agent: string): string {
     const t = this.agentToken(agent);
     return t.ok ? t.token : this.token;
+  }
+
+  /** Teach the roster every @name in this text that it does not already know,
+   *  by asking Slack who is in the workspace.
+   *
+   *  THE ROSTER IS A CACHE, and it was being used as the authority. It is written
+   *  at onboarding, so anyone who joins afterwards is absent from it, and
+   *  `denormalize` leaves an unknown name as literal text that notifies nobody. A
+   *  peer measured it the hour a third agent joined: "@alignment_benchmark stored
+   *  as plain text with no entity, so they got no ping" (2026-08-22). Same shape
+   *  as the channel map, which was also a hand-kept copy of something Slack
+   *  holds.
+   *
+   *  users.list is paged ONCE per process and only when a name is unknown, so an
+   *  agent talking to people it already knows pays nothing. A name Slack does not
+   *  have stays literal, which is correct: it is not a person here. */
+  private async learnNames(token: string, text: string): Promise<void> {
+    const known = new Set(Object.values(this.roster));
+    const wanted = new Set<string>();
+    for (const m of text.matchAll(/(^|\s)@([A-Za-z0-9._-]+)/g)) {
+      const name = m[2];
+      if (name !== undefined && !known.has(name) && !this.rosterMisses.has(name)) wanted.add(name);
+    }
+    if (wanted.size === 0 || this.rosterLoaded) {
+      for (const w of wanted) this.rosterMisses.add(w);
+      return;
+    }
+    this.rosterLoaded = true;
+    const team = await this.teamIdFor(token);
+    let cursor = "";
+    for (let page = 0; page < 20; page++) {
+      const q =
+        `${USERS_LIST_URL}?limit=200` +
+        (team === "" ? "" : `&team_id=${encodeURIComponent(team)}`) +
+        (cursor === "" ? "" : `&cursor=${encodeURIComponent(cursor)}`);
+      const r = await readOk<{
+        members?: Array<{ id?: string; name?: string; deleted?: boolean }>;
+        response_metadata?: { next_cursor?: string };
+      }>(this.fetch, q, { headers: { authorization: `Bearer ${token}` } });
+      if (!r.ok) break;
+      for (const u of r.data.members ?? []) {
+        if (u.deleted === true) continue;
+        if (typeof u.id === "string" && typeof u.name === "string" && this.roster[u.id] === undefined) {
+          this.roster[u.id] = u.name;
+        }
+      }
+      cursor = r.data.response_metadata?.next_cursor ?? "";
+      if (cursor === "") break;
+    }
+    const after = new Set(Object.values(this.roster));
+    for (const w of wanted) if (!after.has(w)) this.rosterMisses.add(w);
   }
 
   /** This agent's WORKSPACE id, which conversations.list requires on an org
@@ -675,6 +731,9 @@ export class SlackBackend {
     const t = this.agentToken(as);
     if (!t.ok) return { ok: false, error: t.error };
     const token = t.token;
+    // A NAME SLACK KNOWS BUT THE ROSTER DOES NOT would go out as literal text
+    // and notify nobody, which is what happened the hour a third agent joined.
+    await this.learnNames(token, text);
     const r = await readOk<{ error?: string; ts?: string; message?: { thread_ts?: string } }>(this.fetch, POST_URL, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
@@ -733,6 +792,7 @@ export class SlackBackend {
     if (resolved.id === undefined) return { ok: false, error: resolved.error };
     const t = this.agentToken(as);
     if (!t.ok) return { ok: false, error: t.error };
+    if (initialComment !== undefined) await this.learnNames(t.token, initialComment);
     const r = await uploadToSlack(
       this.fetch,
       t.token,

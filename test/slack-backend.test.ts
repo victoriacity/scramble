@@ -203,6 +203,59 @@ describe("post", () => {
     expect(bad.ok ? "" : bad.error).toContain("this agent is not in a channel by that name");
   });
 
+  test("a name the ROSTER does not know is looked up, so a new joiner gets pinged", async () => {
+    // A peer measured this the hour a third agent joined: "@alignment_benchmark
+    // stored as plain text with no entity, so they got no ping". The roster is
+    // written at onboarding, so anyone who joins afterwards is absent from it,
+    // and the conversion left the name literal. Same shape as the channel map.
+    let posted = "";
+    let listed = 0;
+    const h = make({}, async (url, init) => {
+      const u = String(url);
+      if (u.includes("users.list")) {
+        listed += 1;
+        return new Response(
+          JSON.stringify({ ok: true, members: [{ id: "U777", name: "newcomer" }, { id: "UDEL", name: "ghost", deleted: true }] }),
+          { status: 200 },
+        );
+      }
+      if (u.includes(POST)) {
+        posted = JSON.parse(String(init?.body)).text as string;
+        return new Response(JSON.stringify({ ok: true, ts: "9.9", message: {} }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ ok: true, teams: [{ id: "T1" }] }), { status: 200 });
+    });
+    expect(await h.backend.post("general", "@newcomer welcome", "alice")).toMatchObject({ ok: true });
+    expect(posted).toBe("<@U777> welcome");
+    expect(listed).toBe(1);
+
+    // A name Slack does not have stays literal: it is no person here. And the
+    // lookup does not repeat, so an unknown name costs ONE page walk, not one
+    // per message.
+    await h.backend.post("general", "@nobody-here hello", "alice");
+    expect(posted).toBe("@nobody-here hello");
+    await h.backend.post("general", "@nobody-here again", "alice");
+    expect(listed).toBe(1);
+  });
+
+  test("a roster the agent already knows costs no lookup at all", async () => {
+    let listed = 0;
+    let posted = "";
+    const h = make({}, async (url, init) => {
+      const u = String(url);
+      if (u.includes("users.list")) listed += 1;
+      if (u.includes(POST)) {
+        posted = JSON.parse(String(init?.body)).text as string;
+        return new Response(JSON.stringify({ ok: true, ts: "9.9", message: {} }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    });
+    // U111 is `ana` in the fixture roster.
+    expect(await h.backend.post("general", "@ana here", "alice")).toMatchObject({ ok: true });
+    expect(posted).toBe("<@U111> here");
+    expect(listed).toBe(0);
+  });
+
   test("an upload converts @names in its comment, so a mention NOTIFIES", async () => {
     // The same peer: "My message opened with the operator's name and Slack
     // stored it literally, so he had no notification on an answer he had asked
