@@ -755,7 +755,7 @@ describe("message check (local => cursor drain)", () => {
     const code = await main(["message", "check", "--as", "dev"], a.io);
     expect(code).toBe(0);
     expect(a.writes.length).toBeGreaterThan(0);
-    const cursor = JSON.parse(readFileSync(join(cwd, ".scramble", "cursor.json"), "utf8"));
+    const cursor = JSON.parse(readFileSync(join(cwd, ".scramble", "cursors", "dev.json"), "utf8"));
     expect(cursor.dev).toBeGreaterThan(0);
     // second check: nothing new pending, prints nothing, still exits 0
     const b = stubIo(cwd, (u, init) => handler(new Request(u, init)));
@@ -1143,6 +1143,34 @@ describe("message check under the slack backend", () => {
     expect(code).toBe(0);
   });
 
+  test("ONE AGENT'S CURSOR NEVER BLINDS ANOTHER on a shared host", async () => {
+    // The peer agent read the previous version and found the step I missed: a
+    // single shared file beside the config looks fine because its keys are per
+    // agent, and the FIRST agent to sweep creates it, after which every other
+    // agent resolves to that file, finds no key of its own, reads 0, and
+    // re-drains full history. The same flood, one step later, once per agent.
+    const cwd = scratchDir("cursor-shared");
+    const io = slackCheckIo(cwd, {
+      fetch: async (url) =>
+        String(url).includes("conversations.history")
+          ? new Response(JSON.stringify({ ok: true, messages: [{ ts: "9.9", user: "U9", text: "hi" }] }), { status: 200 })
+          : new Response(JSON.stringify({ ok: true, messages: [] }), { status: 200 }),
+    });
+    expect(await main(["message", "check", "--as", "alpha", "--backend", "slack"], io)).toBe(0);
+    const alpha = join(cwd, ".scramble", "cursors", "alpha.json");
+    expect(existsSync(alpha)).toBe(true);
+    // beta has swept nothing, so it has no cursor of its own and alpha's file is
+    // NOT what it reads. One file per agent is what makes that true.
+    const beta = join(cwd, ".scramble", "cursors", "beta.json");
+    expect(existsSync(beta)).toBe(false);
+    expect(await main(["message", "check", "--as", "beta", "--backend", "slack"], io)).toBe(0);
+    expect(existsSync(beta)).toBe(true);
+    // And alpha's cursor is untouched by beta's sweep: no read-modify-write race
+    // over one file.
+    const after = JSON.parse(readFileSync(alpha, "utf8")) as Record<string, unknown>;
+    expect(Object.keys(after)).toEqual(["slack:alpha"]);
+  });
+
   test("the sweep covers channels this agent is IN, beyond what the config maps", async () => {
     // 2026-08-22: a peer removed two entries from the SHARED config while
     // testing name resolution, and this sweep stopped covering the channel the
@@ -1323,7 +1351,7 @@ describe("message check under the slack backend", () => {
     expect(line.channel).toBe("general");
     expect(line.mentioned).toBe(true);
     // the per-channel cursor moved: the stored slack cursor is a map, not an integer
-    const cursor = JSON.parse(readFileSync(join(cwd, ".scramble", "cursor.json"), "utf8"));
+    const cursor = JSON.parse(readFileSync(join(cwd, ".scramble", "cursors", "dev.json"), "utf8"));
     expect(cursor["slack:dev"]).toEqual({ general: "5.5" });
   });
 
@@ -1386,7 +1414,7 @@ describe("message check under the slack backend", () => {
     expect(line.text).toBe("@dev a peer asks");
     // the cursor is the NEWEST line — which is the skipped OWN line (9.9), so
     // the very next sweep does not re-read it.
-    const cursor = JSON.parse(readFileSync(join(cwd, ".scramble", "cursor.json"), "utf8"));
+    const cursor = JSON.parse(readFileSync(join(cwd, ".scramble", "cursors", "dev.json"), "utf8"));
     expect(cursor["slack:dev"]).toEqual({ general: "9.9" });
   });
 
@@ -1542,7 +1570,7 @@ describe("message check under the slack backend", () => {
     expect(code).toBe(0);
     expect(writes).toHaveLength(2);
     // cursor holds the newest ts for the channel, not the last-seen.
-    const cursor = JSON.parse(readFileSync(join(cwd, ".scramble", "cursor.json"), "utf8"));
+    const cursor = JSON.parse(readFileSync(join(cwd, ".scramble", "cursors", "dev.json"), "utf8"));
     expect(cursor["slack:dev"]).toEqual({ general: "9.5" });
   });
 

@@ -209,16 +209,27 @@ const CURSOR_FILE = "cursor.json";
  *  The local backend keeps its cwd-relative file, since a local daemon's store
  *  is per workspace. When the config-side file is absent and a cwd one exists,
  *  the cwd one is read, so an existing agent does not re-drain once on upgrade. */
-function cursorPath(io: Io): string {
-  const beside = join(dirname(slackConfigPath(io)), CURSOR_FILE);
-  if (existsSync(beside)) return beside;
+function cursorPath(io: Io, agent: string): string {
+  // ONE FILE PER AGENT, the way the inbox ledger is. A single shared file beside
+  // the config looked fine because the keys inside it are per agent, and it is
+  // not: the peer agent read the previous version and found the step I missed.
+  // The FIRST agent to sweep from a fresh cwd creates the shared file, and from
+  // that moment every other agent on the host resolves to it, finds no key of
+  // its own, reads 0, and re-drains full history. The same flood, one step
+  // later, once per agent. A shared file also makes two sweeps a read-modify-
+  // write race over each other's cursors.
+  const mine = join(dirname(slackConfigPath(io)), "cursors", `${agent}.json`);
+  if (existsSync(mine)) return mine;
+  // MIGRATION, and it must be the agent's OWN old file: the cwd copy belongs to
+  // whoever swept from that directory, so it is read only while this agent has
+  // no file of its own yet.
   const local = join(io.cwd(), ".scramble", CURSOR_FILE);
-  return existsSync(local) ? local : beside;
+  return existsSync(local) ? local : mine;
 }
 
 function readCursor(io: Io, name: string): number {
   try {
-    const j = JSON.parse(readFileSync(cursorPath(io), "utf8")) as Record<string, number>;
+    const j = JSON.parse(readFileSync(cursorPath(io, name), "utf8")) as Record<string, number>;
     return typeof j[name] === "number" ? j[name] : 0;
   } catch {
     return 0;
@@ -226,7 +237,7 @@ function readCursor(io: Io, name: string): number {
 }
 
 function writeCursor(io: Io, name: string, seq: number): void {
-  const p = cursorPath(io);
+  const p = cursorPath(io, name);
   let j: Record<string, number> = {};
   try {
     j = JSON.parse(readFileSync(p, "utf8")) as Record<string, number>;
@@ -234,7 +245,10 @@ function writeCursor(io: Io, name: string, seq: number): void {
     /* absent cursor file is a fresh ledger */
   }
   j[name] = seq;
-  mkdirSync(join(io.cwd(), ".scramble"), { recursive: true });
+  // THE DIRECTORY OF THE FILE BEING WRITTEN. This made the cwd `.scramble`
+  // whatever path `p` resolved to, so on a host where the cursor lives beside
+  // the config the write would fail for a directory that does not exist yet.
+  mkdirSync(dirname(p), { recursive: true });
   writeFileSync(p, JSON.stringify(j));
 }
 
@@ -872,7 +886,7 @@ const SLACK_CURSOR_PREFIX = "slack:";
 
 function readSlackCursor(io: Io, name: string): Record<string, string> {
   try {
-    const j = JSON.parse(readFileSync(cursorPath(io), "utf8")) as Record<string, unknown>;
+    const j = JSON.parse(readFileSync(cursorPath(io, name), "utf8")) as Record<string, unknown>;
     const v = j[`${SLACK_CURSOR_PREFIX}${name}`];
     if (typeof v === "object" && v !== null && !Array.isArray(v))
       return v as Record<string, string>;
@@ -883,7 +897,7 @@ function readSlackCursor(io: Io, name: string): Record<string, string> {
 }
 
 function writeSlackCursor(io: Io, name: string, perChannel: Record<string, string>): void {
-  const p = cursorPath(io);
+  const p = cursorPath(io, name);
   let j: Record<string, unknown> = {};
   try {
     j = JSON.parse(readFileSync(p, "utf8")) as Record<string, unknown>;
@@ -891,7 +905,10 @@ function writeSlackCursor(io: Io, name: string, perChannel: Record<string, strin
     /* absent cursor file is a fresh ledger */
   }
   j[`${SLACK_CURSOR_PREFIX}${name}`] = perChannel;
-  mkdirSync(join(io.cwd(), ".scramble"), { recursive: true });
+  // THE DIRECTORY OF THE FILE BEING WRITTEN. This made the cwd `.scramble`
+  // whatever path `p` resolved to, so on a host where the cursor lives beside
+  // the config the write would fail for a directory that does not exist yet.
+  mkdirSync(dirname(p), { recursive: true });
   writeFileSync(p, JSON.stringify(j));
 }
 
