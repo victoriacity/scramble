@@ -307,6 +307,17 @@ async function postText(
   backend: "local" | "slack",
   files?: Attachment[],
 ): Promise<number> {
+  // THE CHOKE POINT: every verb that puts this agent's prose in front of a
+  // person funnels through here, so the language check sits here and `post`
+  // cannot be the way around what `message send` enforces. `message send` checks
+  // once more BEFORE it uploads an attachment, which is not a second mechanism
+  // but the same one called earlier, so a refused message does not leave a file
+  // in the channel with no message to go with it.
+  const postRefusal = languageRefusal(lintLanguage(text));
+  if (postRefusal !== "") {
+    io.writeErr(postRefusal);
+    return 1;
+  }
   const thread = flags.get("thread") ?? undefined;
   const status = statusTracker(io, backend, nameFor(flags, io));
   await settleStatus(status?.clearExpired(), io);

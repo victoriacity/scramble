@@ -655,6 +655,20 @@ describe("message send (mirrored)", () => {
     expect(errs.join(" ")).toContain("em dash");
   });
 
+  test("`post` is not the way around what `message send` enforces", async () => {
+    // The check lives at the choke point both verbs funnel through, so a second
+    // entry point cannot ship unlinted prose. Found while writing up the first
+    // fix: `post <channel> <text>` took the same words and never saw the rules.
+    const cwd = scratchDir("post-lint");
+    const { io, errs } = stubIo(cwd, async () => {
+      throw new Error("REFUSED means no request is made");
+    });
+    const code = await main(["post", "general", "landed it — controlled on six transcripts", "--as", "ana"], io);
+    expect(code).toBe(1);
+    expect(errs.join(" ")).toContain("REFUSED");
+    expect(errs.join(" ")).toContain("em dash");
+  });
+
   test("reads empty stdin as a reported usage error", async () => {
     const cwd = scratchDir("msgsend-empty");
     const { io, errs } = stubIo(cwd, async () => {
