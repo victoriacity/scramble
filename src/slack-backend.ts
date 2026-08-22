@@ -860,7 +860,11 @@ export class SlackBackend {
    *  is REPORTED (pushed onto `problems`) and the message still carries the
    *  file's metadata with no `path`, so the agent learns a file exists and that
    *  fetching it failed. */
-  private async downloadFiles(token: string, files: SlackFileMeta[] | undefined): Promise<{ files: Attachment[]; problems: string[] }> {
+  private async downloadFiles(
+    token: string,
+    files: SlackFileMeta[] | undefined,
+    wanted: boolean,
+  ): Promise<{ files: Attachment[]; problems: string[] }> {
     const problems: string[] = [];
     const output: Attachment[] = [];
     if (!files) return { files: output, problems };
@@ -874,7 +878,16 @@ export class SlackBackend {
         mime: f.mimetype ?? "application/octet-stream",
         ...(f.size !== undefined ? { size: f.size } : {}),
       };
-      if (f.url_private) {
+      // BYTES ONLY FOR WHAT IS ADDRESSED TO THIS AGENT. The metadata always
+      // arrives, so the id is enough to fetch later, and `attachment view`
+      // fetches from Slack when the file is not on disk.
+      //
+      // It used to pull every file that passed through a channel, for every
+      // agent in it, inside the delivery path. Three agents in one room each
+      // downloaded the same 41MB archive addressed to one of them, on a
+      // filesystem at 99%, and each download delayed a delivery that was not
+      // theirs (2026-08-22).
+      if (f.url_private && wanted) {
         const r = await downloadFile(this.fetch, f.url_private, token, this.filesDir, fileId, name);
         if (r.ok) entry.path = r.path;
         else problems.push(r.error);
@@ -958,7 +971,12 @@ export class SlackBackend {
       wantThreadWake && this.cliToken !== undefined && this.cliToken !== ""
         ? await this.describeSender(token, ev)
         : undefined;
-    const dl = await this.downloadFiles(token, ev.files);
+    // Computed BEFORE the files, because it decides whether the bytes are
+    // fetched at all.
+    const mentioned =
+      this.addressesAgent(mentions, as) ||
+      (wantThreadWake && thread !== undefined && (await this.inThread(token, channel, thread, as)));
+    const dl = await this.downloadFiles(token, ev.files, mentioned);
     const delivery: Delivery = {
       seq: 0,
       ts,
@@ -967,9 +985,7 @@ export class SlackBackend {
       text,
       id: ts,
       mentions,
-      mentioned:
-        this.addressesAgent(mentions, as) ||
-        (wantThreadWake && thread !== undefined && (await this.inThread(token, channel, thread, as))),
+      mentioned,
       ...(thread !== undefined ? { thread } : {}),
       ...(this.senderKind(ev) !== undefined ? { sender: this.senderKind(ev) } : {}),
       ...(wantThreadWake && description !== undefined ? { description } : {}),

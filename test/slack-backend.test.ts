@@ -680,8 +680,10 @@ describe("history", () => {
     // and its file is downloaded onto the line, exactly as a live thread reply.
     const reply = r.messages.find((m) => m.text.startsWith("@alice"))!;
     expect(reply.mentions).toContain("alice");
+    // The file's METADATA rides the line; a history read is a transcript and
+    // fetches no bytes, whoever it names.
     expect(reply.files![0]!.id).toBe("F5");
-    expect(Buffer.from(readFileSync(reply.files![0]!.path!)).equals(Buffer.from("ab"))).toBe(true);
+    expect(reply.files![0]!.path).toBeUndefined();
   });
 });
 
@@ -1418,7 +1420,7 @@ describe("inbound file downloads", () => {
     const problems: string[] = [];
     const p = h.backend.listen(["general"], "alice", (d) => lines.push(d), (pr) => problems.push(pr));
     await pump();
-    emit(h, msg({ text: "see the screenshot", files: [{ id: "F1", name: "shot cat.png", url_private: "https://files.slack.com/v1/F1", mimetype: "image/png", size: 21 }] }));
+    emit(h, msg({ text: "@alice see the screenshot", files: [{ id: "F1", name: "shot cat.png", url_private: "https://files.slack.com/v1/F1", mimetype: "image/png", size: 21 }] }));
     await pump(20);
     // listen reconnects on a drop (it never resolves in the healthy
     // path), so the assertions above already ran; do not await p.
@@ -1445,7 +1447,7 @@ describe("inbound file downloads", () => {
     const problems: string[] = [];
     const p = h.backend.listen(["general"], "alice", (d) => lines.push(d), (pr) => problems.push(pr));
     await pump();
-    emit(h, msg({ text: "file", files: [{ id: "F2", name: "x.html", url_private: "https://files.slack.com/x", mimetype: "text/html" }] }));
+    emit(h, msg({ text: "@alice file", files: [{ id: "F2", name: "x.html", url_private: "https://files.slack.com/x", mimetype: "text/html" }] }));
     await pump(20);
     // listen reconnects on a drop (it never resolves in the healthy
     // path), so the assertions above already ran; do not await p.
@@ -1481,7 +1483,7 @@ describe("inbound file downloads", () => {
     const problems: string[] = [];
     const p = h.backend.next(["general"], "alice", 5, (pr) => problems.push(pr));
     await pump();
-    emit(h, msg({ files: [{ id: "F3", name: "a.bin", url_private: "https://files.slack.com/f3", mimetype: "application/octet-stream" }] }));
+    emit(h, msg({ text: "@alice here", files: [{ id: "F3", name: "a.bin", url_private: "https://files.slack.com/f3", mimetype: "application/octet-stream" }] }));
     const r = await p;
     expect(r.code).toBe(0);
     expect(r.code === 0 && r.line.files![0]!.path).toBeUndefined();
@@ -1500,8 +1502,13 @@ describe("inbound file downloads", () => {
     });
     const r = await h.backend.history("general");
     expect(r.code).toBe(0);
-    expect(r.messages[0]!.files![0]!.path).toContain("H1-doc.txt");
-    expect(Buffer.from(readFileSync(r.messages[0]!.files![0]!.path!)).equals(Buffer.from(bytes))).toBe(true);
+    // A TRANSCRIPT CARRIES METADATA, and no bytes. Nothing in a history read is
+    // addressed to anyone, and pulling every file a channel ever carried is what
+    // put three copies of one 41MB archive on one host. `attachment view <id>`
+    // fetches the bytes from Slack when they are wanted.
+    expect(r.messages[0]!.files![0]!.id).toBe("H1");
+    expect(r.messages[0]!.files![0]!.name).toBe("doc.txt");
+    expect(r.messages[0]!.files![0]!.path).toBeUndefined();
     expect(r.problems).toHaveLength(0);
   });
 });
@@ -1578,7 +1585,7 @@ describe("acting-agent credentials", () => {
     const lines: Delivery[] = [];
     const p = h.backend.listen(["general"], "alice", (d) => lines.push(d), () => {});
     await pump();
-    emit(h, msg({ text: "file", files: [{ id: "FC", name: "c.bin", url_private: "https://files.slack.com/fc", mimetype: "application/octet-stream" }] }));
+    emit(h, msg({ text: "@alice file", files: [{ id: "FC", name: "c.bin", url_private: "https://files.slack.com/fc", mimetype: "application/octet-stream" }] }));
     await pump(12);
     // listen reconnects on a drop (it never resolves in the healthy path), so
     // the assertions above already ran; do not await p.

@@ -20,6 +20,7 @@ import type { ServeOptions } from "./server";
 import { SlackBackend, type SlackBackendConfig } from "./slack-backend";
 import type { SlackSocket } from "./slack-transport";
 import {
+  downloadFile,
   findLocalRecord,
   guessMime,
   recordLocalUpload,
@@ -1258,12 +1259,41 @@ async function attachmentView(
   io: Io,
   backend: "local" | "slack",
 ): Promise<{ ok: true; path: string } | { ok: false; error: string }> {
-  void backend;
   const dir = slackFilesDir(io);
   const rec = findLocalRecord(dir, id);
-  if (!rec) return { ok: false, error: `no recorded attachment ${id}` };
-  const finalPath = out !== undefined ? out : rec.path;
-  if (out !== undefined) copyFileSync(rec.path, out);
+  if (rec) {
+    const finalPath = out !== undefined ? out : rec.path;
+    if (out !== undefined) copyFileSync(rec.path, out);
+    return { ok: true, path: finalPath };
+  }
+  // NOT ON DISK: FETCH IT. Delivery no longer pulls the bytes of every file that
+  // passes through a channel, because three agents in one room each downloaded
+  // the same 41MB archive addressed to one of them, inside the delivery path, on
+  // a filesystem at 99%. The metadata always arrives, so the id on the line is
+  // enough to get the bytes when they are wanted.
+  if (backend !== "slack") return { ok: false, error: `no recorded attachment ${id}` };
+  const cfg = loadSlackConfig(io);
+  if (cfg === null) return { ok: false, error: `${slackConfigPath(io)} is missing or malformed` };
+  const token = cfg.token;
+  const info = await io.fetch(`https://slack.com/api/files.info?file=${encodeURIComponent(id)}`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  const j = (await info.json()) as {
+    ok?: boolean;
+    error?: string;
+    file?: { url_private_download?: string; name?: string };
+  };
+  if (j.ok !== true) {
+    return { ok: false, error: `attachment ${id} is not on disk and Slack answered ${String(j.error)}` };
+  }
+  const url = j.file?.url_private_download;
+  if (url === undefined || url === "") {
+    return { ok: false, error: `attachment ${id} is not on disk and Slack gave no download url for it` };
+  }
+  const got = await downloadFile(io.fetch, url, token, dir, id, j.file?.name ?? id);
+  if (!got.ok) return { ok: false, error: got.error };
+  const finalPath = out !== undefined ? out : got.path;
+  if (out !== undefined) copyFileSync(got.path, out);
   return { ok: true, path: finalPath };
 }
 

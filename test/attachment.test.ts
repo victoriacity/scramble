@@ -320,6 +320,69 @@ describe("attachment view", () => {
     return localIoExact(cwd);
   }
 
+  test("a file NOT on disk is fetched from Slack, which is what makes skipping the download safe", async () => {
+    // Delivery stopped pulling the bytes of every file passing through a
+    // channel, so the id on the line has to be enough to get them later. Three
+    // agents in one room each downloaded the same 41MB archive addressed to one
+    // of them, inside the delivery path, on a filesystem at 99%.
+    const cwd = scratchDir("view-fetch");
+    const dir = join(cwd, ".viewfiles");
+    writeSlackCfg(cwd, dir);
+    const bytes = new TextEncoder().encode("FETCHED-ON-DEMAND");
+    const writes: string[] = [];
+    const errs: string[] = [];
+    const io: Io = {
+      ...localIoExact(cwd).io,
+      write: (l) => writes.push(l),
+      writeErr: (l) => errs.push(l),
+      fetch: async (url) => {
+        const u = String(url);
+        if (u.includes("files.info")) {
+          return new Response(
+            JSON.stringify({ ok: true, file: { url_private_download: "https://files.slack.com/d/F9", name: "late.bin" } }),
+            { status: 200 },
+          );
+        }
+        if (u.includes("files.slack.com")) {
+          return new Response(bytes, { status: 200, headers: { "content-type": "application/octet-stream" } });
+        }
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      },
+    };
+    expect(await main(["attachment", "view", "F9", "--backend", "slack"], io)).toBe(0);
+    const got = JSON.parse(writes[0]!) as { path: string };
+    expect(readFileSync(got.path).toString()).toBe("FETCHED-ON-DEMAND");
+  });
+
+  test("a fetch Slack refuses names the id and what Slack said", async () => {
+    const cwd = scratchDir("view-refused");
+    const dir = join(cwd, ".viewfiles");
+    writeSlackCfg(cwd, dir);
+    const errs: string[] = [];
+    const io: Io = {
+      ...localIoExact(cwd).io,
+      writeErr: (l) => errs.push(l),
+      fetch: async () => new Response(JSON.stringify({ ok: false, error: "file_not_found" }), { status: 200 }),
+    };
+    expect(await main(["attachment", "view", "FX", "--backend", "slack"], io)).toBe(1);
+    expect(errs.join(" ")).toContain("FX");
+    expect(errs.join(" ")).toContain("file_not_found");
+  });
+
+  test("a file Slack knows but will not serve a url for is reported as such", async () => {
+    const cwd = scratchDir("view-nourl");
+    const dir = join(cwd, ".viewfiles");
+    writeSlackCfg(cwd, dir);
+    const errs: string[] = [];
+    const io: Io = {
+      ...localIoExact(cwd).io,
+      writeErr: (l) => errs.push(l),
+      fetch: async () => new Response(JSON.stringify({ ok: true, file: { name: "no-url.bin" } }), { status: 200 }),
+    };
+    expect(await main(["attachment", "view", "FY", "--backend", "slack"], io)).toBe(1);
+    expect(errs.join(" ")).toContain("no download url");
+  });
+
   test("writes to the given path and prints it", async () => {
     const cwd = scratchDir("view");
     const filesDir = join(cwd, ".viewfiles");
@@ -359,7 +422,10 @@ describe("attachment view", () => {
     const { io, errs } = viewCfg(cwd, filesDir);
     const code = await main(["attachment", "view", "nope"], io);
     expect(code).toBe(1);
-    expect(errs[0]).toContain("no recorded attachment");
+    // Not on disk is no longer the end of it: view asks Slack, so the failure
+    // that reaches the agent is Slack's own answer about that id.
+    expect(errs[0]).toContain("nope");
+    expect(errs[0]).toContain("not on disk");
   });
 });
 // --- direct units on the shared download/upload functions -----------------
