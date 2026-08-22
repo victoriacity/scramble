@@ -536,6 +536,19 @@ export class SlackBackend {
    *  conversations.list needs a team_id it was not being given. The name of the
    *  channel the operator had just invited an agent into came back as if the
    *  channel did not exist. */
+  /** The Slack channel id for a scramble channel name, under an agent's own
+   *  credential, or undefined when it cannot be resolved.
+   *
+   *  Public so the STATUS path resolves the same way the post path does. It read
+   *  a hand-kept map and nothing else, so a channel absent from the map (every
+   *  channel an agent was invited into without a config edit) and a map entry
+   *  gone stale both ended as `status: channel_not_found`, in a feature that has
+   *  already been silently dead once for that exact error (2026-08-21). */
+  async channelIdFor(agent: string, name: string): Promise<string | undefined> {
+    const r = await this.slackChannelFor(this.tokenOrDefault(agent), name);
+    return r.id;
+  }
+
   private async slackChannelFor(
     token: string,
     name: string,

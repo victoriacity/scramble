@@ -60,7 +60,11 @@ interface SlackHarness {
 /** A slack-mode StatusManager whose fetch records every call. `router` decides
  *  the answer; the default answers ok:true and gives chat.postMessage a ts so the
  *  living-message path is captured. */
-function makeSlack(opts?: { router?: (url: string, body: Record<string, unknown>) => Response; noToken?: boolean }): SlackHarness {
+function makeSlack(opts?: {
+  router?: (url: string, body: Record<string, unknown>) => Response;
+  noToken?: boolean;
+  resolve?: (channel: string) => Promise<string | undefined>;
+}): SlackHarness {
   const dir = scratch("slack");
   let now = 0;
   const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
@@ -78,6 +82,7 @@ function makeSlack(opts?: { router?: (url: string, body: Record<string, unknown>
     now: () => now,
     ttlMs: 10_000,
     channels: { general: "C1" },
+    ...(opts?.resolve === undefined ? {} : { resolve: opts.resolve }),
     token,
     writeErr: (l) => errs.push(l),
     fetch: async (url, init) => {
@@ -495,5 +500,63 @@ describe("status through the CLI", () => {
     const code = await main(["message", "check", "--as", "ana"], io);
     expect(code).toBe(0); // a failing status never fails the verb
     expect(errs.some((e) => e.startsWith("status:"))).toBe(true);
+  });
+});
+
+describe("a channel the config map does not hold", () => {
+  // The map is a hand-kept copy of what Slack holds, and this is the fourth
+  // place in this repo where the copy was missing or stale. Measured live on
+  // 2026-08-22: an agent was invited into a channel, `message send` to it worked
+  // because the post path ASKS Slack, and the status path read the map, found
+  // nothing, and the whole feature was dead in that channel. A stale entry ended
+  // the same way, as a bare `status: channel_not_found`.
+
+  test("resolves live, and the status lands in the resolved channel", async () => {
+    const h = makeSlack({ resolve: async (c) => (c === "invited-channel" ? "C-INVITED" : undefined) });
+    await h.mgr.setOn("invited-channel", "dev", "root.1");
+    const set = h.calls.find((c) => c.url.includes("assistant.threads.setStatus"));
+    expect(set?.body).toMatchObject({ channel_id: "C-INVITED", thread_ts: "root.1", status: STATUS_TEXT });
+    expect(h.errs).toEqual([]);
+  });
+
+  test("the map still wins, so a mapped channel costs no lookup", async () => {
+    let asked = 0;
+    const h = makeSlack({
+      resolve: async () => {
+        asked += 1;
+        return "C-OTHER";
+      },
+    });
+    await h.mgr.setOn("general", "dev", "root.1");
+    expect(asked).toBe(0);
+    expect(h.calls.find((c) => c.url.includes("setStatus"))?.body).toMatchObject({ channel_id: "C1" });
+  });
+
+  test("an unresolvable channel sets nothing and stays quiet", async () => {
+    const h = makeSlack({ resolve: async () => undefined });
+    await h.mgr.setOn("nowhere", "dev", "root.1");
+    expect(h.calls.find((c) => c.url.includes("setStatus"))).toBeUndefined();
+    expect(h.errs).toEqual([]);
+  });
+
+  test("a resolver that THROWS is reported with the channel, never swallowed", async () => {
+    const h = makeSlack({
+      resolve: async () => {
+        throw new Error("users.conversations failed");
+      },
+    });
+    await h.mgr.setOn("nowhere", "dev", "root.1");
+    expect(h.errs.join(" ")).toContain("resolving nowhere failed: users.conversations failed");
+  });
+
+  test("a Slack refusal names the channel and what was asked", async () => {
+    // `status: channel_not_found` said which error came back and nothing about
+    // the request, in a feature whose failures are reported and never escalated,
+    // so the report is the only trace it leaves.
+    const h = makeSlack({
+      router: () => new Response(JSON.stringify({ ok: false, error: "channel_not_found" }), { status: 200 }),
+    });
+    await h.mgr.setOn("general", "dev", "root.1");
+    expect(h.errs.join(" ")).toContain("status in general: channel_not_found (channel_id C1, thread root.1)");
   });
 });

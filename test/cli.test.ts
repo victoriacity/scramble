@@ -1291,6 +1291,46 @@ describe("message check under the slack backend", () => {
     return { ...base, ...over };
   }
 
+  test("a status in an UNMAPPED channel resolves live, the way sending does", async () => {
+    // Measured live on 2026-08-22: an agent invited into a channel could send to
+    // it, because the post path asks Slack, while the status path read the
+    // hand-kept map, found nothing, and the feature was dead in that channel.
+    // A stale map entry ended the same way, as a bare `status: channel_not_found`.
+    const cwd = scratchDir("status-unmapped");
+    const asked: string[] = [];
+    const io = slackCheckIo(cwd, {
+      fetch: async (url, init) => {
+        const u = String(url);
+        asked.push(u);
+        if (u.includes("conversations.history"))
+          return new Response(
+            JSON.stringify({ ok: true, messages: [{ ts: "9.9", user: "U9", text: "@dev hi" }] }),
+            { status: 200 },
+          );
+        if (u.includes("users.conversations"))
+          return new Response(
+            JSON.stringify({ ok: true, channels: [{ id: "C-INVITED", name: "invited-channel" }] }),
+            { status: 200 },
+          );
+        if (u.includes("auth.teams.list"))
+          return new Response(JSON.stringify({ ok: true, teams: [{ id: "T1" }] }), { status: 200 });
+        if (u.includes("auth.test"))
+          return new Response(JSON.stringify({ ok: true, user: "dev", team_id: "T1" }), { status: 200 });
+        return new Response(JSON.stringify({ ok: true, messages: [] }), { status: 200 });
+      },
+    });
+    writeSlackConfig(cwd, {
+      appToken: "xapp-1",
+      token: "xoxb-1",
+      channels: { general: "C1" },
+      agents: { dev: { token: "T", handle: "dev" } },
+    });
+    expect(await main(["message", "check", "invited-channel", "--as", "dev", "--backend", "slack"], io)).toBe(0);
+    // The lookup the map could not answer went to Slack, under the agent's own
+    // credential, exactly as the post path does.
+    expect(asked.some((u) => u.includes("users.conversations"))).toBe(true);
+  });
+
   test("a valid slack config with an empty channel history reports nothing and exits 0", async () => {
     const io = slackCheckIo(scratchDir("mslack-ok"));
     const code = await main(["message", "check", "--as", "dev", "--backend", "slack"], io);

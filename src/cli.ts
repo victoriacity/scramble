@@ -838,7 +838,21 @@ function statusTracker(io: Io, backend: "local" | "slack", agent?: string): Stat
       token = (agent !== undefined ? cfg.agents[agent]?.token : undefined) ?? cfg.token;
     }
   }
+  // LIVE RESOLUTION for a channel the map does not hold. The map is a hand-kept
+  // copy of what Slack holds, and this is the fourth place in this repo where
+  // that copy went missing or stale: a channel an agent was invited into without
+  // a config edit resolved to nothing here while `message send` to the same name
+  // worked, since the post path asks Slack. Built lazily so a config with no
+  // Slack backend pays nothing.
+  const resolve =
+    mode === "slack" && agent !== undefined
+      ? async (channel: string): Promise<string | undefined> => {
+          const s = slackBackend(io);
+          return s.backend === undefined ? undefined : s.backend.channelIdFor(agent, channel);
+        }
+      : undefined;
   return new StatusManager({
+    ...(resolve === undefined ? {} : { resolve }),
     file: join(io.cwd(), ".scramble", "status.json"),
     backend: mode,
     now: statusNow,

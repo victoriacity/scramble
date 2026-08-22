@@ -72,6 +72,10 @@ export interface StatusConfig {
   writeErr(line: string): void;
   /** Slack channel name -> Slack channel id. */
   channels?: Record<string, string>;
+  /** LIVE resolution for a channel the map does not hold, which is every channel
+   *  an agent was invited into without a config edit. The map stays as the fast
+   *  path; this is what makes the answer true. */
+  resolve?: (channel: string) => Promise<string | undefined>;
   /** the Slack bot token. */
   token?: string;
 }
@@ -123,12 +127,23 @@ export class StatusManager {
     writeStatus(this.cfg.file, records);
   }
 
-  private channelId(channel: string): string | undefined {
-    return this.cfg.channels?.[channel];
+  private async channelId(channel: string): Promise<string | undefined> {
+    const mapped = this.cfg.channels?.[channel];
+    if (mapped !== undefined) return mapped;
+    if (this.cfg.resolve === undefined) return undefined;
+    try {
+      return await this.cfg.resolve(channel);
+    } catch (e) {
+      this.report(`resolving ${channel} failed: ${e instanceof Error ? e.message : String(e)}`);
+      return undefined;
+    }
   }
 
-  private report(error: string): void {
-    this.cfg.writeErr(`status: ${error}`);
+  /** A status failure is REPORTED and never escalated, so the report is the only
+   *  trace it leaves: it names the channel it was acting on. `channel_not_found`
+   *  alone said which error Slack returned and nothing about what was asked. */
+  private report(error: string, channel?: string): void {
+    this.cfg.writeErr(channel === undefined ? `status: ${error}` : `status in ${channel}: ${error}`);
   }
 
   /** One Slack REST edit, normalized to the ok/error/ts triangle. */
@@ -168,10 +183,15 @@ export class StatusManager {
 
   /** Set Slack's own status on a thread. Reports a failure and answers whether
    *  it took, so the caller records the thread only when Slack accepted it. */
-  private async setThreadStatus(channelId: string, threadTs: string, status: string): Promise<boolean> {
+  private async setThreadStatus(
+    channelId: string,
+    threadTs: string,
+    status: string,
+    channel?: string,
+  ): Promise<boolean> {
     const r = await this.call(THREAD_STATUS_URL, { channel_id: channelId, thread_ts: threadTs, status });
     if (!r.ok) {
-      this.report(r.error ?? "thread status failed");
+      this.report(`${r.error ?? "thread status failed"} (channel_id ${channelId}, thread ${threadTs})`, channel);
       return false;
     }
     return true;
@@ -200,8 +220,8 @@ export class StatusManager {
       // Re-assert Slack's own status rather than editing a message: setting it
       // again on the same thread is how it stays up while the agent works.
       if (this.cfg.backend === "slack" && rec.thread !== undefined) {
-        const cid = this.channelId(channel);
-        if (cid !== undefined) await this.setThreadStatus(cid, rec.thread, STATUS_TEXT);
+        const cid = await this.channelId(channel);
+        if (cid !== undefined) await this.setThreadStatus(cid, rec.thread, STATUS_TEXT, channel);
       }
       this.save(records);
       return;
@@ -212,9 +232,9 @@ export class StatusManager {
       expiresAt: this.cfg.now() + this.cfg.ttlMs,
     };
     if (this.cfg.backend === "slack") {
-      const cid = this.channelId(channel);
+      const cid = await this.channelId(channel);
       if (cid !== undefined && threadTs !== undefined) {
-        rec.thread = (await this.setThreadStatus(cid, threadTs, STATUS_TEXT)) ? threadTs : undefined;
+        rec.thread = (await this.setThreadStatus(cid, threadTs, STATUS_TEXT, channel)) ? threadTs : undefined;
       }
     }
     records.push(rec);
@@ -230,9 +250,9 @@ export class StatusManager {
     if (idx < 0) return;
     const rec = records[idx]!;
     if (this.cfg.backend === "slack") {
-      const cid = this.channelId(channel);
+      const cid = await this.channelId(channel);
       // An EMPTY status is how Slack is told the agent stopped working.
-      if (cid !== undefined && rec.thread !== undefined) await this.setThreadStatus(cid, rec.thread, "");
+      if (cid !== undefined && rec.thread !== undefined) await this.setThreadStatus(cid, rec.thread, "", channel);
     }
     records.splice(idx, 1);
     this.save(records);
@@ -261,9 +281,9 @@ export class StatusManager {
     for (const rec of records) {
       if (rec.expiresAt > now) continue;
       if (this.cfg.backend === "slack") {
-        const cid = this.channelId(rec.channel);
+        const cid = await this.channelId(rec.channel);
         // Slack's own status is what an expiry takes down.
-        if (cid !== undefined && rec.thread !== undefined) await this.setThreadStatus(cid, rec.thread, "");
+        if (cid !== undefined && rec.thread !== undefined) await this.setThreadStatus(cid, rec.thread, "", rec.channel);
         }
     }
     this.save(kept);
