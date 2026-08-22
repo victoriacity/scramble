@@ -11,6 +11,9 @@ import {
   pendingReport,
   closeItemById,
   readInbox,
+  readSent,
+  recordSent,
+  sentPath,
   recordInboxItem,
   traceReport,
   type InboxItem,
@@ -389,5 +392,64 @@ describe("inbox close: an item the sender said needs no reply", () => {
     const p = join(scratch(), "inbox", "dev.jsonl");
     recordInboxItem(p, item({ id: "100.1", addressed: false }));
     expect(closeItemById(p, "100.1", "why not")).toEqual({ ok: false, why: "unknown" });
+  });
+});
+
+describe("what counts as owed, measured against one afternoon", () => {
+  // The rule was "named here, or naming nobody". Against one afternoon it put 18
+  // messages from another team's task thread into my list, none of them for me,
+  // while every message that WAS for me either named me or answered something I
+  // had said. A list of other people's questions is one an agent scrolls past.
+
+  test("a message naming nobody in someone else's thread is delivered, and owed to nobody", () => {
+    const d = { mentioned: true, from: "teamassistant", mentions: [], thread: "root-of-their-task" };
+    expect(isAddressed(d, ["dev"], ["9.9"])).toBe(false);
+  });
+
+  test("a reply to something THIS agent said is owed to it, whoever it names", () => {
+    // The operator answered a question of mine with one word, "limit", naming
+    // nobody, in a reply to my own message.
+    const d = { mentioned: true, from: "andrew", mentions: [], thread: "mine-1" };
+    expect(isAddressed(d, ["dev"], ["mine-1"])).toBe(true);
+    expect(isAddressed(d, ["dev"], ["someone-elses"])).toBe(false);
+  });
+
+  test("a top-level line naming nobody is still owed: it is the room asking", () => {
+    expect(isAddressed({ mentioned: true, from: "andrew", mentions: [] }, ["dev"])).toBe(true);
+    expect(isAddressed({ mentioned: true, from: "andrew", mentions: [], thread: "" }, ["dev"])).toBe(true);
+  });
+
+  test("being named still counts inside anyone's thread", () => {
+    const d = { mentioned: true, from: "andrew", mentions: ["dev"], thread: "their-root" };
+    expect(isAddressed(d, ["dev"])).toBe(true);
+  });
+
+  test("a broadcast still reaches every agent, in a thread or out of one", () => {
+    const d = { mentioned: true, from: "andrew", mentions: ["channel"], thread: "their-root" };
+    expect(isAddressed(d, ["dev"])).toBe(true);
+  });
+});
+
+describe("the record of what this agent said", () => {
+  test("a sent ts is kept and read back", () => {
+    const p = sentPath(join(scratch(), "slack.json"), "dev");
+    recordSent(p, "1.1");
+    recordSent(p, "2.2");
+    expect(readSent(p)).toEqual(["1.1", "2.2"]);
+  });
+
+  test("an absent file reads as nothing said", () => {
+    expect(readSent(sentPath(scratch(), "dev"))).toEqual([]);
+  });
+
+  test("the file is capped, keeping the NEWEST", () => {
+    // A long-running listener must not grow a file forever, and the ts values
+    // that matter are the recent ones still being replied to.
+    const p = sentPath(join(scratch(), "slack.json"), "dev");
+    for (let i = 0; i < 520; i += 1) recordSent(p, `${i}.0`);
+    const kept = readSent(p);
+    expect(kept).toHaveLength(500);
+    expect(kept.at(-1)).toBe("519.0");
+    expect(kept[0]).toBe("20.0");
   });
 });

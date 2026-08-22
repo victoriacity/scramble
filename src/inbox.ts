@@ -303,6 +303,33 @@ export function traceReport(rows: InboxItem[], id: string, agent: string, path: 
   return `${id} WAS delivered to ${agent}, ${hits.length} row(s):\n${lines.join("\n")}\n${corpus}${seam}`;
 }
 
+/** The ts values of messages THIS agent has sent, so a reply to one of them is
+ *  recognised as an answer owed to this agent.
+ *
+ *  Capped: the file keeps the newest 500, which is far more than any thread this
+ *  agent is still being replied in, and stops a long-running listener growing a
+ *  file forever. */
+export function sentPath(configPath: string, agent: string): string {
+  return join(dirname(configPath), "sent", `${agent}.jsonl`);
+}
+
+export function readSent(path: string): string[] {
+  try {
+    return readFileSync(path, "utf8")
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => l !== "");
+  } catch {
+    return [];
+  }
+}
+
+export function recordSent(path: string, ts: string): void {
+  const kept = [...readSent(path), ts].slice(-500);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${kept.join("\n")}\n`);
+}
+
 /** Should this delivered line become an item? Only lines ADDRESSED to this agent
  *  by someone else.
  *
@@ -320,13 +347,27 @@ export function traceReport(rows: InboxItem[], id: string, agent: string, path: 
  *  `names` is this agent's identities, its scramble name and its Slack handle,
  *  because a mention resolves to the handle and the two differ. */
 export function isAddressed(
-  d: { mentioned?: unknown; from?: unknown; mentions?: unknown },
+  d: { mentioned?: unknown; from?: unknown; mentions?: unknown; thread?: unknown },
   names: string[],
+  ownSent: string[] = [],
 ): boolean {
   if (d.mentioned !== true || typeof d.from !== "string") return false;
   if (names.includes(d.from)) return false;
+  // A REPLY TO SOMETHING THIS AGENT SAID is for this agent, whoever it names.
+  // The operator answered a question of mine with one word, "limit", naming
+  // nobody, in a reply to my own message (2026-08-22).
+  if (typeof d.thread === "string" && ownSent.includes(d.thread)) return true;
   const mentions = Array.isArray(d.mentions) ? d.mentions.filter((m): m is string => typeof m === "string") : [];
-  if (mentions.length === 0) return true;
+  // NAMING NOBODY IN SOMEONE ELSE'S THREAD IS NOT AN OBLIGATION. The rule was
+  // "named here, or naming nobody", and measured against one afternoon it put 18
+  // messages from another team's task thread into my list, none of them for me,
+  // while every message that WAS for me named me or answered something I said.
+  // A list of other people's questions is one an agent learns to scroll past,
+  // which costs the whole mechanism.
+  //
+  // Such a line is still DELIVERED and still shows in a drain. What it stops
+  // being is a debt.
+  if (mentions.length === 0) return typeof d.thread !== "string" || d.thread === "";
   // A BROADCAST NAMES NO ONE AND ADDRESSES EVERYONE. Without this the rule above
   // reads `@channel` as somebody else's name and drops it, so the operator's
   // "<!channel> ..." would reach no agent's ledger even once delivery carries it.

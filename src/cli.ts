@@ -43,6 +43,9 @@ import {
   closeAnsweredBefore,
   closeInboxItems,
   closeItemById,
+  readSent,
+  recordSent,
+  sentPath,
   inboxPath,
   isAddressed,
   pendingInbox,
@@ -406,6 +409,10 @@ async function postText(
       // the message that closed it. It held a wall-clock ISO string before,
       // which named nothing anyone could look up.
       closeInboxItems(inboxPath(slackConfigPath(io), from), channel, r.ts ?? new Date().toISOString(), thread);
+      // REMEMBER WHAT THIS AGENT SAID, so a reply to it is recognised as owed to
+      // this agent whoever it names. The operator answered a question of mine
+      // with one word, naming nobody, in a reply to my own message.
+      if (r.ts !== undefined) recordSent(sentPath(slackConfigPath(io), from), r.ts);
     } catch (e) {
       io.writeErr(`inbox ledger not updated after posting to ${channel}: ${String(e)}`);
     }
@@ -1592,7 +1599,7 @@ function emitDelivery(io: Io, agent: string, line: Record<string, unknown>, addr
       }
     }
   }
-  const addressed = isAddressed(line, names);
+  const addressed = isAddressed(line, names, readSent(sentPath(slackConfigPath(io), agent)));
   // THE FILTER LIVES HERE, where `addressed` is computed, and never in a grep
   // downstream. `scripts/inbox.sh` matched the literal `"mentioned":true`
   // against the serialised line, which works only while the serialiser emits no

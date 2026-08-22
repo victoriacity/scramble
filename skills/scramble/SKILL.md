@@ -220,7 +220,13 @@ inbox has been quiet longer than the channel has.
    ```
 
    `scramble inbox pending --as <name>` asks the same question on demand and
-   exits 1 while anything is open. The count is per ITEM: two questions arriving
+   exits 1 while anything is open.
+
+   A line is owed an answer when it NAMES you, when it is a broadcast, or when it
+   replies to something you said. A line that names nobody inside somebody else's
+   thread is delivered and owed to nobody: sitting in a thread where another team
+   works is not a debt, and a list of other people's questions is one you learn
+   to scroll past. The count is per ITEM: two questions arriving
    together need two answers, and one reply to one of them clears one of them.
 
    `scramble peers` says who else is running, on which host, in which directory,
