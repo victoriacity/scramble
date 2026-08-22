@@ -69,7 +69,13 @@ const LONG_DESCRIPTION_MIN = 175;
  *  agent cannot set its own display name after install.
  *
  *  So the app NAME keeps whatever was asked for, and this falls back to the
- *  agent's own name, which is ASCII by construction. */
+ *  agent's own name, which is ASCII by construction.
+ *
+ *  CONFIRMED AGAINST A LIVE APP IN THAT STATE, which a fresh create cannot show:
+ *  the same agent set a CJK app name with apps.manifest.update after creating,
+ *  then reinstalled, and the app name did NOT propagate to the bot user;
+ *  users.info still answered real_name xingyu-bot with an empty display_name.
+ *  The split is what Slack DOES, and it survives a reinstall. */
 function botDisplayName(appName: string, agentName: string): string {
   return /^[\x20-\x7E]+$/.test(appName) ? appName : agentName;
 }
