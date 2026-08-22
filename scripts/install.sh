@@ -55,17 +55,22 @@ mkdir -p "$BIN" || fail "cannot create $BIN"
 # src/bin.ts and gutted it. git had the file, so the cost was a restore, and the
 # next installer to do this to an unversioned target would take the file with it.
 rm -f "$BIN/scramble" || fail "cannot remove the existing $BIN/scramble"
-cat > "$BIN/scramble" <<LAUNCH
-#!/usr/bin/env bash
-# Installed by scramble scripts/install.sh. Runs a copy, and never a
-# maintainer's working tree.
-#
-# It resolves `current` to the COMMIT DIRECTORY and execs that, so a long-lived
-# process carries its version in its own cmdline. Exec'ing `current` directly
-# would leave every listener on the host saying `current`, which answers "which
-# code is that process running" with the name of a symlink that has moved since.
-exec bun "$(readlink -f "$ROOT/current")/src/bin.ts" "\$@"
-LAUNCH
+# WRITTEN WITHOUT SUBSTITUTION. An unquoted heredoc runs command substitution on
+# its own body, so backticks in a COMMENT get executed: the first version printed
+# "current: command not found" three times, because a comment named that symlink
+# in backticks, and the launcher it wrote had those words missing. The same class
+# once ran the Slack CLI out of a commit message. printf takes the one value that
+# varies as an argument, so nothing in the text is interpreted.
+{
+  printf '%s\n' '#!/usr/bin/env bash'
+  printf '%s\n' '# Installed by scramble scripts/install.sh. Runs a copy, never a working tree.'
+  printf '%s\n' '#'
+  printf '%s\n' '# The path below is the COMMIT DIRECTORY, resolved when this was installed, so'
+  printf '%s\n' '# a long-lived process carries its version in its own cmdline. Pointing it at'
+  printf '%s\n' '# the moving symlink would leave every listener on the host naming that symlink'
+  printf '%s\n' '# and no commit.'
+  printf 'exec bun "%s/src/bin.ts" "$@"\n' "$DEST"
+} > "$BIN/scramble"
 chmod +x "$BIN/scramble" || fail "cannot make $BIN/scramble executable"
 
 echo "install: scramble $SHA is at $DEST"
