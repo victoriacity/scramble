@@ -127,6 +127,18 @@ describe("the inbox ledger: one row per addressed line, one reply owed", () => {
     expect(isAddressed({ from: "andrew" }, me)).toBe(false);
   });
 
+  test("a BROADCAST owes every agent a reply, though it names none of them", () => {
+    // Without this the "named here, or naming nobody" rule reads @channel as
+    // somebody else's name and drops it, so a message meant for the whole room
+    // reaches no ledger even once delivery carries it.
+    const me = ["dev", "dev_bot"];
+    for (const kind of ["channel", "here", "everyone"]) {
+      expect(isAddressed({ mentioned: true, from: "andrew", mentions: [kind] }, me)).toBe(true);
+    }
+    // Still no obligation when it is this agent's own broadcast.
+    expect(isAddressed({ mentioned: true, from: "dev_bot", mentions: ["channel"] }, me)).toBe(false);
+  });
+
   test("a question addressed to SOMEONE ELSE in my thread is not mine to answer", () => {
     // Delivery and obligation are different questions. A peer wrote
     // "@alignment_benchmark there is a concrete overlap" inside a thread I had

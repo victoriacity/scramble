@@ -27,6 +27,11 @@ const HISTORY_URL = "https://slack.com/api/conversations.history";
 const WITH_METADATA = "include_all_metadata=true";
 const REPLIES_URL = "https://slack.com/api/conversations.replies";
 const USERS_INFO_URL = "https://slack.com/api/users.info";
+/** Slack's broadcasts, which address everyone who can read the channel. Exported
+ *  because the inbox ledger needs the same list: a broadcast names no single
+ *  agent, and it is still addressed to each of them. */
+export const BROADCAST_NAMES = ["channel", "here", "everyone"];
+
 const AUTH_TEST_URL = "https://slack.com/api/auth.test";
 const AUTH_TEAMS_LIST_URL = "https://slack.com/api/auth.teams.list";
 const USERS_LIST_URL = "https://slack.com/api/users.list";
@@ -343,6 +348,7 @@ export class SlackBackend {
   }
 
   private addressesAgent(mentions: string[], agent: string): boolean {
+    if (mentions.some((m) => BROADCAST_NAMES.includes(m))) return true;
     return this.identities(agent).some((id) => mentions.includes(id));
   }
 
@@ -767,14 +773,34 @@ export class SlackBackend {
     // that comes back without message.thread_ts was not threaded. Reported as a
     // PROBLEM rather than an error, because the message did reach the channel and
     // a caller that retries would say everything twice.
-    if (thread !== undefined && thread !== "" && r.data.message?.thread_ts === undefined) {
-      return {
-        ok: true,
-        problem:
-          `posted to ${channel} at TOP LEVEL, not in thread ${thread}: Slack accepted that ` +
-          `thread_ts and threaded nothing, which means it names no message in this channel. ` +
-          `The message IS in the channel, at ts ${String(r.data.ts ?? "unknown")}.`,
-      };
+    if (thread !== undefined && thread !== "") {
+      const landed = r.data.message?.thread_ts;
+      if (landed === undefined) {
+        return {
+          ok: true,
+          problem:
+            `posted to ${channel} at TOP LEVEL, and NOT in thread ${thread}: Slack accepted that ` +
+            `thread_ts and threaded nothing, which means it names no message in this channel. ` +
+            `The message IS in the channel, at ts ${String(r.data.ts ?? "unknown")}.`,
+        };
+      }
+      // A THREAD_TS NAMING A REPLY IS HOISTED, silently. Slack has no nested
+      // threads, so it puts the message in that reply's ROOT and answers with
+      // the root's ts. Measured: aiming at a reply landed the message in the
+      // root thread and returned the root's thread_ts, so a check for "did it
+      // thread at all" passes while the message is in a different conversation
+      // than the one asked for. A peer hit this on the same commit I had
+      // measured, and saw no warning (2026-08-22).
+      if (landed !== thread) {
+        return {
+          ok: true,
+          problem:
+            `posted to ${channel} in thread ${landed}, and NOT in ${thread} as asked: Slack has no ` +
+            `nested threads, so a thread_ts naming a REPLY is hoisted into that reply's root. ` +
+            `The message IS in the channel, at ts ${String(r.data.ts ?? "unknown")}. Pass the ` +
+            `root's ts, which a delivered line carries as its own \`thread\`.`,
+        };
+      }
     }
     return { ok: true };
   }
@@ -849,8 +875,18 @@ export class SlackBackend {
    *  passing through raw, so a mention never lands silently unmentioned. Resolved
    *  under the acting agent's own credential (`token`). */
   private async normalize(token: string, text: string): Promise<string> {
-    let out = text;
-    for (const m of text.matchAll(/<@([A-Z0-9]+)>/g)) {
+    // A BROADCAST ADDRESSES EVERY AGENT IN THE CHANNEL, and arrived as raw text
+    // that matched nothing. The operator wrote `<!channel> ensure everything you
+    // write to files are English`, and it reached no agent's inbox: it came in
+    // with `mentions: []` and `mentioned: false`, so every agent saw it only on
+    // the 15-minute sweep, if at all. Two agents measured that independently
+    // against their own inbox files (2026-08-22).
+    //
+    // Rendered as `@channel`, `@here`, `@everyone`, which computeMentions then
+    // picks up like any other name, so one normalization makes the existing
+    // machinery do the rest.
+    let out = text.replace(/<!(channel|here|everyone)>/g, (_w, kind: string) => `@${kind}`);
+    for (const m of out.matchAll(/<@([A-Z0-9]+)>/g)) {
       const uid = m[1]!;
       const name = await this.resolveName(token, uid);
       out = out.replace(`<@${uid}>`, `@${name}`);

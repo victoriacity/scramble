@@ -16,6 +16,7 @@
 // that it counts. Neither end asks an agent to remember anything.
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { BROADCAST_NAMES } from "./slack-backend";
 
 /** One addressed line, and what has answered it. */
 export interface InboxItem {
@@ -174,5 +175,9 @@ export function isAddressed(
   if (names.includes(d.from)) return false;
   const mentions = Array.isArray(d.mentions) ? d.mentions.filter((m): m is string => typeof m === "string") : [];
   if (mentions.length === 0) return true;
+  // A BROADCAST NAMES NO ONE AND ADDRESSES EVERYONE. Without this the rule above
+  // reads `@channel` as somebody else's name and drops it, so the operator's
+  // "<!channel> ..." would reach no agent's ledger even once delivery carries it.
+  if (mentions.some((m) => BROADCAST_NAMES.includes(m))) return true;
   return mentions.some((m) => names.includes(m));
 }

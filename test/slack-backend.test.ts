@@ -208,6 +208,31 @@ describe("post", () => {
     expect(bad.ok ? "" : bad.error).toContain("this agent is not in a channel by that name");
   });
 
+  test("a BROADCAST addresses every agent, and used to reach none of them", async () => {
+    // The operator wrote "<!channel> ensure everything you write to files are
+    // English" and it reached no agent's inbox: mentions [], mentioned false, so
+    // every agent saw it only on the 15-minute sweep. Two agents measured that
+    // against their own inbox files before this was fixed.
+    for (const kind of ["channel", "here", "everyone"]) {
+      expect(computeMentions("general", `@${kind} read this`, "andrew")).toEqual([kind]);
+    }
+    // And the raw Slack form is what normalize turns into that, so the fix is
+    // one rendering step and the existing machinery does the rest.
+    // The default router, which the neighbouring listen tests use: a fake that
+    // answers every call the same way leaves the sender unresolved and the line
+    // is filtered before it reaches this assertion.
+    const h = make();
+    const lines: Delivery[] = [];
+    const p = h.backend.listen(["general"], "alice", (d) => lines.push(d), () => {});
+    await pump();
+    emit(h, msg({ text: "<!channel> everyone read this", user: "U999" }));
+    await pump(20);
+    void p;
+    expect(lines[0]!.text).toBe("@channel everyone read this");
+    expect(lines[0]!.mentions).toContain("channel");
+    expect(lines[0]!.mentioned).toBe(true);
+  });
+
   test("the two mention paths are SEPARATE: entity pings a human, text wakes an agent", async () => {
     // The receiving agent corrected my framing, and the correction is worth a
     // test because the two gaps want different fixes. The Slack entity drives a
@@ -322,6 +347,25 @@ describe("post", () => {
     expect(r.ok ? r.problem : "").toContain("TOP LEVEL");
     expect(r.ok ? r.problem : "").toContain("1787359458.075769");
     expect(r.ok ? r.problem : "").toContain("9.9");
+  });
+
+  test("a thread_ts naming a REPLY is hoisted, and the hoist is reported", async () => {
+    // Measured against the real workspace: Slack has no nested threads, so a
+    // thread_ts naming a reply puts the message in that reply's ROOT and answers
+    // with the root's ts. A check for "did it thread at all" passes while the
+    // message sits in a different conversation than the one asked for, which is
+    // how a peer on the commit I had measured saw no warning.
+    const h = make({}, async (url) =>
+      url.includes("chat.postMessage")
+        ? new Response(JSON.stringify({ ok: true, ts: "9.9", message: { thread_ts: "root-1" } }), { status: 200 })
+        : new Response(JSON.stringify({ ok: true }), { status: 200 }),
+    );
+    const r = await h.backend.post("general", "hi", "bob", "reply-7");
+    expect(r.ok).toBe(true);
+    const said = r.ok ? (r.problem ?? "") : "";
+    expect(said).toContain("in thread root-1");
+    expect(said).toContain("NOT in reply-7");
+    expect(said).toContain("hoisted");
   });
 
   test("a thread that DID take carries no problem", async () => {
