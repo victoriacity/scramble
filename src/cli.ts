@@ -1940,7 +1940,15 @@ async function cmdDoctor(argv: string[], io: Io): Promise<number> {
         doctor: "ok",
         agent: name,
         handle,
-        scopes: granted.size,
+        // THE NAMES, never the count. `scopes: 14` answers no question anyone
+        // asks. Pricing a change asks WHICH scopes are granted, and with only a
+        // count on the surface I told an agent that reading reactions would need
+        // a scope change and a reinstall; `reactions:read` was already one of the
+        // fourteen, in this repo's own app-manifest.ts (their correction,
+        // 2026-08-22). Same for the events: what is subscribed decides what
+        // Slack will ever deliver.
+        scopes: [...granted].sort(),
+        events: declared !== undefined && declared.unreadable === undefined ? [...declared.botEvents].sort() : null,
         listeners: seen.length,
         installed: installedNow === "" ? null : installedNow,
       }),

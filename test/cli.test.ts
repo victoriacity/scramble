@@ -2315,6 +2315,21 @@ describe("doctor, and the warning an agent gets without asking", () => {
     expect(JSON.parse(writes[0]!)).toMatchObject({ doctor: "ok", agent: "dev", handle: "dev_bot" });
   });
 
+  test("ok NAMES the granted scopes, since a count cannot price a change", async () => {
+    // `scopes: 14` answers no question anyone asks. Pricing a change asks WHICH
+    // are granted, and with only a count on this surface I told an agent that
+    // reading reactions needed a scope change and a reinstall. `reactions:read`
+    // was already one of the fourteen, listed in this repo's own
+    // app-manifest.ts, and they corrected me from their app (2026-08-22).
+    const cwd = scratchDir("doc-scopes");
+    writeSlackConfig(cwd, { token: "xoxb-d", channels: {}, agents: { dev: { token: "T", handle: "dev_bot" } } });
+    const { io, writes } = docIo(cwd, { "x-oauth-scopes": ALL }, { ok: true, user: "dev_bot" });
+    expect(await main(["doctor", "--as", "dev", "--backend", "slack"], io)).toBe(0);
+    const line = JSON.parse(writes[0]!) as { scopes: string[] };
+    expect(line.scopes).toContain("reactions:read");
+    expect(line.scopes).toHaveLength(SCOPE_NAMES.length);
+  });
+
   test("a missing handle is REPAIRED into the config, not merely reported", async () => {
     const cwd = scratchDir("doc-fix");
     writeSlackConfig(cwd, { token: "xoxb-d", channels: {}, agents: { dev: { token: "T" } } });
