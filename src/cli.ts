@@ -34,6 +34,7 @@ import { lintLanguage, languageRefusal, lineOf } from "./language";
 import {
   closeAnsweredBefore,
   closeInboxItems,
+  closeItemById,
   inboxPath,
   isAddressed,
   pendingInbox,
@@ -1435,6 +1436,30 @@ async function cmdInbox(argv: string[], io: Io): Promise<number> {
   const { flags, positionals } = parseArgs(argv);
   const sub = positionals[0] ?? "pending";
   const name = nameFor(flags, io);
+  if (sub === "close") {
+    const id = positionals[1];
+    const why = flags.get("why");
+    if (id === undefined || id === "" || why === undefined || why.trim() === "") {
+      io.writeErr(
+        "inbox close needs the id and a reason: inbox close <ts> --why <text>. " +
+          "The reason is stored on the row, because closing with no reply is the agent " +
+          "deciding an obligation is settled and that decision belongs on the record.",
+      );
+      return 1;
+    }
+    const r = closeItemById(inboxPath(slackConfigPath(io), name), id, why.trim());
+    if (r.ok) {
+      io.writeErr(`closed ${id} with no reply: ${why.trim()}`);
+      return 0;
+    }
+    io.writeErr(
+      r.why === "answered"
+        ? `${id} was already answered by ${String(r.answeredBy)}, so there was nothing to close.`
+        : `${id} is not an open item for ${name}. \`inbox pending\` lists what is open, and ` +
+          `\`inbox trace ${id}\` says whether it ever reached this agent.`,
+    );
+    return 1;
+  }
   if (sub === "trace") {
     const id = positionals[1];
     if (id === undefined || id === "") {
@@ -1447,7 +1472,10 @@ async function cmdInbox(argv: string[], io: Io): Promise<number> {
     return 0;
   }
   if (sub !== "pending") {
-    io.writeErr(`unknown inbox verb: ${sub}. The verbs are: inbox pending, inbox trace <ts>`);
+    io.writeErr(
+      `unknown inbox verb: ${sub}. The verbs are: inbox pending, inbox trace <ts>, ` +
+        `inbox close <ts> --why <text>`,
+    );
     return 1;
   }
   const items = pendingInbox(inboxPath(slackConfigPath(io), name));
@@ -2324,6 +2352,7 @@ const USAGE = [
   "  message react     --target <channel> --to <ts> --emoji <name>",
   "  inbox pending                                   lines addressed to you with no reply",
   "  inbox trace <ts>                                did that message reach you, and wake you",
+  "  inbox close <ts>  --why <text>                  settle an item the sender said needs no reply",
   "  lint <file>...                                  the send's language rules, on any file",
   "  listen            [--addressed]                 stream deliveries, one JSON line each",
   "  next              [--timeout N]                 one delivery, then exit",

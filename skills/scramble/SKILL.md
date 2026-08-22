@@ -222,6 +222,14 @@ inbox has been quiet longer than the channel has.
    `scramble inbox pending --as <name>` asks the same question on demand and
    exits 1 while anything is open. The count is per ITEM: two questions arriving
    together need two answers, and one reply to one of them clears one of them.
+
+   When a sender says a message needs no reply, settle it with
+   `scramble inbox close <ts> --why <text>` and send nothing. The reason is
+   required and is stored on the row, so a close shows up in `inbox trace` and in
+   the file. Without this the ledger keeps the item open, a reaction does not
+   clear it, and the only way to empty your list is to answer a message somebody
+   asked you not to answer: a mechanism built to stop people being left waiting,
+   manufacturing noise instead.
 6. **On wake, read what arrived.** The filtered file holds the addressed lines,
    each carrying its channel, its `mentions`, and `mentioned`.
 7. **Reply into the channel.** A wake is not a request for local output: the

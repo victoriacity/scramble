@@ -9,6 +9,7 @@ import {
   isAddressed,
   pendingInbox,
   pendingReport,
+  closeItemById,
   readInbox,
   recordInboxItem,
   traceReport,
@@ -348,5 +349,45 @@ describe("inbox trace: what happened to ONE message, without grepping a text log
     expect(closeInboxItems(p, "scramble-dev", "555.5")).toBe(0);
     expect(closeAnsweredBefore(p, "scramble-dev", "999.9")).toBe(0);
     expect(traceReport(readInbox(p), "100.1", "dev", p)).toContain("no reply recorded");
+  });
+});
+
+describe("inbox close: an item the sender said needs no reply", () => {
+  // xingyubot, 2026-08-22, with its own message as the example: it wrote "no need
+  // to reply to this one", `inbox pending` kept the item open, a reaction did not
+  // clear it, and only a real send did. So an agent clearing its ledger answers a
+  // message whose sender asked it not to, and a mechanism built to stop people
+  // being left waiting starts manufacturing noise.
+
+  test("closing settles the item and records the reason on the row", () => {
+    const p = join(scratch(), "inbox", "dev.jsonl");
+    recordInboxItem(p, item({ id: "100.1", addressed: true }));
+    expect(closeItemById(p, "100.1", "sender said no reply needed")).toEqual({ ok: true });
+    expect(pendingInbox(p)).toHaveLength(0);
+    // THE DECISION IS ON THE RECORD. A close is the agent deciding an obligation
+    // is settled, which a reply never is, so it has to be visible to whoever reads
+    // the file or traces the id later.
+    const said = traceReport(readInbox(p), "100.1", "dev", p);
+    expect(said).toContain("closed with no reply: sender said no reply needed");
+  });
+
+  test("an unknown id is a refusal, never a silent success", () => {
+    const p = join(scratch(), "inbox", "dev.jsonl");
+    recordInboxItem(p, item({ id: "100.1", addressed: true }));
+    expect(closeItemById(p, "999.9", "typo")).toEqual({ ok: false, why: "unknown" });
+    expect(pendingInbox(p)).toHaveLength(1);
+  });
+
+  test("an already answered item reports what answered it", () => {
+    const p = join(scratch(), "inbox", "dev.jsonl");
+    recordInboxItem(p, item({ id: "100.1", addressed: true }));
+    closeInboxItems(p, "scramble-dev", "555.5");
+    expect(closeItemById(p, "100.1", "again")).toEqual({ ok: false, why: "answered", answeredBy: "555.5" });
+  });
+
+  test("a delivery-only row is not an item, so there is nothing to close", () => {
+    const p = join(scratch(), "inbox", "dev.jsonl");
+    recordInboxItem(p, item({ id: "100.1", addressed: false }));
+    expect(closeItemById(p, "100.1", "why not")).toEqual({ ok: false, why: "unknown" });
   });
 });

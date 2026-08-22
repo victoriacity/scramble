@@ -967,6 +967,30 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     expect(d.writes.join(" ")).toContain("999.9 was NOT delivered to dev");
   });
 
+  test("`inbox close` settles an item without sending, and demands a reason", async () => {
+    const cwd = scratchDir("inbox-close");
+    const a = await deliverOne(cwd);
+    expect(await main(["message", "check", "--as", "dev"], a.io)).toBe(0);
+    // No reason: refused, and the refusal says why the reason exists.
+    const b = stubIo(cwd, async () => new Response("{}", { status: 200 }));
+    expect(await main(["inbox", "close", "m1", "--as", "dev"], b.io)).toBe(1);
+    expect(b.errs.join(" ")).toContain("belongs on the record");
+    // With one: settled, nothing sent, and pending goes quiet.
+    const c = stubIo(cwd, async () => new Response("{}", { status: 200 }));
+    expect(await main(["inbox", "close", "m1", "--why", "sender said no reply needed", "--as", "dev"], c.io)).toBe(0);
+    expect(c.writes).toHaveLength(0);
+    const d = stubIo(cwd, async () => new Response("{}", { status: 200 }));
+    expect(await main(["inbox", "pending", "--as", "dev"], d.io)).toBe(0);
+    // Closing it twice refuses, naming what settled it.
+    const e = stubIo(cwd, async () => new Response("{}", { status: 200 }));
+    expect(await main(["inbox", "close", "m1", "--why", "again", "--as", "dev"], e.io)).toBe(1);
+    expect(e.errs.join(" ")).toContain("already answered by closed with no reply");
+    // And an id that is not an open item points at the two commands that explain it.
+    const f = stubIo(cwd, async () => new Response("{}", { status: 200 }));
+    expect(await main(["inbox", "close", "999.9", "--why", "x", "--as", "dev"], f.io)).toBe(1);
+    expect(f.errs.join(" ")).toContain("inbox trace 999.9");
+  });
+
   test("`inbox trace` without an id refuses instead of tracing nothing", async () => {
     const cwd = scratchDir("inbox-trace-noid");
     const { io, errs } = stubIo(cwd, async () => new Response("{}", { status: 200 }));

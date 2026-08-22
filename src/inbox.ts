@@ -159,6 +159,39 @@ export function closeAnsweredBefore(path: string, channel: string, ownTs: string
   return closed;
 }
 
+/** Close ONE open item by id, with a reason, without sending anything.
+ *
+ *  A sender can say a message needs no reply, and the ledger had no way to hear
+ *  it: `pending` kept the item open, a reaction did not clear it, and only a real
+ *  send did. So an agent clearing its ledger answers a message whose sender asked
+ *  it not to, and the mechanism built to stop people being left waiting starts
+ *  manufacturing noise (reported by xingyubot, 2026-08-22, with its own message
+ *  as the example).
+ *
+ *  THE REASON IS REQUIRED AND STORED. A close is the agent deciding an obligation
+ *  is settled, which a reply never is, so the decision goes on the record where
+ *  `trace` and the file itself will show it. Returns what happened, so the caller
+ *  can tell "no such item" from "already answered".
+ *
+ *  Not a sender-side flag: that would have to ride in the message TEXT, and a
+ *  marker parsed out of prose is the bare-pattern defect this repo spent the day
+ *  removing. A reaction closing the item needs `reactions:read` and the
+ *  `reaction_added` event, which no agent subscribes to yet. */
+export function closeItemById(
+  path: string,
+  id: string,
+  reason: string,
+): { ok: true } | { ok: false; why: "unknown" | "answered"; answeredBy?: string } {
+  const rows = readInbox(path);
+  const row = rows.find((r) => r.id === id && owesAnswer(r));
+  if (row === undefined) return { ok: false, why: "unknown" };
+  if (row.answeredBy !== undefined) return { ok: false, why: "answered", answeredBy: row.answeredBy };
+  row.answeredBy = `closed with no reply: ${reason}`;
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, rows.map((r) => `${JSON.stringify(r)}\n`).join(""));
+  return { ok: true };
+}
+
 /** Items nobody has answered, oldest first. Rows recorded as merely DELIVERED
  *  are not items: they are the record that lets `trace` tell "never reached me"
  *  apart from "reached me and did not wake me". */
