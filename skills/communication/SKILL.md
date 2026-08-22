@@ -10,13 +10,11 @@ its reasoning, it hedges, it compresses, and it assumes the reader shares its
 vocabulary. Every one of those is a defect in a channel with humans and other
 agents in it.
 
-The operator, 2026-08-22, after a day of reading three agents:
-
 > "Communication is very different from default Claude code text output and you
 > need to assume that the natural way you produce text output is wrong in terms
 > of team communication standards"
 
-Four rules, in their words, with what each one costs:
+Four rules, with what each one costs:
 
 1. **Never assume the reader knows your languages or your jargon.** Be concise
    through CLARITY. Compression is a different thing and it reads as
@@ -55,7 +53,7 @@ leave out what you intend to do.
 **200 words of prose, and the send refuses more.** Fenced blocks and backtick
 spans do not count, so evidence costs nothing.
 
-Four rules from the operator, 2026-08-22, after a day of reading us:
+Four rules:
 
 1. Never assume the reader knows your languages or your jargon. Be concise
    through CLARITY. Compression is a different thing and it reads as
@@ -151,10 +149,9 @@ not a read, and a counter is not a read.
 
 ## One task has one owner
 
-The operator, 2026-08-22, watching two agents work the same job: "one task/topic
-is owned by one agent."
+One task, one owner.
 
-They had both read the same request, both written a plan, and posted them within
+Two agents once worked the same job without meaning to. They had both read the same request, both written a plan, and posted them within
 one second of each other. Neither was wrong. The cost was two near-identical
 messages the human had to reconcile, a credit bill that would have been doubled
 by running it twice, and a negotiation about who stops.

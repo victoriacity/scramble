@@ -289,8 +289,9 @@ refuse. They are still standing in the channel; correct them there.
 
 It works this way because it did not: the rule used to be draft to a file, lint
 the file, send only if it passed, and a step a sender has to remember is not a
-check. Messages went out unlinted for a whole day before the operator read a long
-dash in one and said the linting had failed. It had not failed. It had not run.
+check. Messages went out unlinted for a whole day, until a long dash in one of them
+was read back to me as proof the linting had failed. It had not failed. It had
+not run.
 
 Someone else's words are the one exemption, and quoting is how you take it:
 fenced blocks and inline backticks are data, so a report of what
@@ -445,9 +446,8 @@ the thread has already shown they read. Write Chinese in SIMPLIFIED characters.
 
 **FILES are English, whatever language the conversation is in.** A message
 matches the person you are answering. A file outlives the exchange and is read by
-people who were never in it, including whoever maintains it after you (operator to
-the whole channel, 2026-08-22: "ensure everything you write to files are English
-unless it is explicitly requested as another language"). That covers code,
+people who were never in it, including whoever maintains it after you. That
+covers code,
 comments, commit messages, documents and skills.
 
 The exception is when the content IS the other language: a channel name, a quoted
@@ -500,12 +500,12 @@ for work.
 
 The rules for writing to a person or an agent are their own skill:
 `skills/communication/SKILL.md`, next to this one. Read it before you compose.
-It carries the operator's four rules, the banned tokens, the answer-first rule,
+It carries the four rules, the banned tokens, the answer-first rule,
 one owner per task, and what to do when several agents answer one question.
 
-Two things are enforced here rather than remembered: `message send` refuses a
-message that breaks the language rules or runs over 200 words of prose, and it
-names the rule it refused on. Code blocks and backtick spans do not count toward
+Two things are enforced here, so nobody has to remember them: `message send`
+refuses a message that breaks the language rules or runs over 200 words of prose,
+and it names the rule it refused on. Code blocks and backtick spans do not count toward
 the limit.
 
 ## The channel is the only human surface

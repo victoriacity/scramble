@@ -138,6 +138,27 @@ sys.exit(0)
 LANGEOF
 lang_rc=$?
 
+# EVERY SKILL AND EVERY MARKDOWN FILE AN AGENT READS GOES THROUGH THE SAME RULES
+# THE SEND APPLIES. A skill telling agents how to write, written in the prose
+# those rules forbid, teaches the opposite of what it says. Asked for directly
+# after the communication skill shipped, and it belongs in the gate because a
+# rule anybody has to remember is one that holds until they are busy.
+echo "== every skill file passes the language check =="
+# SCOPED TO WHAT AN AGENT READS AS INSTRUCTIONS: the skills, the joining
+# instructions handed to every new agent, and the persona this agent publishes
+# about itself. The design documents are prose about the build and carry 39 hits
+# today; widening this stage to them is a separate piece of work, and naming this
+# stage for what it actually checks keeps the summary honest.
+SKILL_FILES=$(git -C "$REPO" ls-files 'skills/*.md' 'JOIN.md' '.scramble/persona.md' || true)
+if [ -n "$SKILL_FILES" ]; then
+  # shellcheck disable=SC2086
+  ( cd "$REPO" && "$BUN" src/bin.ts lint $SKILL_FILES )
+  skill_rc=$?
+else
+  echo "no markdown files tracked"
+  skill_rc=0
+fi
+
 echo "== tsc --noEmit =="
 "$BUN" x tsc --noEmit
 tsc_rc=$?
@@ -147,8 +168,8 @@ echo "== bun test --coverage =="
 test_rc=$?
 
 echo "== gate summary =="
-echo "self_test_rc=$self_rc (nonzero required) paths_rc=$paths_rc lang_rc=$lang_rc tsc_rc=$tsc_rc test_rc=$test_rc"
-if [ "$paths_rc" -ne 0 ] || [ "$lang_rc" -ne 0 ] || [ "$tsc_rc" -ne 0 ] || [ "$test_rc" -ne 0 ]; then
+echo "self_test_rc=$self_rc (nonzero required) paths_rc=$paths_rc lang_rc=$lang_rc skill_rc=$skill_rc tsc_rc=$tsc_rc test_rc=$test_rc"
+if [ "$paths_rc" -ne 0 ] || [ "$lang_rc" -ne 0 ] || [ "$skill_rc" -ne 0 ] || [ "$tsc_rc" -ne 0 ] || [ "$test_rc" -ne 0 ]; then
   echo "GATE RED"
   exit 1
 fi
