@@ -1143,6 +1143,32 @@ describe("message check under the slack backend", () => {
     expect(code).toBe(0);
   });
 
+  test("an existing cwd cursor MIGRATES on the first write, keeping its values", async () => {
+    // Reading the old file while writing the new one is what ends the coupling.
+    // Reading the new (absent) one instead would drop every channel cursor this
+    // agent already had and re-drain everything exactly once.
+    const cwd = scratchDir("cursor-migrate");
+    const io = slackCheckIo(cwd, {
+      fetch: async (url) =>
+        String(url).includes("conversations.history")
+          ? new Response(JSON.stringify({ ok: true, messages: [{ ts: "9.9", user: "U9", text: "hi" }] }), { status: 200 })
+          : new Response(JSON.stringify({ ok: true, messages: [] }), { status: 200 }),
+    });
+    // The old location, holding a cursor for a channel this sweep will not visit.
+    mkdirSync(join(cwd, ".scramble"), { recursive: true });
+    writeFileSync(
+      join(cwd, ".scramble", "cursor.json"),
+      JSON.stringify({ "slack:dev": { "already-seen": "5.5" } }),
+    );
+    expect(await main(["message", "check", "--as", "dev", "--backend", "slack"], io)).toBe(0);
+    const moved = JSON.parse(
+      readFileSync(join(cwd, ".scramble", "cursors", "dev.json"), "utf8"),
+    ) as Record<string, Record<string, string>>;
+    // The old value survived the move, and the new one joined it.
+    expect(moved["slack:dev"]!["already-seen"]).toBe("5.5");
+    expect(moved["slack:dev"]!.general).toBe("9.9");
+  });
+
   test("ONE AGENT'S CURSOR NEVER BLINDS ANOTHER on a shared host", async () => {
     // The peer agent read the previous version and found the step I missed: a
     // single shared file beside the config looks fine because its keys are per

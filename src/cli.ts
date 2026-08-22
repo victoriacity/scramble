@@ -209,7 +209,7 @@ const CURSOR_FILE = "cursor.json";
  *  The local backend keeps its cwd-relative file, since a local daemon's store
  *  is per workspace. When the config-side file is absent and a cwd one exists,
  *  the cwd one is read, so an existing agent does not re-drain once on upgrade. */
-function cursorPath(io: Io, agent: string): string {
+function cursorPath(io: Io, agent: string, forWrite = false): string {
   // ONE FILE PER AGENT, the way the inbox ledger is. A single shared file beside
   // the config looked fine because the keys inside it are per agent, and it is
   // not: the peer agent read the previous version and found the step I missed.
@@ -220,11 +220,13 @@ function cursorPath(io: Io, agent: string): string {
   // write race over each other's cursors.
   const mine = join(dirname(slackConfigPath(io)), "cursors", `${agent}.json`);
   if (existsSync(mine)) return mine;
-  // MIGRATION, and it must be the agent's OWN old file: the cwd copy belongs to
-  // whoever swept from that directory, so it is read only while this agent has
-  // no file of its own yet.
+  // MIGRATION, and READ ONLY. The cwd copy is what this agent used before, so it
+  // is read while no per-agent file exists yet; the WRITE goes to the per-agent
+  // path regardless, which is what ends the coupling. Returning the cwd path for
+  // writes too would keep every existing agent on a cwd-keyed cursor forever,
+  // and the whole defect was that the cwd is not a property of the agent.
   const local = join(io.cwd(), ".scramble", CURSOR_FILE);
-  return existsSync(local) ? local : mine;
+  return forWrite ? mine : existsSync(local) ? local : mine;
 }
 
 function readCursor(io: Io, name: string): number {
@@ -237,10 +239,13 @@ function readCursor(io: Io, name: string): number {
 }
 
 function writeCursor(io: Io, name: string, seq: number): void {
-  const p = cursorPath(io, name);
+  const p = cursorPath(io, name, true);
   let j: Record<string, number> = {};
   try {
-    j = JSON.parse(readFileSync(p, "utf8")) as Record<string, number>;
+    // READ FROM WHERE THE VALUES ARE, which on a first write after migration is
+    // still the old file: reading the new (absent) one would drop every cursor
+    // this agent already had and re-drain everything exactly once.
+    j = JSON.parse(readFileSync(cursorPath(io, name), "utf8")) as Record<string, number>;
   } catch {
     /* absent cursor file is a fresh ledger */
   }
@@ -897,10 +902,11 @@ function readSlackCursor(io: Io, name: string): Record<string, string> {
 }
 
 function writeSlackCursor(io: Io, name: string, perChannel: Record<string, string>): void {
-  const p = cursorPath(io, name);
+  const p = cursorPath(io, name, true);
   let j: Record<string, unknown> = {};
   try {
-    j = JSON.parse(readFileSync(p, "utf8")) as Record<string, unknown>;
+    // From where the values ARE; see the note in writeCursor.
+    j = JSON.parse(readFileSync(cursorPath(io, name), "utf8")) as Record<string, unknown>;
   } catch {
     /* absent cursor file is a fresh ledger */
   }
