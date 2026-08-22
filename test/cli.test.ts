@@ -935,6 +935,30 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     expect(errs.join(" ")).toContain("replying in thread 9.4");
   });
 
+  test("with SEVERAL questions open it refuses to guess a thread, and lists them", async () => {
+    // The operator asked a question; another agent posted 13 seconds later; the
+    // default took the newest and put my answer to the operator inside that
+    // agent's thread. With more than one open, which thread this answers is the
+    // sender's to name.
+    const cwd = scratchDir("inbox-ambiguous");
+    mkdirSync(join(cwd, ".scramble", "inbox"), { recursive: true });
+    writeFileSync(
+      join(cwd, ".scramble", "inbox", "dev.jsonl"),
+      `${JSON.stringify({ id: "9.1", channel: "general", from: "andrew", text: "where are credentials stored", at: "2026-08-22T00:00:00Z" })}\n` +
+        `${JSON.stringify({ id: "9.2", channel: "general", from: "peer", thread: "root-2", text: "unrelated", at: "2026-08-22T00:00:01Z" })}\n`,
+    );
+    const { io, errs } = stubIo(cwd, async () => new Response(JSON.stringify({ crossings: [] }), { status: 200 }));
+    io.readStdin = async () => "the answer";
+    expect(await main(["message", "send", "--target", "general", "--as", "dev"], io)).toBe(0);
+    const said = errs.join("\n");
+    expect(said).toContain("2 questions are open");
+    expect(said).not.toContain("replying in thread");
+    // Both are named with enough to pick one.
+    expect(said).toContain("9.1");
+    expect(said).toContain("where are credentials stored");
+    expect(said).toContain("9.2");
+  });
+
   test("--top-level is the way out, and an unrelated channel is untouched", async () => {
     const cwd = scratchDir("inbox-toplevel");
     mkdirSync(join(cwd, ".scramble", "inbox"), { recursive: true });

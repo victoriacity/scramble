@@ -1505,7 +1505,21 @@ async function cmdMessage(args: string[], io: Io, backend: "local" | "slack"): P
         const open = pendingInbox(inboxPath(slackConfigPath(io), nameFor(flags, io))).filter(
           (r) => r.channel === req.channel,
         );
-        const newest = open[open.length - 1];
+        // ONLY WHEN THERE IS ONE THING TO ANSWER. With several open the newest is
+        // a guess, and a wrong guess puts an answer inside someone else's
+        // conversation: the operator asked a question, another agent posted 13
+        // seconds later, and my answer to the operator went into that agent's
+        // thread (2026-08-22). Several open means the sender knows which one this
+        // answers and the ledger does not, so it says so and stays at channel
+        // level, where a reader can at least see what it is about.
+        if (open.length > 1) {
+          io.writeErr(
+            `posting at channel level: ${open.length} questions are open for you in ${req.channel}, ` +
+              `so which thread this answers is yours to name. Pass --thread <ts> for one of them:\n` +
+              open.map((r) => `  ${r.id} from ${r.from}: ${r.text.slice(0, 60)}`).join("\n"),
+          );
+        }
+        const newest = open.length === 1 ? open[0] : undefined;
         if (newest !== undefined) {
           const root = newest.thread !== undefined && newest.thread !== "" ? newest.thread : newest.id;
           flags.set("thread", root);
