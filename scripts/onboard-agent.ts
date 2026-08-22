@@ -56,10 +56,29 @@ import { SCOPES, SCOPE_NAMES, BOT_EVENT_NAMES } from "../src/app-manifest";
  *  by the caller rather than silently dropped. */
 const LONG_DESCRIPTION_MIN = 175;
 
+/** The name Slack shows BESIDE MESSAGES, which has to convert to a username.
+ *
+ *  Slack refuses a manifest whose `features.bot_user.display_name` is not
+ *  convertible: `bad_username`, "The display_name cannot be converted to a
+ *  username". An agent measured it creating an app with a CJK name (2026-08-22),
+ *  and the failure named neither the field nor the reason, because --app-name
+ *  was written into BOTH display_information.name and this one.
+ *
+ *  A name can also never be fixed afterwards: `users.profile:write` is not a
+ *  valid bot scope and users.profile.set answers not_allowed_token_type, so the
+ *  agent cannot set its own display name after install.
+ *
+ *  So the app NAME keeps whatever was asked for, and this falls back to the
+ *  agent's own name, which is ASCII by construction. */
+function botDisplayName(appName: string, agentName: string): string {
+  return /^[\x20-\x7E]+$/.test(appName) ? appName : agentName;
+}
+
 function manifestFor(
   name: string,
   description?: string,
   longDescription?: string,
+  agentName?: string,
 ): Record<string, unknown> {
   return {
     display_information: {
@@ -69,7 +88,7 @@ function manifestFor(
         ? { long_description: longDescription }
         : {}),
     },
-    features: { bot_user: { display_name: name, always_online: false } },
+    features: { bot_user: { display_name: botDisplayName(name, agentName ?? name), always_online: false } },
     oauth_config: { scopes: { bot: SCOPE_NAMES } },
     settings: {
       event_subscriptions: { bot_events: BOT_EVENT_NAMES },
@@ -257,7 +276,7 @@ const longDescription = flag("long-description");
 const iconPath = flag("icon");
 
 if (argv.includes("--print-manifest")) {
-  console.log(JSON.stringify(manifestFor(appName ?? agent ?? "scramble-agent"), null, 2));
+  console.log(JSON.stringify(manifestFor(appName ?? agent ?? "scramble-agent", undefined, undefined, agent), null, 2));
   process.exit(0);
 }
 if (agent === undefined || appName === undefined) {
@@ -559,8 +578,27 @@ if (longDescription !== undefined && longDescription.length < LONG_DESCRIPTION_M
       `${LONG_DESCRIPTION_MIN}. Say more, or leave it out.`,
   );
 }
+// NEITHER NAME CAN BE A USERNAME. Refused here, before the call, because Slack's
+// own answer is `bad_username` with nothing pointing at which field, and there is
+// no repair afterwards: users.profile:write is not a valid bot scope.
+if (!/^[\x20-\x7E]+$/.test(agent) && !/^[\x20-\x7E]+$/.test(appName)) {
+  die(
+    `neither "${appName}" nor the agent name "${agent}" can be the name beside messages:\n` +
+      `Slack requires a display name that converts to a username, and answers bad_username\n` +
+      `for one that does not, without naming the field. Give the agent an ASCII name with\n` +
+      `--as-style naming and keep the one you want in --app-name, which has no such limit.`,
+  );
+}
+if (botDisplayName(appName, agent) !== appName) {
+  console.log(
+    `onboard: Slack cannot use "${appName}" as the name beside messages, since a display name\n` +
+      `         must convert to a username and that one does not. The APP is named\n` +
+      `         "${appName}" and messages will show "${agent}". Nothing can change that later:\n` +
+      `         users.profile:write is not a valid bot scope.`,
+  );
+}
 const created = await api(token, "apps.manifest.create", {
-  manifest: manifestFor(appName, description, longDescription),
+  manifest: manifestFor(appName, description, longDescription, agent),
   team_id: team,
 });
 const appId = String(created.app_id);
