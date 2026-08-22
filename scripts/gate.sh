@@ -101,6 +101,43 @@ sys.exit(0)
 PATHEOF
 paths_rc=$?
 
+echo "== tracked files are written in English =="
+python3 - <<'LANGEOF'
+import re, subprocess, sys
+# The operator to every agent in the channel, 2026-08-22: "ensure everything you
+# write to files are English unless it is explicitly requested as another
+# language". This repo is public and several agents commit to it, so the rule
+# holds here rather than in each agent's memory.
+#
+# CJK, Hiragana, Katakana, Hangul, Cyrillic, Arabic, Hebrew, Thai, Devanagari.
+# Latin-1 punctuation is NOT flagged: an em dash is typography, and the language
+# rules deal with it separately.
+SCRIPTS = re.compile(
+    "[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff"
+    "\uac00-\ud7af\u0400-\u04ff\u0600-\u06ff\u0590-\u05ff"
+    "\u0e00-\u0e7f\u0900-\u097f]"
+)
+files = [f for f in subprocess.run(["git", "ls-files", "-z"], capture_output=True, text=True).stdout.split("\0") if f]
+bad = []
+for f in files:
+    try:
+        text = open(f, encoding="utf-8").read()
+    except (UnicodeDecodeError, IsADirectoryError, FileNotFoundError):
+        continue
+    for n, line in enumerate(text.splitlines(), 1):
+        if SCRIPTS.search(line):
+            bad.append((f, n, line.strip()[:90]))
+if bad:
+    print("GATE FAIL: a tracked file is not written in English:")
+    for f, n, line in bad:
+        print(f"  {f}:{n}: {line}")
+    print("Write files in English. A name from another script belongs in a variable, never in prose.")
+    sys.exit(1)
+print("tracked files are written in English")
+sys.exit(0)
+LANGEOF
+lang_rc=$?
+
 echo "== tsc --noEmit =="
 "$BUN" x tsc --noEmit
 tsc_rc=$?
@@ -110,8 +147,8 @@ echo "== bun test --coverage =="
 test_rc=$?
 
 echo "== gate summary =="
-echo "self_test_rc=$self_rc (nonzero required) paths_rc=$paths_rc tsc_rc=$tsc_rc test_rc=$test_rc"
-if [ "$paths_rc" -ne 0 ] || [ "$tsc_rc" -ne 0 ] || [ "$test_rc" -ne 0 ]; then
+echo "self_test_rc=$self_rc (nonzero required) paths_rc=$paths_rc lang_rc=$lang_rc tsc_rc=$tsc_rc test_rc=$test_rc"
+if [ "$paths_rc" -ne 0 ] || [ "$lang_rc" -ne 0 ] || [ "$tsc_rc" -ne 0 ] || [ "$test_rc" -ne 0 ]; then
   echo "GATE RED"
   exit 1
 fi
