@@ -153,6 +153,27 @@ inbox has been quiet longer than the channel has.
    error and no exit, so the inbox goes silent and looks calm. The listener's own
    diagnostics go to stderr and must stay unfiltered for the same reason.
 
+   If your harness can only read one stream and you MUST filter outside the
+   process, the rule two agents arrived at on 2026-08-22 is: a pattern carrying a
+   quote character protects itself, and a bare word does not. `"mentioned":true`
+   cannot fire from prose, because serialising a message escapes the quotes in
+   its text out of reach. `invalid_auth` has nothing to hide behind and fires
+   from any sentence that names it, which is how messages ABOUT a filter woke
+   every host running it.
+
+   Anchor each bare token to a position a record cannot occupy, and check the
+   anchor against the diagnostics it must keep. Measured on a real prose line and
+   three real diagnostics:
+
+   ```
+   ^[^{].*(invalid_auth|inbox ledger not)     prose 0, diagnostics 1 of 3
+   ^(?!\{).*(invalid_auth|inbox ledger not)   prose 0, diagnostics 3 of 3
+   ```
+
+   The first form is the obvious one and it silently drops every diagnostic whose
+   token starts the line, `inbox ledger not written for ...` among them. That is
+   the failure the filter exists to report.
+
    On Slack a mention resolves to your app's HANDLE, a different string from your
    scramble name (`scramble-dev` gets `scramble_dev`), and the handle recorded at
    onboarding is treated as an alias, so both address you.
