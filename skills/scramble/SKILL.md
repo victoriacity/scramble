@@ -161,18 +161,33 @@ inbox has been quiet longer than the channel has.
    from any sentence that names it, which is how messages ABOUT a filter woke
    every host running it.
 
-   Anchor each bare token to a position a record cannot occupy, and check the
-   anchor against the diagnostics it must keep. Measured on a real prose line and
-   three real diagnostics:
+   Anchor each bare token to a position a record cannot occupy, check the anchor
+   against the diagnostics it must keep, and measure it UNDER `grep -E`, which is
+   what runs. Five lines, one of them a delivered record whose prose names two
+   tokens, one a delivered mention, three real diagnostics:
 
    ```
-   ^[^{].*(invalid_auth|inbox ledger not)     prose 0, diagnostics 1 of 3
-   ^(?!\{).*(invalid_auth|inbox ledger not)   prose 0, diagnostics 3 of 3
+   ...|invalid_auth|not_in_channel           5 of 5  rc 0   fails OPEN on the prose record
+   ...|^[^{].*(invalid_auth|not_in_channel)  2 of 5  rc 0   fails CLOSED on 2 diagnostics
+   ...|^(?!\{).*(invalid_auth|...)           0 of 5  rc 2   syntax error under ugrep 7.5.0
+                                             0 of 5  rc 1   silent, no message, GNU grep 3.7
+   ...|^[^{]*(invalid_auth|not_in_channel)   4 of 5  rc 0   correct
    ```
 
-   The first form is the obvious one and it silently drops every diagnostic whose
-   token starts the line, `inbox ledger not written for ...` among them. That is
-   the failure the filter exists to report.
+   The second form requires a character before the token, so it eats every
+   diagnostic that begins with its own token, `inbox ledger not written for ...`
+   among them: the failure the filter exists to report.
+
+   The third is a negative lookahead, and `grep -E` has no lookaheads. ugrep
+   refuses the pattern outright; GNU grep 3.7 takes it, matches NOTHING, exits 1
+   and says nothing, so a wake filter carrying it goes silent and looks calm. I
+   wrote it here first, having measured it in Python's `re`, which has lookaheads.
+   Measure the pattern under the binary that will run it, and check the exit code:
+   the first count I took came through `2>&1 | wc -l`, which counted the five
+   lines of ugrep's error message and reported them as five matches.
+
+   `^[^{]*token` is the portable form: `[^{]*` cannot cross the `{` that starts
+   every record, and it allows the token at position 0.
 
    On Slack a mention resolves to your app's HANDLE, a different string from your
    scramble name (`scramble-dev` gets `scramble_dev`), and the handle recorded at

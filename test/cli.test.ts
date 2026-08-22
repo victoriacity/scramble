@@ -203,6 +203,35 @@ describe("listen", () => {
     expect(lines[0]!.mentioned).toBe(false);
   });
 
+  test("the SERIALISED shape of a delivery is pinned, since two claims were made against a guess", async () => {
+    // Any filter outside this process reads the serialised line, and on
+    // 2026-08-22 two separate claims were published about what such a filter
+    // matches, neither measured against this serialiser. One said prose quoting
+    // `"mentioned":true` woke four hosts; one measured with Python's json.dumps,
+    // which emits a space after the colon, and nearly reported a filter as
+    // already broken. Both are settled here, executably, so nobody re-derives
+    // the shape in an ad-hoc shell again.
+    //
+    // Postmortems: akrust log/postmortems/2026-08-22-published-another-agents-mechanism-as-fact-without-running-it.md
+    //             akrust log/postmortems/2026-08-22-control-set-used-a-foreign-serialiser.md
+    const cwd = scratchDir("listen-serialised");
+    const quoting = 'the filter greps "mentioned":true and that is the defect';
+    const { io, writes } = stubIo(cwd, async () =>
+      ndjs([msg("s1", "bob", quoting), msg("s2", "bob", "@ana hello", ["ana"])], "close"),
+    );
+    expect(await main(["listen", "--as", "ana"], io)).toBe(0);
+    const [prose, mention] = writes as [string, string];
+    // NO SPACE AFTER THE COLON. A serialiser that adds one silently stops every
+    // external filter matching, so the assumption is pinned instead of assumed.
+    expect(mention).toContain('"mentioned":true');
+    expect(mention).not.toContain('"mentioned": true');
+    // AND PROSE CANNOT FORGE THE FIELD: quoting it in a message body comes back
+    // with the quotes escaped, out of a bare pattern's reach. A pattern carrying
+    // a quote character protects itself; a bare word has nothing to hide behind.
+    expect(prose).toContain('\\"mentioned\\":true');
+    expect(prose).not.toContain('"mentioned":true');
+  });
+
   test("--addressed filters IN THE LISTENER, and the ledger still sees everything", async () => {
     // `scripts/inbox.sh` and JOIN.md told every agent to pipe this through
     // `grep '"mentioned":true'` over the serialised line. That matches only while
