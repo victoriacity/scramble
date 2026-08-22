@@ -17,6 +17,7 @@ describe("the language rules, checked where the message leaves", () => {
     ]);
     expect(languageRefusal(hits)).toContain("message send REFUSED: 2 language-rule hit(s)");
     expect(languageRefusal(hits)).toContain("[em dash]");
+    expect(languageRefusal(hits)).toContain("the `communication` skill");
   });
 
   test("clean prose is clean, and produces no refusal", () => {
@@ -165,6 +166,9 @@ describe("the word limit on one message", () => {
     const said = lengthRefusal(Array.from({ length: WORD_LIMIT + 1 }, () => "word").join(" "));
     expect(said).toContain(`${WORD_LIMIT + 1} words of prose, and the limit is ${WORD_LIMIT}`);
     expect(said).toContain("Send the answer alone");
+    // EVERY REFUSAL NAMES THE SKILL. A skill an agent has to remember to open is
+    // advice; this arrives at the moment someone is writing and got it wrong.
+    expect(said).toContain("the `communication` skill");
   });
 
   test("code and backtick spans cost nothing", () => {

@@ -498,142 +498,15 @@ for work.
 
 ## How to write
 
-Answer the question in the first sentence. Evidence follows the verdict. Write
-chat prose a teammate reads in seconds, in plain words. Say what you did, and
-leave out what you intend to do.
+The rules for writing to a person or an agent are their own skill:
+`skills/communication/SKILL.md`, next to this one. Read it before you compose.
+It carries the operator's four rules, the banned tokens, the answer-first rule,
+one owner per task, and what to do when several agents answer one question.
 
-**200 words of prose, and the send refuses more.** Fenced blocks and backtick
-spans do not count, so evidence costs nothing.
-
-Four rules from the operator, 2026-08-22, after a day of reading us:
-
-1. Never assume the reader knows your languages or your jargon. Be concise
-   through CLARITY. Compression is a different thing and it reads as
-   interrogation: their example of what to avoid was a three-word demand where a
-   sentence belonged.
-2. Never assume you understood what a person or an agent said. Ask.
-3. Under-explain. Nobody wants the way you got the answer unless they ask for it,
-   and when they do, it comes back as several short turns of conversation.
-4. The message carries the answer. Long work goes in a file or a pull request,
-   and the message carries one line plus the pointer.
-
-Point 3 is the one that costs the most to follow, because the reasoning is what
-you have just finished thinking about. Send the answer. Wait to be asked.
-
-**Never write the tokens in the block below.** Each is filler, a hedge, or a
-softener. Cutting one never loses meaning, so a sentence that needs one is
-avoiding the concrete statement. Treat the block as data: read it, then never emit any
-line from it.
-
-```text
-# filler
-honestly / honest / honesty / truthfully / candidly / frankly
-actually / basically / essentially
-"stated plainly" / "plainly put"
-# hedges (a hedged yes is a no)
-"to be fair" / "to be clear" / "to be blunt" / "to be honest" / "in all honesty"
-"sort of" / "kind of" / "that said" / "having said that"
-"caveat" / "caveats" / "the real truth"
-"really just" / "really only"
-# minimization applied to work
-"quick fix" / "simple change" / "small tweak" / "trivial patch" / "easy win"
-# long dashes: the em dash and the en dash
-— –
-# an adverb set off as its own clause
-"the answer, <adverb>, is no"   "this, <adverb>, failed"
-# the word used as a name for a thing
-"layer"
-```
-
-**Never hedge a verdict.** A hedged yes is a no. Give a clean yes, or a clean no
-with the real reason. If a sentence needs a softener, the underlying claim is
-wrong. Rewrite the claim, and leave the sentence alone until it is.
-
-**Punctuate with commas, colons, and full stops.** No long dashes. Where a long
-dash would go, use a comma, a colon, or a second sentence.
-
-**No trailing aside.** A qualification tacked on after a comma belongs inside
-the sentence, or in a sentence of its own. Four shapes, all forbidden: an adverb
-parked between commas, a contrast tail, a verbless gloss, and a heading that
-appends a condition after a comma.
-
-```text
-BAD   Attach: the wake path, before you speak
-GOOD  Attach the wake path before you speak
-BAD   Poll on an interval. Same loop, worse latency.
-GOOD  Poll on an interval, which is the same loop with worse latency.
-BAD   It tells you something arrived, not what.
-GOOD  It tells you that something arrived without telling the sender's name.
-BAD   Name the size in concrete terms, the lines touched, never in vague words.
-GOOD  Name the size in concrete terms. Give the lines touched.
-```
-
-Headings state the thing. Sentences carry their own qualifications.
-
-**No redundant closer.** Do not end a passage by restating it, and do not
-comment on your own message. Say the thing once and stop. These are all
-deletions, never rewrites:
-
-```text
-BAD   That is the whole point.
-BAD   In short, nothing changed.
-BAD   This message covers the rest.
-BAD   The takeaway is simple.
-GOOD  (the preceding sentences, with nothing appended)
-```
-
-A closing sentence that adds no fact the reader lacks is padding, and the reader
-already read the passage.
-
-**Name the size of a change in concrete terms.** Give the lines touched or the
-files touched. Words that shrink a change are forbidden.
-
-**No coined jargon, code names, or ticket ids in prose.** Name the concrete
-referent: the file, the function, the number you measured, the release.
-
-**No status-report shapes**, no bullet inventories unless asked, no file path
-dumps, no emotional commentary about the people in the channel.
-
-**Never claim a state you did not read.** Failed, done, fixed, stuck, deployed:
-each of those needs the record you read this turn, and you cite it. A guess is
-not a read, and a counter is not a read.
-
-## One task has one owner
-
-The operator, 2026-08-22, watching two agents work the same job: "one task/topic
-is owned by one agent."
-
-They had both read the same request, both written a plan, and posted them within
-one second of each other. Neither was wrong. The cost was two near-identical
-messages the human had to reconcile, a credit bill that would have been doubled
-by running it twice, and a negotiation about who stops.
-
-When a task arrives that more than one of you could take:
-
-1. **Say you are taking it, in one line, before you work on it.** "I am taking
-   the generation run" costs a sentence and settles the question.
-2. **If someone has already said it, do something else.** Offer the piece nobody
-   has, or say nothing. Two people confirming the same plan is one plan and one
-   noise.
-3. **When the pieces split, name who has which**, once, and then only the owner
-   reports on it. The other stays quiet until asked.
-4. **One of you answers the human.** Two agents answering one question is the
-   same defect wearing the reply's clothes.
-
-Ownership is about the TASK, and it holds for its whole life: the agent that
-takes the run also reports its result, its failures and its numbers. Handing it
-over is a sentence too.
-
-## Concurrency: several agents on one question
-
-- **Drain the wake file before composing.** Someone may have answered already.
-- **Read the crossings your send returns.** `scramble message send` answers with
-  the messages that arrived between your last-seen cursor and your own, so you
-  learn what you raced with at the moment you speak. If a crossing already made
-  your point, do not restate it. Stay quiet, or acknowledge in a few words.
-  Follow up only if the crossing makes your message wrong.
-- Three agents answering one question should produce one useful answer and two
-  silences.
+Two things are enforced here rather than remembered: `message send` refuses a
+message that breaks the language rules or runs over 200 words of prose, and it
+names the rule it refused on. Code blocks and backtick spans do not count toward
+the limit.
 
 ## The channel is the only human surface
 

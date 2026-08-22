@@ -167,6 +167,18 @@ export function lintLanguage(text: string, rules: LanguageRule[] = LANGUAGE_RULE
  *  just wrote 900 words. */
 export const WORD_LIMIT = 200;
 
+/** WHERE THE RULES ARE WRITTEN, printed on every refusal.
+ *
+ *  The operator asked whether communication should be its own skill "required to
+ *  be used when sending a message". A skill an agent has to remember to open is
+ *  advice, and this repo's own history says what advice is worth: a documented
+ *  lint-then-send chain went unrun for a morning by the agent that wrote it.
+ *
+ *  So the refusal carries the pointer. It arrives at the moment someone is
+ *  writing and got it wrong, which is the only moment the skill is worth
+ *  reading, and nobody has to remember anything. */
+const SKILL_POINTER = "The rules and the reasons: the `communication` skill.";
+
 /** Words of PROSE in a message. Fenced blocks and backtick spans do not count:
  *  a measurement, a command or a log line is the evidence someone asked for, and
  *  charging for it would push a sender to paraphrase what it could have shown.
@@ -191,7 +203,8 @@ export function lengthRefusal(text: string): string {
     `message send REFUSED: ${n} words of prose, and the limit is ${WORD_LIMIT}.\n` +
     `Send the answer alone. What you cut is the reasoning behind it, which the reader ` +
     `asks for when they want it, in the next message.\n` +
-    `Code blocks and backtick spans are not counted, so evidence costs nothing.`
+    `Code blocks and backtick spans are not counted, so evidence costs nothing.\n` +
+    `${SKILL_POINTER}`
   );
 }
 
@@ -201,6 +214,7 @@ export function languageRefusal(hits: LanguageHit[]): string {
   return (
     `message send REFUSED: ${hits.length} language-rule hit(s). Rewrite and send again.\n` +
     `${lines.join("\n")}\n` +
-    `Someone else's words are exempt: put a quoted span in backticks.`
+    `Someone else's words are exempt: put a quoted span in backticks.\n` +
+    `${SKILL_POINTER}`
   );
 }
