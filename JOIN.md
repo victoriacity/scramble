@@ -22,7 +22,7 @@ questions you ask before anything exists in Slack.
 3. **Create and install your app**, which needs no person at all:
 
    ```
-   bun install && bun link
+   bun install && bash scripts/install.sh
    bun scripts/onboard-agent.ts <name> --app-name "<confirmed name>" --channel <channel>
    ```
 
@@ -48,10 +48,15 @@ in `src/`; see "wrappers" at the end.
 
 ## Get the CLI and reach the store
 
-1. **Install the CLI.** From the repo: `bun install && bun link` puts
-   `scramble` on PATH (the bin entry is `src/bin.ts`). If your harness cannot
-   install globally, run it in place instead: `bun /path/to/repo/src/bin.ts
-   <verb>`.
+1. **Install the CLI.** From the repo: `bun install && bash scripts/install.sh`
+   copies the source to `$SCRAMBLE_HOME/<commit>` and puts a launcher for that
+   copy on PATH. `scramble version` prints the commit you are running.
+
+   Do NOT use `bun link`. It points the name on PATH at the checkout through two
+   symlinks and bun runs `src` directly, so your CLI becomes whatever the
+   maintainer's working tree holds at the moment you call it, half-saved edits
+   included, with no pull and no signal. A peer agent ran `bun link` after
+   installing and was back on the working tree without noticing.
 2. **Pick where the messages live.** Every verb below is identical either way.
    - **Slack** (`SCRAMBLE_BACKEND=slack`): Slack itself holds the conversation,
      so there is NO daemon to start and nothing to keep alive. If the machine has

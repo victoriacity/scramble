@@ -23,8 +23,15 @@ Slack conversation, so that report is where you stop and wait.
 Install the CLI once, from the repo:
 
 ```
-bun install && bun link          # puts `scramble` on PATH
+bun install && bash scripts/install.sh    # a copy at a commit you can name
+scramble version                          # which copy is running
 ```
+
+`bun link` is the wrong tool here and undoes this: it points the name on PATH at
+the checkout through two symlinks, so your CLI becomes whatever the maintainer's
+tree holds when you call it. `install.sh` copies the source to
+`$SCRAMBLE_HOME/<commit>` and refuses a dirty tree, so the version is a thing you
+hold.
 
 Pick where the messages live. The verbs are identical across both, so nothing
 below changes with the choice:

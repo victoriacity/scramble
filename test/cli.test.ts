@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import type { ChannelStore } from "../src/store";
 import { createStore } from "../src/store";
 import { createHandler } from "../src/server";
-import { main, parseBind, loadSlackConfig, slackConfigPath, slackCliToken, staleConfigWarning, staleListeners, pickStale, staleListenerProblem, readProcesses, type Io } from "../src/cli";
+import { main, parseBind, loadSlackConfig, slackConfigPath, slackCliToken, staleConfigWarning, staleListeners, pickStale, staleListenerProblem, readProcesses, liveListeners, type Io } from "../src/cli";
 import { SCOPE_NAMES, BOT_EVENT_NAMES } from "../src/app-manifest";
 
 function scratchDir(name: string): string {
@@ -1749,6 +1749,19 @@ describe("staleListeners", () => {
     expect(pickStale([proc("102", "bun src/bin.ts listen --as other", 1_000)], "dev", 5_000)).toEqual([]);
   });
 
+  test("a LIVE listener is found whatever its age, which is a different question", () => {
+    // pickStale asks which listeners are behind the code. liveListeners asks
+    // whether anything holds the socket at all, which is what decides whether
+    // `doctor --wake` can mean anything.
+    const fresh = proc("200", "bun src/bin.ts listen --as dev", 9_000);
+    const old = proc("201", "bun src/bin.ts listen --as dev", 1_000);
+    const other = proc("202", "bun src/bin.ts listen --as someone-else", 1_000);
+    const notListener = proc("203", "bun src/bin.ts serve --as dev", 1_000);
+    expect(liveListeners([fresh, old, other, notListener], "dev").sort()).toEqual(["200", "201"]);
+    expect(pickStale([fresh, old, other, notListener], "dev", 5_000)).toEqual([{ pid: "201", ageBehind: 4 }]);
+    expect(liveListeners([], "dev")).toEqual([]);
+  });
+
   test("the agent's name appearing in the working directory is not the agent's listener", () => {
     // Measured: an agent named after the product, and a checkout under a
     // directory carrying that same name, made a substring match report every
@@ -2271,6 +2284,51 @@ describe("doctor, and the warning an agent gets without asking", () => {
       createSocket: () => ({ send: () => {}, close: () => {}, onopen: null, onmessage: null, onclose: null, onerror: null }),
     };
     expect(await main(["doctor", "--as", "dev", "--backend", "slack"], io)).toBe(0);
+  });
+
+  test("doctor --wake REFUSES to run while a listener holds the socket", async () => {
+    // Measured 2026-08-22: with the inbox armed, `doctor --wake` reported "The
+    // wake path is DEAD" and told me to re-onboard, which rotates the bot token
+    // and strands that listener. With the same inbox stopped and nothing else
+    // changed, it answered "delivered". Slack hands each Socket Mode event to
+    // ONE connection, so the armed listener had taken the probe. A test whose
+    // answer would be meaningless is not run.
+    const cwd = scratchDir("wake-held");
+    writeSlackConfig(cwd, {
+      token: "xoxb-d",
+      appToken: "xapp-1",
+      channels: { room: "C1" },
+      agents: { dev: { token: "T", handle: "dev_bot" } },
+    });
+    const procRoot = scratchDir("wake-held-proc");
+    mkdirSync(join(procRoot, "77"), { recursive: true });
+    writeFileSync(join(procRoot, "77", "cmdline"), "bun src/bin.ts listen --as dev\0");
+    const errs: string[] = [];
+    let probed = false;
+    const io: Io = {
+      write: () => {},
+      writeErr: (l) => errs.push(l),
+      fetch: async (input) => {
+        const u = String(input);
+        if (u.includes("chat.postMessage")) probed = true;
+        if (u.includes("auth.test")) {
+          return new Response(JSON.stringify({ ok: true, user: "dev_bot" }), { status: 200, headers: { "x-oauth-scopes": ALL } });
+        }
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      },
+      env: (n) => (n === "SCRAMBLE_PROC" ? procRoot : undefined),
+      cwd: () => cwd,
+      sleep: async () => {},
+      serve: async () => 0,
+      createSocket: () => ({ send: () => {}, close: () => {}, onopen: null, onmessage: null, onclose: null, onerror: null }),
+    };
+    expect(await main(["doctor", "--as", "dev", "--wake", "room", "--backend", "slack"], io)).toBe(0);
+    const said = errs.join(" ");
+    expect(said).toContain("not testing the wake path");
+    expect(said).toContain("pid 77");
+    // And it did not post the probe: refusing means not doing it, and a probe
+    // posted here would be a line in the channel proving nothing.
+    expect(probed).toBe(false);
   });
 
   test("doctor --wake FAILS when the socket opens and no frame arrives", async () => {

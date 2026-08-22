@@ -1651,6 +1651,21 @@ async function cmdDoctor(argv: string[], io: Io): Promise<number> {
   // `--wake <channel>` is opt-in because it POSTS a line into that channel.
   const wakeChannel = flags.get("wake");
   if (wakeChannel !== undefined && wakeChannel !== "") {
+    // A TEST WHOSE ANSWER WOULD BE MEANINGLESS IS NOT RUN. Slack hands each
+    // Socket Mode event to ONE connection, so an armed listener takes the probe
+    // and this test times out and calls the wake path DEAD. Its own advice then
+    // says to re-onboard, which rotates the bot token and strands that listener.
+    // Refusing to run beats answering wrongly on the most alarming surface here.
+    const holding = liveListeners(readProcesses(io.env("SCRAMBLE_PROC") ?? "/proc"), name);
+    if (holding.length > 0) {
+      io.writeErr(
+        `doctor: not testing the wake path while ${holding.length} listener(s) for ${name} hold the ` +
+          `socket (pid ${holding.join(", ")}). Slack gives each event to ONE connection, so they would ` +
+          `take the probe and this would report the path DEAD when it is alive. Stop them, run this, ` +
+          `then arm the inbox again.`,
+      );
+      return problems.length === 0 ? 0 : 1;
+    }
     const w = await proveWake(io, name, wakeChannel, intFlag(flags, "wake-timeout", 20));
     if (w.ok) {
       io.write(JSON.stringify({ doctor: "wake", agent: name, channel: wakeChannel, delivered: w.ts }));
@@ -1756,7 +1771,7 @@ async function proveWake(
 export function staleListeners(io: Io, agent: string): Array<{ pid: string; ageBehind: number }> | undefined {
   const newest = newestSourceMs(io);
   if (newest === undefined) return undefined;
-  return pickStale(readProcesses(), agent, newest);
+  return pickStale(readProcesses(io.env("SCRAMBLE_PROC") ?? "/proc"), agent, newest);
 }
 
 /** The newest mtime among this workspace's sources, or undefined when there is
@@ -1813,6 +1828,27 @@ export function staleListenerProblem(
     `(pid ${stale.map((x) => `${x.pid}, ${x.ageBehind}s behind`).join("; ")}). They are running code ` +
     `that no longer exists, so a landed fix has not reached them. Stop them and arm the inbox again.`
   );
+}
+
+/** Every LIVE listener for this agent, whatever its age. Pure, and separate from
+ *  pickStale because the question is different: pickStale asks which listeners
+ *  are behind the code, and this asks whether anything is holding the socket at
+ *  all.
+ *
+ *  `doctor --wake` needs it. Slack delivers each Socket Mode event to ONE
+ *  connection, so an armed listener takes the probe frame and doctor's own
+ *  socket waits out its timeout and pronounces the wake path DEAD. Measured
+ *  2026-08-22: with the inbox armed, `doctor --wake` said "The wake path is
+ *  DEAD" and told me to re-onboard, which rotates the bot token; with the same
+ *  inbox stopped and nothing else changed, the same command answered
+ *  `"delivered":"1787365205.175139"`. The advice was worse than the verdict —
+ *  following it would have rotated a working token and stranded the listener. */
+export function liveListeners(
+  procs: Array<{ pid: string; cmd: string; startedMs: number }>,
+  agent: string,
+): string[] {
+  const asFlag = `--as ${agent}`;
+  return procs.filter((p) => p.cmd.includes("bin.ts listen") && p.cmd.includes(asFlag)).map((p) => p.pid);
 }
 
 /** WHICH of those are listeners for this agent that predate the code. Pure, so
