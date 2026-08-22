@@ -333,9 +333,89 @@ async function stageResolve(): Promise<void> {
   );
 }
 
+/** THE ATTACHMENT PATH TAKING THE SAME ROUTE AS A PLAIN SEND. Both halves were
+ *  broken and neither showed up here, because this smoke only ever attached to a
+ *  MAPPED channel with no name in the text.
+ *
+ *  A peer agent measured both on a live channel (2026-08-22): `--attach` read the
+ *  config's channel map itself, so a channel the agent is IN but the config does
+ *  not name failed while a plain send to it worked; and the text rode as
+ *  `initial_comment` with no mention conversion, so a message opening with the
+ *  operator's name stored the name literally and notified nobody, on an answer he
+ *  had asked for.
+ *
+ *  Run against a config whose `channels` map is EMPTY, so the upload has to
+ *  resolve the name, with a mention in the text so the conversion has to happen. */
+async function stageAttachUnmapped(): Promise<void> {
+  const info = await slack("conversations.info", { channel: slackId });
+  const real = (info.channel as { name?: string } | undefined)?.name;
+  if (!check("attachUnmapped/name", typeof real === "string" && real !== "", `Slack calls it #${real ?? "(unnamed)"}`)) return;
+
+  const bare = `/tmp/scramble-smoke-attach-nomap-${stamp}.json`;
+  await Bun.write(bare, JSON.stringify({ ...cfg, channels: {} }));
+  const path = `/tmp/scramble-smoke-attach-${stamp}.txt`;
+  await Bun.write(path, `unmapped attach ${stamp}\n`);
+
+  const r = await scramble(
+    ["message", "send", "--target", String(real), "--as", SELF, "--attach", path],
+    `smoke ${stamp} @${PEER} unmapped attach`,
+    { SCRAMBLE_SLACK_CONFIG: bare },
+  );
+  if (!check("attachUnmapped/send", r.code === 0, `exit ${r.code} ${r.out.trim()} ${r.err.trim()}`)) return;
+
+  await sleep(3000);
+  const mine = (await history(8)).find((m) => (m.text ?? "").includes(`${stamp} `) && (m.files?.length ?? 0) > 0);
+  if (!check("attachUnmapped/inSlack", mine !== undefined, `the message carrying the file is in Slack: ${mine !== undefined}`)) return;
+
+  // THE MENTION AS SLACK STORED IT. A literal "@name" notifies nobody; the entity
+  // form is what reaches the person. This is the half that cost the operator an
+  // answer he had asked for.
+  const raw = String(mine!.text ?? "");
+  const converted = /<@U[A-Z0-9]+>/.test(raw);
+  check(
+    "attachUnmapped/mention",
+    converted,
+    converted ? `the mention is an entity: ${raw.slice(0, 60)}` : `the name stayed LITERAL, so it notified nobody: ${raw.slice(0, 60)}`,
+  );
+}
+
+/** A SWEEP FROM NO CURSOR AT ALL, which is what a fresh agent has and what a
+ *  cursor that moved leaves behind. Twice today a cursor changed location and the
+ *  next sweep re-delivered whole channels: hundreds of lines into a channel of
+ *  people, until the harness suppressed it for rate.
+ *
+ *  This asserts the shape rather than a count: a first sweep may legitimately
+ *  return a lot, and the SECOND must return nothing, because the cursor it wrote
+ *  has to be the one it reads back. */
+async function stageFreshCursor(): Promise<void> {
+  const dir = `/tmp/scramble-smoke-cursor-${stamp}`;
+  await Bun.write(`${dir}/.scramble/keep`, "");
+  const bare = `${dir}/config.json`;
+  await Bun.write(bare, JSON.stringify(cfg));
+
+  const first = await scramble(["message", "check", "--as", SELF], undefined, {
+    SCRAMBLE_SLACK_CONFIG: bare,
+  });
+  if (!check("freshCursor/first", first.code === 0, `exit ${first.code} ${first.err.trim().split("\n")[0] ?? ""}`)) return;
+
+  const second = await scramble(["message", "check", "--as", SELF], undefined, {
+    SCRAMBLE_SLACK_CONFIG: bare,
+  });
+  const lines = second.out.split("\n").filter((l) => l.startsWith("{")).length;
+  check(
+    "freshCursor/settles",
+    second.code === 0 && lines === 0,
+    second.code === 0 && lines === 0
+      ? "the second sweep returned nothing, so the cursor it wrote is the one it read"
+      : `the second sweep returned ${lines} line(s), exit ${second.code}: the cursor did not survive its own write`,
+  );
+}
+
 const STAGES: Record<string, () => Promise<void>> = {
   read: stageRead,
   resolve: stageResolve,
+  attachUnmapped: stageAttachUnmapped,
+  freshCursor: stageFreshCursor,
   thread: stageThread,
   attach: stageAttach,
   wake: stageWakeAndStatus,
@@ -344,7 +424,7 @@ const STAGES: Record<string, () => Promise<void>> = {
 };
 
 /** The default run. `inbound` is excluded and must be asked for by name. */
-const DEFAULT_STAGES = ["read", "resolve", "thread", "attach", "wake", "check"];
+const DEFAULT_STAGES = ["read", "resolve", "thread", "attach", "attachUnmapped", "freshCursor", "wake", "check"];
 
 const asked = process.argv.slice(2).filter((a) => !a.startsWith("-"));
 const run = asked.length ? asked : DEFAULT_STAGES;
