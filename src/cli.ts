@@ -1137,6 +1137,20 @@ async function messageCheckSlack(flags: Map<string, string>, io: Io): Promise<nu
   // there may be a DM or a conversation the listing does not return.
   const mine = await s.backend.myChannels(name);
   if (mine.problem !== undefined) io.writeErr(`slack: ${mine.problem}`);
+  // A CHANNEL THIS AGENT IS NOT IN IS NOT A FAULT, and it was reported as one.
+  // The config is shared by every agent on a host, so each sweep walked the
+  // other agents' channels and printed `slack: <name>: channel_not_found` for
+  // each, every time. An agent reported two such lines on every check, for
+  // channels it had never been in: "It reads like a fault every time"
+  // (2026-08-22).
+  //
+  // Classified with the membership listing this loop already fetched, and
+  // reported ONCE at the end. When that listing FAILED there is nothing to
+  // classify with, so every channel stays loud: a filter that cannot tell the
+  // two apart must not choose the quiet answer.
+  const memberOf = new Set(mine.names);
+  const canClassify = mine.problem === undefined;
+  const notMine: string[] = [];
   for (const channel of [...new Set([...Object.keys(cfg.channels), ...mine.names])].sort()) {
     let newestOwn: string | undefined;
     const cursor = started[channel];
@@ -1151,7 +1165,13 @@ async function messageCheckSlack(flags: Map<string, string>, io: Io): Promise<nu
       // the normal case rather than a fault. Failing the whole drain there meant
       // an agent with one uninvited channel drained NOTHING and said
       // `read failed`, which a sweeping agent cannot tell from a quiet channel.
-      io.writeErr(`slack: ${channel}: ${r.error}`);
+      const notAMember =
+        canClassify && !memberOf.has(channel) && /channel_not_found|not_in_channel/.test(r.error ?? "");
+      if (notAMember) {
+        notMine.push(channel);
+      } else {
+        io.writeErr(`slack: ${channel}: ${r.error}`);
+      }
       unreachable += 1;
       continue;
     }
@@ -1220,6 +1240,16 @@ async function messageCheckSlack(flags: Map<string, string>, io: Io): Promise<nu
         `${selfHits.map((h) => `  ${h}`).join("\n")}\n` +
         `Each rule here was added after a message went out carrying what it bans. ` +
         `Correct them in the channel where they are still standing.`,
+    );
+  }
+  // ONE LINE FOR ALL OF THEM, and it says what they are. Silence here would be
+  // wrong too: a channel this agent expected to be in, and is not, has to be
+  // findable, and this is where someone looks.
+  if (notMine.length > 0) {
+    io.writeErr(
+      `slack: skipped ${notMine.length} channel(s) ${name} is not a member of: ${notMine.join(", ")}. ` +
+        `The config is shared by the agents on this host, so these belong to another one. ` +
+        `If one of them is yours, ask a member to run /invite.`,
     );
   }
   // Every configured channel refused is a REPORT, never a silent exit 0: an
@@ -2007,7 +2037,8 @@ async function cmdDoctor(argv: string[], io: Io): Promise<number> {
     // and this test times out and calls the wake path DEAD. Its own advice then
     // says to re-onboard, which rotates the bot token and strands that listener.
     // Refusing to run beats answering wrongly on the most alarming surface here.
-    const holding = liveListeners(readProcesses(io.env("SCRAMBLE_PROC") ?? "/proc"), name);
+    const procRootForWake = io.env("SCRAMBLE_PROC") ?? "/proc";
+    const holding = stillAlive(liveListeners(readProcesses(procRootForWake), name), procRootForWake);
     if (holding.length > 0) {
       io.writeErr(
         `doctor: not testing the wake path while ${holding.length} listener(s) for ${name} hold the ` +
@@ -2034,7 +2065,7 @@ async function cmdDoctor(argv: string[], io: Io): Promise<number> {
     // on a host where a listener is running and where --wake proves it can see
     // it." An `ok` that names nothing is indistinguishable from an `ok` that
     // looked at nothing, which is the shape this whole verb exists to kill.
-    const seen = liveListeners(readProcesses(procRoot), name);
+    const seen = stillAlive(liveListeners(readProcesses(procRoot), name), procRoot);
     io.write(
       JSON.stringify({
         doctor: "ok",
@@ -2280,6 +2311,28 @@ export function listenersBehind(
  *  inbox stopped and nothing else changed, the same command answered
  *  `"delivered":"1787365205.175139"`. The advice was worse than the verdict —
  *  following it would have rotated a working token and stranded the listener. */
+/** Which of these pids still exist, checked NOW.
+ *
+ *  A listener count is a snapshot, and the most alarming surface here acts on
+ *  it: `doctor --wake` refuses to probe while a listener holds the socket. An
+ *  agent killed its listener, ran doctor, and was refused with the pid of a
+ *  process that had already gone (2026-08-22). A refusal naming a dead pid sends
+ *  someone hunting for a process to stop, and the probe it withheld would have
+ *  worked.
+ *
+ *  This does not close the window, since nothing can: a process can exit one
+ *  microsecond after the check. It shrinks the window from the whole doctor run,
+ *  which makes network calls, to the instant of the report. */
+export function stillAlive(pids: string[], root = "/proc"): string[] {
+  return pids.filter((pid) => {
+    try {
+      return statSync(`${root}/${pid}`).isDirectory();
+    } catch {
+      return false;
+    }
+  });
+}
+
 export function liveListeners(
   procs: Array<{ pid: string; cmd: string; startedMs: number }>,
   agent: string,

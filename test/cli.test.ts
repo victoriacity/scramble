@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { tmpdir } from "node:os";
 import type { ChannelStore } from "../src/store";
 import { createStore } from "../src/store";
 import { createHandler } from "../src/server";
-import { main, parseBind, loadSlackConfig, slackConfigPath, slackCliToken, staleConfigWarning, staleListeners, pickStale, staleListenerProblem, readProcesses, liveListeners, listenerCommit, listenersBehind, processesReadable, type Io } from "../src/cli";
+import { main, parseBind, loadSlackConfig, slackConfigPath, slackCliToken, staleConfigWarning, staleListeners, pickStale, staleListenerProblem, readProcesses, liveListeners, stillAlive, listenerCommit, listenersBehind, processesReadable, type Io } from "../src/cli";
 import { SCOPE_NAMES, BOT_EVENT_NAMES } from "../src/app-manifest";
 
 function scratchDir(name: string): string {
@@ -1414,6 +1414,65 @@ describe("message check under the slack backend", () => {
     expect(p.writes.join(" ")).toContain("No peers have been seen yet");
   });
 
+  test("a channel this agent is not in is skipped ONCE, and named as not a fault", async () => {
+    // The config is shared by every agent on a host, so each sweep walked the
+    // others' channels and printed `slack: <name>: channel_not_found` for every
+    // one, every time. An agent reported two such lines on every check, for
+    // channels it had never been in: "It reads like a fault every time."
+    const cwd = scratchDir("check-notmine");
+    const io = slackCheckIo(cwd, {
+      fetch: async (url) => {
+        const u = String(url);
+        if (u.includes("users.conversations"))
+          return new Response(JSON.stringify({ ok: true, channels: [{ id: "C1", name: "mine" }] }), { status: 200 });
+        if (u.includes("auth.teams.list"))
+          return new Response(JSON.stringify({ ok: true, teams: [{ id: "T1" }] }), { status: 200 });
+        if (u.includes("auth.test"))
+          return new Response(JSON.stringify({ ok: true, user: "dev", team_id: "T1" }), { status: 200 });
+        if (u.includes("conversations.history") && u.includes("C1"))
+          return new Response(JSON.stringify({ ok: true, messages: [] }), { status: 200 });
+        return new Response(JSON.stringify({ ok: false, error: "channel_not_found" }), { status: 200 });
+      },
+    });
+    // AFTER the helper, which writes its own config over anything earlier.
+    writeSlackConfig(cwd, {
+      appToken: "xapp-1",
+      token: "xoxb-1",
+      channels: { mine: "C1", theirs: "C2", alsotheirs: "C3" },
+      agents: { dev: { token: "T", handle: "dev" } },
+    });
+    const errs: string[] = [];
+    expect(await main(["message", "check", "--as", "dev", "--backend", "slack"], { ...io, writeErr: (l) => errs.push(l) })).toBe(0);
+    const said = errs.join("\n");
+    expect(said).toContain("skipped 2 channel(s) dev is not a member of: alsotheirs, theirs");
+    expect(said).toContain("shared by the agents on this host");
+    // And NOT one line per channel, which is what read as a fault.
+    expect(said).not.toContain("slack: theirs: channel_not_found");
+  });
+
+  test("with the membership listing broken, every channel stays loud", async () => {
+    // A filter that cannot tell the two apart must not choose the quiet answer.
+    const cwd = scratchDir("check-noclassify");
+    const io = slackCheckIo(cwd, {
+      fetch: async (url) =>
+        String(url).includes("users.conversations")
+          ? new Response(JSON.stringify({ ok: false, error: "invalid_auth" }), { status: 200 })
+          : new Response(JSON.stringify({ ok: false, error: "channel_not_found" }), { status: 200 }),
+    });
+    writeSlackConfig(cwd, {
+      appToken: "xapp-1",
+      token: "xoxb-1",
+      channels: { theirs: "C2" },
+      agents: { dev: { token: "T", handle: "dev" } },
+    });
+    const errs: string[] = [];
+    expect(await main(["message", "check", "--as", "dev", "--backend", "slack"], { ...io, writeErr: (l) => errs.push(l) })).toBe(1);
+    const said = errs.join("\n");
+    expect(said).toContain("listing this agent's channels failed");
+    expect(said).toContain("slack: theirs: channel_not_found");
+    expect(said).not.toContain("skipped");
+  });
+
   test("a status in an UNMAPPED channel resolves live, the way sending does", async () => {
     // Measured live on 2026-08-22: an agent invited into a channel could send to
     // it, because the post path asks Slack, while the status path read the
@@ -2090,8 +2149,11 @@ describe("message check across a config several agents share", () => {
     expect(await main(["message", "check", "--as", "dev", "--backend", "slack"], io)).toBe(0);
     expect(writes).toHaveLength(1);
     const said = errs.join(" ");
+    // NAMED, and named as what it is: this agent is not a member of it, which
+    // the membership listing settles. It used to read `theirs: channel_not_found`
+    // on every single check, identical to a real failure.
     expect(said).toContain("theirs");
-    expect(said).toContain("channel_not_found");
+    expect(said).toContain("is not a member of");
   });
 
   test("a mention of the agent's HANDLE marks the line mentioned", async () => {
@@ -2200,6 +2262,19 @@ describe("staleListeners", () => {
 
   test("another agent's listener is not this agent's problem", () => {
     expect(pickStale([proc("102", "bun src/bin.ts listen --as other", 1_000)], "dev", 5_000)).toEqual([]);
+  });
+
+  test("a pid that has gone is dropped before it is NAMED", () => {
+    // An agent killed its listener, ran `doctor --wake`, and was refused with the
+    // pid of a process that had already gone (2026-08-22). A refusal naming a
+    // dead pid sends someone hunting for a process to stop, and the probe it
+    // withheld would have worked.
+    const root = mkdtempSync(join(tmpdir(), "scramble-proc-"));
+    mkdirSync(join(root, "500"), { recursive: true });
+    expect(stillAlive(["500", "501"], root)).toEqual(["500"]);
+    // A root that cannot be read answers "none alive", which is the safe
+    // direction here: it lets the probe RUN and be judged on its own result.
+    expect(stillAlive(["500"], join(root, "nothing"))).toEqual([]);
   });
 
   test("a listener names the COMMIT it runs, and only an installed one can", () => {
