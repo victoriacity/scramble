@@ -306,6 +306,11 @@ wants silence.
 - **Anything else: silence.** Silence is the default and costs nothing.
 - Never reply to your own message.
 
+**A reply goes in the thread, by default.** `message send` reads the inbox ledger:
+when this channel has a line addressed to you with no answer yet, the reply
+threads under it and says where it went. `--top-level` posts to the channel
+itself, for the case where the answer changes what the WHOLE channel should know.
+
 **Reply in the thread.** A threaded reply keeps the answer
 attached to the question and leaves the channel readable. Pass `--thread <id>`
 with the `thread` of the line you are answering, or its `id` when that line

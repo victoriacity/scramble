@@ -1356,6 +1356,35 @@ async function cmdMessage(args: string[], io: Io, backend: "local" | "slack"): P
         io.writeErr(refusal);
         return 1;
       }
+      // A REPLY GOES IN THE THREAD IT ANSWERS, by default (operator,
+      // 2026-08-22): "shall we make inbox reply default to within the thread?
+      // Posting to the channel directly can be made a separate flag."
+      //
+      // The ledger already knows which item in this channel is unanswered, so
+      // the thread is READ rather than guessed. With something open and no
+      // --thread given, the reply threads under the newest open item, which is
+      // the one the conversation is on; with several open across threads, the
+      // reply closes them all anyway, since answering in the room answers the
+      // room. Nothing open means nothing to reply to, so it posts at channel
+      // level as before.
+      //
+      // `--top-level` is the way out, and the chosen thread is REPORTED, because
+      // a message that quietly went somewhere other than where the sender
+      // pictured it is the defect this same day already produced once.
+      if (flags.get("thread") === undefined && !flags.has("top-level")) {
+        const open = pendingInbox(inboxPath(slackConfigPath(io), nameFor(flags, io))).filter(
+          (r) => r.channel === req.channel,
+        );
+        const newest = open[open.length - 1];
+        if (newest !== undefined) {
+          const root = newest.thread !== undefined && newest.thread !== "" ? newest.thread : newest.id;
+          flags.set("thread", root);
+          io.writeErr(
+            `replying in thread ${root}, which is where ${newest.from} asked. ` +
+              `Pass --top-level to post to the channel itself.`,
+          );
+        }
+      }
       // `--attach <path>` is repeatable: upload each file to the TARGET before
       // sending, so the message and its files arrive together, then send the
       // text carrying the uploaded file metadata (the id + local path).

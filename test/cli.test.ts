@@ -849,6 +849,55 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     expect(b.errs.join(" ")).toContain("why are stale bots created");
   });
 
+  test("a reply DEFAULTS into the thread the question was asked in", async () => {
+    // Operator, 2026-08-22: "shall we make inbox reply default to within the
+    // thread? Posting to the channel directly can be made a separate flag." The
+    // ledger knows which item is open, so the thread is read and never guessed.
+    const cwd = scratchDir("inbox-threaddefault");
+    const p = join(cwd, ".scramble", "inbox", "dev.jsonl");
+    mkdirSync(join(cwd, ".scramble", "inbox"), { recursive: true });
+    writeFileSync(
+      p,
+      `${JSON.stringify({ id: "9.1", channel: "general", from: "andrew", thread: "root-7", text: "q", at: "2026-08-22T00:00:00Z" })}\n`,
+    );
+    const { io, errs } = stubIo(cwd, async () => new Response(JSON.stringify({ crossings: [] }), { status: 200 }));
+    io.readStdin = async () => "the answer";
+    expect(await main(["message", "send", "--target", "general", "--as", "dev"], io)).toBe(0);
+    expect(errs.join(" ")).toContain("replying in thread root-7");
+    expect(errs.join(" ")).toContain("andrew");
+  });
+
+  test("an item that STARTED a thread is replied to under its own id", async () => {
+    const cwd = scratchDir("inbox-threadroot");
+    mkdirSync(join(cwd, ".scramble", "inbox"), { recursive: true });
+    writeFileSync(
+      join(cwd, ".scramble", "inbox", "dev.jsonl"),
+      `${JSON.stringify({ id: "9.4", channel: "general", from: "andrew", text: "q", at: "2026-08-22T00:00:00Z" })}\n`,
+    );
+    const { io, errs } = stubIo(cwd, async () => new Response(JSON.stringify({ crossings: [] }), { status: 200 }));
+    io.readStdin = async () => "the answer";
+    expect(await main(["message", "send", "--target", "general", "--as", "dev"], io)).toBe(0);
+    expect(errs.join(" ")).toContain("replying in thread 9.4");
+  });
+
+  test("--top-level is the way out, and an unrelated channel is untouched", async () => {
+    const cwd = scratchDir("inbox-toplevel");
+    mkdirSync(join(cwd, ".scramble", "inbox"), { recursive: true });
+    writeFileSync(
+      join(cwd, ".scramble", "inbox", "dev.jsonl"),
+      `${JSON.stringify({ id: "9.2", channel: "general", from: "andrew", thread: "root-7", text: "q", at: "2026-08-22T00:00:00Z" })}\n`,
+    );
+    const a = stubIo(cwd, async () => new Response(JSON.stringify({ crossings: [] }), { status: 200 }));
+    a.io.readStdin = async () => "an announcement";
+    expect(await main(["message", "send", "--target", "general", "--as", "dev", "--top-level"], a.io)).toBe(0);
+    expect(a.errs.join(" ")).not.toContain("replying in thread");
+    // A channel with nothing open has nothing to reply to.
+    const b = stubIo(cwd, async () => new Response(JSON.stringify({ crossings: [] }), { status: 200 }));
+    b.io.readStdin = async () => "hello elsewhere";
+    expect(await main(["message", "send", "--target", "other", "--as", "dev"], b.io)).toBe(0);
+    expect(b.errs.join(" ")).not.toContain("replying in thread");
+  });
+
   test("nothing owed prints nothing and exits 0", async () => {
     const cwd = scratchDir("inbox-clean");
     const { io, writes } = stubIo(cwd, async () => new Response("{}", { status: 200 }));
