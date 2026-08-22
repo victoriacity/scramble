@@ -1348,6 +1348,7 @@ describe("message check under the slack backend", () => {
               ok: true,
               messages: [
                 { ts: "30.0", user: "U9", text: "I am taking the generation run" },
+                { ts: "35.0", user: "UME", text: "my own earlier line" },
                 { ts: "60.0", user: "U9", text: "after yours, so not a crossing" },
               ],
             }),
@@ -1360,14 +1361,20 @@ describe("message check under the slack backend", () => {
       appToken: "xapp-1",
       token: "xoxb-1",
       channels: { general: "C1" },
-      agents: { dev: { token: "T", handle: "dev" } },
-      roster: { U9: "peer" },
+      // The handle DIFFERS from the scramble name, which is the case that broke
+      // it: history carries the handle.
+      agents: { dev: { token: "T", handle: "dev_bot" } },
+      roster: { U9: "peer", UME: "dev_bot" },
     });
     const errs: string[] = [];
     const watched: Io = { ...io, writeErr: (l) => errs.push(l), readStdin: async () => "my line" };
     expect(await main(["message", "send", "--target", "general", "--as", "dev"], watched)).toBe(0);
     const said = errs.join("\n");
     expect(said).toContain("1 message(s) arrived in general before yours");
+    // This agent's OWN line is never a crossing, and history carries the HANDLE:
+    // matching on the scramble name alone listed one of mine back to me on the
+    // first live run.
+    expect(said).not.toContain("my own earlier line");
     expect(said).toContain("I am taking the generation run");
     expect(said).toContain("already claimed the work");
     // A message AFTER this one is no crossing.

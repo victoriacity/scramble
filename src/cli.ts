@@ -1693,9 +1693,14 @@ async function reportCrossings(
     io.writeErr(`crossings unread for ${channel}: ${r.error ?? "history failed"}`);
     return;
   }
+  // THIS AGENT'S OWN LINES ARE NOT CROSSINGS, and matching on the scramble name
+  // alone listed one of mine back to me: history carries the SLACK HANDLE, and
+  // `scramble-dev` posts as `scramble_dev`. Same mismatch that once marked a real
+  // mention as unaddressed. Caught on the first live run of this report.
+  const me = backend.identities(from);
   const crossed = r.messages.filter(
     (m) =>
-      m.from !== from &&
+      !me.includes(m.from) &&
       slackTs(m.ts) < slackTs(ownTs) &&
       (cursor === undefined || slackTs(m.ts) > slackTs(cursor)),
   );
