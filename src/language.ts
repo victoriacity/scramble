@@ -13,8 +13,8 @@
 // A quoted span is DATA, not prose: this file names the tokens it bans, and a
 // message reporting what someone else wrote has to be able to carry their words.
 // Fenced blocks and inline backticks are blanked before the scan, and that is the
-// only exemption. There is no --no-lint flag, because a bypass flag is exactly
-// what a hurried agent reaches for.
+// only exemption. There is no --no-lint flag: a flag that turns the check off
+// makes it optional again, which is the defect this replaced.
 
 export interface LanguageRule {
   label: string;
