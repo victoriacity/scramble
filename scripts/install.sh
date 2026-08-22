@@ -43,12 +43,18 @@ mkdir -p "$DEST" || fail "cannot create $DEST"
 cp -r src "$DEST/" || fail "cannot copy src into $DEST"
 cp package.json "$DEST/" || fail "cannot copy package.json into $DEST"
 cp -r skills "$DEST/" 2>/dev/null || true
-printf '%s\n' "$SHA" > "$DEST/COMMIT"
+printf '%s\n' "$SHA" > "$DEST/src/COMMIT"
 
 ln -sfn "$DEST" "$ROOT/current" || fail "cannot point $ROOT/current at $DEST"
 
 BIN="${SCRAMBLE_BIN:-$HOME/.bun/bin}"
 mkdir -p "$BIN" || fail "cannot create $BIN"
+# REMOVE BEFORE WRITING. The name being replaced is usually the `bun link`
+# symlink, and `>` follows a symlink to its target: the first run of this script
+# wrote the launcher THROUGH ~/.bun/bin/scramble into the checkout's own
+# src/bin.ts and gutted it. git had the file, so the cost was a restore, and the
+# next installer to do this to an unversioned target would take the file with it.
+rm -f "$BIN/scramble" || fail "cannot remove the existing $BIN/scramble"
 cat > "$BIN/scramble" <<LAUNCH
 #!/usr/bin/env bash
 # Installed by scramble scripts/install.sh. Runs the copy under $ROOT/current,
