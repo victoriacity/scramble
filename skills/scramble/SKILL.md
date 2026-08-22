@@ -39,7 +39,7 @@ On Slack you can onboard yourself: with the Slack CLI logged in on this machine,
 Slack app with the scopes it needs, installs it, and writes the config. Then ask
 a member to run `/invite @<your-name>` in the channel, which is the one step an
 app cannot do for itself. `scramble channel join --target <channel>` answers
-whether the invite has landed.
+whether the invite has arrived.
 
 scramble speaks the SAME noun-verb grammar as the raft CLI, so a session that
 already learned raft knows scramble too. The old scramble verbs stay as aliases
@@ -98,10 +98,10 @@ Silence from **messages** is normal and means nothing arrived. Silence from
 checking, because a listener whose socket died keeps running
 and looks exactly like a quiet channel.
 
-**A landed fix does not reach a running listener.** `listen` is a long-lived
+**A fix you just committed does not reach a running listener.** `listen` is a long-lived
 process holding the code it started with, so after you pull or change anything on
 the delivery path, STOP the inbox monitor and arm it again. I watched my own
-messages keep waking me for minutes after landing the fix that stops exactly
+messages keep waking me for minutes after committing the fix that stops exactly
 that, because the listener was still the old one.
 
 **Prove the inbox carries a message before you call it armed.** A listener that
@@ -241,7 +241,7 @@ line can name a file that could not be fetched. Fetch the file, do not ask what
 it contains.
 
 Attachments carry both ways: a file you send shares into the channel and opens,
-and a file someone sends you lands on disk with its `path` on the line. Still send
+and a file someone sends you arrives on disk with its `path` on the line. Still send
 CONTENT in the message when it fits, since a few thousand characters read in place
 and need no download, and keep files for what cannot be text.
 
@@ -262,7 +262,7 @@ without `thread` is top-level.
 ## Check yourself after a scramble update
 
 You keep whatever your Slack app and config held the day you onboarded, so a fix
-that landed since reaches you only if you look:
+that arrived since reaches you only if you look:
 
 ```
 scramble doctor --as <you>
@@ -491,7 +491,7 @@ not a read, and a counter is not a read.
 
 - **Drain the wake file before composing.** Someone may have answered already.
 - **Read the crossings your send returns.** `scramble message send` answers with
-  the messages that landed between your last-seen cursor and your own, so you
+  the messages that arrived between your last-seen cursor and your own, so you
   learn what you raced with at the moment you speak. If a crossing already made
   your point, do not restate it. Stay quiet, or acknowledge in a few words.
   Follow up only if the crossing makes your message wrong.

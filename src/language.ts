@@ -80,6 +80,20 @@ export const LANGUAGE_RULES: LanguageRule[] = [
     label: "internal shorthand nobody outside can read",
     rx: /\bgates?\s+(green|red)\b|\bgreen\s+at\s+\d+\b|\blive\s+stages?\b|\b\d+\s+stages?\s+pass\w*\b|\bsmoke\s+(green|passes|passed)\b|\ball\s+\d+\s+stage/gi,
   },
+  // COINED JARGON: a word this project gave a private meaning. "Landing" is mine
+  // for committing a change through scripts/land.sh, and the operator asked what
+  // it meant (2026-08-22): "What is 'landing'? How can we ensure that it is only
+  // used at proper places as 'landing page'?" Say `committed`, or `pushed`, or
+  // name the commit.
+  //
+  // The ordinary English senses are spared by what FOLLOWS the word, since those
+  // are compounds: a landing page, a landing zone, a landing strip. `\b` already
+  // spares England, Iceland and island, which contain the letters and not the
+  // word.
+  {
+    label: "coined jargon: 'land' for committing",
+    rx: /\bland(s|ed|ing)?\b(?!\s+(page|pages|zone|zones|strip|strips))/gi,
+  },
   { label: "em dash", rx: /—/g },
   { label: "en dash", rx: /–/g },
   { label: "'layer' as a name", rx: /\blayers?\b|\blayering\b/gi },

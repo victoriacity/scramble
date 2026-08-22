@@ -8,8 +8,14 @@ describe("the language rules, checked where the message leaves", () => {
     // `message send` all day, so it ran on nothing, and the operator read this
     // shape in a message and told me the linting had failed.
     const hits = lintLanguage("Both are landed in the closing gate — controlled on six transcripts.");
-    expect(hits).toEqual([{ label: "em dash", match: "—", index: 36 }]);
-    expect(languageRefusal(hits)).toContain("message send REFUSED: 1 language-rule hit(s)");
+    // Two hits, and the second was added hours later: the sentence also says
+    // "landed", which was my private word for committing until the operator
+    // asked what it meant.
+    expect(hits).toEqual([
+      { label: "coined jargon: 'land' for committing", match: "landed", index: 9 },
+      { label: "em dash", match: "—", index: 36 },
+    ]);
+    expect(languageRefusal(hits)).toContain("message send REFUSED: 2 language-rule hit(s)");
     expect(languageRefusal(hits)).toContain("[em dash]");
   });
 
@@ -27,6 +33,7 @@ describe("the language rules, checked where the message leaves", () => {
       ["minimizing really-just", "It really just needs the team id."],
       ["minimization of work", "A quick fix for the lookup."],
       ["internal shorthand nobody outside can read", "Gate green at 457, six live stages pass."],
+      ["coined jargon: 'land' for committing", "Landed a44ac75 and pushed it."],
       ["em dash", "One thing — another thing."],
       ["en dash", "One thing – another thing."],
       ["'layer' as a name", "Add a validation layer above it."],
@@ -85,6 +92,28 @@ describe("the language rules, checked where the message leaves", () => {
     // terminal can act on.
     expect(lintLanguage("The test suite passes, and so do the checks that talk to the real workspace.")).toEqual([]);
     expect(lintLanguage("457 tests pass, including the ones that send a real message.")).toEqual([]);
+  });
+
+  test("COINED JARGON: 'landing' for committing, and the compounds that are English", () => {
+    // Operator, 2026-08-22: "What is 'landing'? How can we ensure that it is only
+    // used at proper places as 'landing page'?" It was my word for committing a
+    // change through scripts/land.sh, and it means nothing outside this session.
+    for (const said of [
+      "Landed a44ac75.",
+      "Both skills corrected and landed.",
+      "I will land this after the tests pass.",
+      "Landing the fix now.",
+    ]) {
+      expect(lintLanguage(said).map((h) => h.label)).toContain("coined jargon: 'land' for committing");
+    }
+    // The ordinary English senses, spared by the compound that follows.
+    expect(lintLanguage("The landing page is ready for review.")).toEqual([]);
+    expect(lintLanguage("Check the landing pages before the launch.")).toEqual([]);
+    // And the letters inside another word are not the word.
+    expect(lintLanguage("England and Iceland are unaffected.")).toEqual([]);
+    expect(lintLanguage("The island survey is unrelated.")).toEqual([]);
+    // What to say in its place.
+    expect(lintLanguage("Committed a44ac75 and pushed it.")).toEqual([]);
   });
 
   test("someone else's words in backticks are DATA, not this agent's prose", () => {

@@ -28,7 +28,7 @@ questions you ask before anything exists in Slack.
 
    It creates your own Slack app with the scopes below, installs it to the
    workspace, and writes `~/.config/scramble/slack.json`. The verify read at the
-   end is REFUSED until step 4, which is expected rather than a failure.
+   end is REFUSED until step 4, which is expected.
 4. **Report the `/invite @<handle>` line it printed, and stop.** You cannot add
    yourself to a Slack conversation, so nothing you try next works until a member
    of the channel runs it. When they say it is done,
@@ -101,11 +101,11 @@ The CLI has exactly two read commands; every existing session maps onto one.
   the difference between the last two matters to a parked harness: **0** a message
   arrived, **64** the channel was quiet for the timeout so park again, **1**
   scramble could not look, which a retry will not fix. A refused Socket Mode
-  credential is 1 rather than 64, so a wrong token can never present as silence.
+  credential is 1, never 64, so a wrong token can never present as silence.
   Choose this verb when your harness only runs a shell command and waits for it to
   exit.
 
-## Wrappers (examples, not a supported-vendor list)
+## Wrappers (examples; this is no supported-vendor list)
 
 Two harness kinds cover every existing session; if yours is one, the two-line
 binding is:
