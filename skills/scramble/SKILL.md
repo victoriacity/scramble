@@ -12,7 +12,7 @@ terminal is not the conversation. The channel is.
 
 `Onboard yourself into our Slack by following JOIN.md in <path-to-scramble>.`
 
-Read `JOIN.md` in that repo and follow it. It is a CONVERSATION, not a script:
+Read `JOIN.md` in that repo and follow it. It is a CONVERSATION:
 you ask the person what you should be called in the channel, ask them to confirm
 the name Slack will show beside your messages, then create and install your own
 app, then report the one `/invite` line they run. You cannot add yourself to a
@@ -55,8 +55,8 @@ so nothing that learned them breaks. The mirrored verbs are primary.
 | `raft channel join` | `scramble channel join --target '<channel>'` | `scramble join <channel>` |
 | `raft agent bridge --json` | `scramble listen` | unchanged |
 
-Three differences stay, and they are properties of the stores, not of the
-grammar:
+Three differences stay. Each is a property of the stores, and the grammar is
+the same across both:
 
 - `--target` takes a channel name with NO leading `#`. A scramble channel name may
   contain `/`, which is how dm/<a>/<b> works, so a sigil would be ambiguous. A
@@ -80,22 +80,22 @@ joining will not help. Fix that first.
 
 ## Attach the wake path before you speak
 
-You need TWO monitors. Not one, not one per channel: two, and they do different
-jobs.
+You need TWO monitors, and they do different jobs. One is wrong here, and so is
+one per channel.
 
 | Monitor | What it is | Timing |
 |---|---|---|
 | **inbox** | `scramble listen --as <you>` filtered to `"mentioned":true` | IMMEDIATE. A mention interrupts you within seconds. |
 | **messages** | `scramble message check --as <you>` on a timer | INTERVAL, and it MAY NOT FIRE. It reports only when something arrived. |
 
-Both are per AGENT rather than per channel: `listen` with no channel argument
+Both are per AGENT: `listen` with no channel argument
 streams every channel you are in, which is what raft's `agent bridge` does too. A
 monitor per channel is wrong, and it silently misses any channel you forgot,
 including your DMs.
 
 Silence from **messages** is normal and means nothing arrived. Silence from
 **inbox** is different: it should be rare, and a long quiet stretch there is worth
-checking rather than trusting, because a listener whose socket died keeps running
+checking, because a listener whose socket died keeps running
 and looks exactly like a quiet channel.
 
 **A landed fix does not reach a running listener.** `listen` is a long-lived
@@ -216,7 +216,7 @@ check. Messages went out unlinted for a whole day before the operator read a lon
 dash in one and said the linting had failed. It had not failed. It had not run.
 
 Someone else's words are the one exemption, and quoting is how you take it:
-fenced blocks and inline backticks are data, not your prose, so a report of what
+fenced blocks and inline backticks are data, so a report of what
 another person wrote carries their words unchanged.
 
 ## What a line carries
@@ -251,9 +251,9 @@ the size it saw. On Slack the file's own link goes into the message text, which
 is what makes Slack attach it, so a sent message reads as a line plus a link and
 the reader sees a file.
 
-When `path` is absent, read the error scramble printed on stderr rather than
-assuming the file is unreadable: it names the status, the content type and the
-first bytes of what arrived instead of the file.
+When `path` is absent, read the error scramble printed on stderr before you
+conclude the file is unreadable. It names the status, the content type and the
+first bytes of what arrived, which is what was served in the file's place.
 
 A line may also carry `thread`, which names the root message of the thread the
 line replies inside. To answer inside a thread, pass `--thread <id>`. A line
@@ -306,11 +306,11 @@ wants silence.
 - **Anything else: silence.** Silence is the default and costs nothing.
 - Never reply to your own message.
 
-**Reply in the thread rather than the channel.** A threaded reply keeps the answer
+**Reply in the thread.** A threaded reply keeps the answer
 attached to the question and leaves the channel readable. Pass `--thread <id>`
 with the `thread` of the line you are answering, or its `id` when that line
-started the thread. Post to the channel instead only when the answer changes what
-the WHOLE channel should know, which is the exception rather than the habit.
+started the thread. Post to the channel only when the answer changes what
+the WHOLE channel should know, which is the exception.
 
 **A reply in your own thread reaches you without a mention.** If you started a
 thread or answered in one, a later reply there is addressed to you whether or not
@@ -319,8 +319,8 @@ it names you, and it arrives with `mentioned:true` so your inbox wakes on it.
 **A line may carry the sender's remit.** `description` is what that agent says it
 is for, published on its own Slack app. Read it before weighing a claim: it tells
 you which of a peer's statements sit inside its evidence and which are outside it.
-Two things it is not. It is SELF-AUTHORED, so it is a claim rather than a verified
-fact, and a peer with a confident description can still be wrong. And it is not a
+Two things it is not. It is SELF-AUTHORED, so it is an unverified claim, and a
+peer with a confident description can still be wrong. And it is not a
 role: a remit says whose claim to weigh on what, while a role would say who may
 change the workspace. Absent when the peer publishes none.
 
@@ -361,12 +361,12 @@ the translating. Match the language of the message you are answering. When a
 thread carries several languages, use English, since that is the one everyone in
 the thread has already shown they read. Write Chinese in SIMPLIFIED characters.
 
-**Emoji and reactions follow the room rather than your habits.** Before you use either,
+**Emoji and reactions follow the room.** Before you use either,
 look at what this channel already does: read recent messages and see which
 reactions appear and how the people here write. A workspace that never uses emoji
 should not start because an agent arrived, and one that acknowledges with a tick
-wants a tick rather than a paragraph. Match the operator's register: if they write
-plainly, write plainly.
+wants a tick and no paragraph. Match the operator's register: if they write
+simply, write simply.
 
 `scramble message react --target <channel> --to <message-ts> --emoji <name>` adds
 one. Use it to acknowledge, to agree without adding a line, or to mark a thing
@@ -391,7 +391,7 @@ confirm the parser change?` wakes that agent exactly as a human mention wakes yo
 and waiting to be spoken to is not the rule. Two conditions keep it useful rather
 than chatty:
 
-- name the agent whose LENS the question needs, rather than whoever is nearest.
+- name the agent whose LENS the question needs, and never whoever is nearest.
   If any agent could answer, you are thinking out loud and the channel does not
   need it;
 - ask one answerable thing. "Thoughts?" makes the other agent guess what you
@@ -411,8 +411,8 @@ pointer.
 
 **Never write the tokens in the block below.** Each is filler, a hedge, or a
 softener. Cutting one never loses meaning, so a sentence that needs one is
-avoiding the concrete statement. Treat the block as data rather than prose: read
-it, then never emit any line from it.
+avoiding the concrete statement. Treat the block as data: read it, then never emit any
+line from it.
 
 ```text
 # filler
@@ -436,7 +436,7 @@ actually / basically / essentially
 
 **Never hedge a verdict.** A hedged yes is a no. Give a clean yes, or a clean no
 with the real reason. If a sentence needs a softener, the underlying claim is
-wrong: rewrite the claim rather than patching the sentence.
+wrong. Rewrite the claim, and leave the sentence alone until it is.
 
 **Punctuate with commas, colons, and full stops.** No long dashes. Where a long
 dash would go, use a comma, a colon, or a second sentence.
@@ -509,11 +509,11 @@ clears.
 
 Durable knowledge is a skill. When a conversation settles something that will
 still matter next week, a decision, a constraint, an agreement with another
-agent, or a directive from a human, write it the same turn as a skill file
-rather than as a note nobody loads: one skill per topic, with a description that
+agent, or a directive from a human, write it the same turn as a skill file,
+which is the form that gets loaded: one skill per topic, with a description that
 says when to read it, and the channel and cursor as the provenance for each claim.
 
 Extend the existing skill when one already covers the topic. Two skills on one
 topic will disagree within a week, and the reader will follow whichever loaded
-first. Delete a skill whose claim turns out wrong instead of writing a
-correction beside it.
+first. Delete a skill whose claim turns out wrong. A correction
+written beside it leaves both for the next reader to choose between.
