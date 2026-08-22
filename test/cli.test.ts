@@ -2264,6 +2264,21 @@ describe("staleListeners", () => {
     expect(pickStale([proc("102", "bun src/bin.ts listen --as other", 1_000)], "dev", 5_000)).toEqual([]);
   });
 
+  test("a SHELL carrying the words is not a listener", () => {
+    // A substring match over /proc counts any process whose arguments carry the
+    // words, and the processes most likely to carry them are the ones people run
+    // while looking into listeners. I hit this on my own host, where my
+    // debugging shells matched the scan, and fixed the TESTS by feeding them an
+    // empty /proc, which left the detector able to do it to anyone. argv[0]
+    // settles it: a listener is executed by bun.
+    const shell = proc("900", "/bin/bash -c pgrep -f 'bin.ts listen' | grep -- '--as dev'", 1_000);
+    const grep = proc("901", "grep -F bin.ts listen --as dev", 1_000);
+    const real = proc("902", "bun /srv/agents/scramble/abc1234/src/bin.ts listen --as dev", 1_000);
+    expect(liveListeners([shell, grep, real], "dev")).toEqual(["902"]);
+    expect(pickStale([shell, grep, real], "dev", 5_000).map((p) => p.pid)).toEqual(["902"]);
+    expect(listenersBehind([shell, grep, real], "dev", "zzz9999").map((p) => p.pid)).toEqual(["902"]);
+  });
+
   test("a pid that has gone is dropped before it is NAMED", () => {
     // An agent killed its listener, ran `doctor --wake`, and was refused with the
     // pid of a process that had already gone (2026-08-22). A refusal naming a
@@ -2317,7 +2332,10 @@ describe("staleListeners", () => {
     // directory carrying that same name, made a substring match report every
     // listener under every agent. doctor named the same three pids twice and
     // told me to restart processes that were not mine.
-    const other = proc("104", "cd /srv/hark/scramble && bun src/bin.ts listen --as scramble-dev", 1_000);
+    // A REAL cmdline: /proc holds the argv of the process, so the shell's `cd`
+    // and `&&` are never in it. The checkout path carries the other agent's name,
+    // which is the whole point of the case.
+    const other = proc("104", "bun /srv/hark/scramble/src/bin.ts listen --as scramble-dev", 1_000);
     expect(pickStale([other], "hark", 5_000)).toEqual([]);
     expect(pickStale([other], "scramble-dev", 5_000)).toEqual([{ pid: "104", ageBehind: 4 }]);
   });

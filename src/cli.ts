@@ -2291,9 +2291,8 @@ export function listenersBehind(
   installed: string,
 ): Array<{ pid: string; commit: string }> {
   if (installed === "") return [];
-  const asFlag = `--as ${agent}`;
   return procs
-    .filter((p) => p.cmd.includes("bin.ts listen") && p.cmd.includes(asFlag))
+    .filter((p) => isListenerProc(p.cmd, agent))
     .map((p) => ({ pid: p.pid, commit: listenerCommit(p.cmd) }))
     .filter((p) => p.commit !== "" && p.commit !== installed);
 }
@@ -2333,12 +2332,30 @@ export function stillAlive(pids: string[], root = "/proc"): string[] {
   });
 }
 
+/** Is this process a scramble listener, and not something whose command line
+ *  merely CONTAINS one?
+ *
+ *  A substring match over /proc counts any process whose arguments carry the
+ *  words, and the processes most likely to carry them are the ones people run
+ *  while looking into listeners: a grep, a pgrep, a shell one-liner. I hit this
+ *  on my own host, where my debugging shells matched the scan, and I fixed the
+ *  TESTS by feeding them an empty /proc, which left the detector able to do it
+ *  to anyone (2026-08-22).
+ *
+ *  argv[0] settles it: a listener is executed by bun. A shell holding the same
+ *  words has argv[0] of bash, sh, grep or pgrep. */
+function isListenerProc(cmd: string, agent: string): boolean {
+  if (!cmd.includes("bin.ts listen") || !cmd.includes(`--as ${agent}`)) return false;
+  const argv0 = cmd.trim().split(/\s+/)[0] ?? "";
+  const exe = argv0.split("/").pop() ?? "";
+  return exe === "bun" || exe === "node";
+}
+
 export function liveListeners(
   procs: Array<{ pid: string; cmd: string; startedMs: number }>,
   agent: string,
 ): string[] {
-  const asFlag = `--as ${agent}`;
-  return procs.filter((p) => p.cmd.includes("bin.ts listen") && p.cmd.includes(asFlag)).map((p) => p.pid);
+  return procs.filter((p) => isListenerProc(p.cmd, agent)).map((p) => p.pid);
 }
 
 /** WHICH of those are listeners for this agent that predate the code. Pure, so
@@ -2355,9 +2372,8 @@ export function pickStale(
   // directory matches it. Measured here, doctor named the same three pids under
   // two agents and told me to restart listeners that were not mine. A detector
   // that cries wolf is worth less than no detector, since I stop reading it.
-  const asFlag = `--as ${agent}`;
   return procs
-    .filter((p) => p.cmd.includes("bin.ts listen") && p.cmd.includes(asFlag) && p.startedMs < newestSourceMs)
+    .filter((p) => isListenerProc(p.cmd, agent) && p.startedMs < newestSourceMs)
     .map((p) => ({ pid: p.pid, ageBehind: Math.round((newestSourceMs - p.startedMs) / 1000) }));
 }
 
