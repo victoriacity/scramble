@@ -261,6 +261,10 @@ export class SlackBackend {
   /** Channel name -> its Slack id, "" for a name this agent cannot reach. */
   private readonly channelIdCache = new Map<string, string>();
   private readonly teamIdCache = new Map<string, string>();
+  /** Timestamps already delivered in this process, so one message arriving under
+   *  two event types is one line. Bounded by the life of a listener, which is
+   *  what it is scoped to. */
+  private readonly deliveredTs = new Set<string>();
   /** users.list is paged at most once per process; a name Slack does not have is
    *  remembered as a miss so an unknown name costs one lookup, never one each. */
   private rosterLoaded = false;
@@ -940,7 +944,19 @@ export class SlackBackend {
         problems: [],
       };
     }
-    if (ev.type !== "message" || !ev.text || ev.text === "") return { delivery: undefined, problems: [] };
+    // `app_mention` CARRIES A MENTION AND WAS BEING DROPPED. Anything whose type
+    // was not `message` returned no delivery, so an app subscribed to
+    // app_mention had mentions arriving on its socket and scramble discarded
+    // every one: the mention is live on the wire while the inbox sits silent.
+    // A fourth agent found it on an app it had adopted, which subscribes to
+    // app_mention and to none of the message events (2026-08-22).
+    //
+    // Both types carry the same fields, so both make the same delivery. An app
+    // subscribed to BOTH sends a channel mention twice, once each, which is what
+    // the ts dedup in listen and next is for.
+    if ((ev.type !== "message" && ev.type !== "app_mention") || !ev.text || ev.text === "") {
+      return { delivery: undefined, problems: [] };
+    }
     // A status is never a message, and that holds for a PEER's status too.
     if (isStatusLine(ev)) return { delivery: undefined, problems: [] };
     const channel = ev.channel;
@@ -1073,6 +1089,13 @@ export class SlackBackend {
       // (`scramble-dev`) never matches and the agent is delivered its own posts.
       // Caught by the loop itself: my own message came back to me as a wake.
       if (this.identities(as).includes(delivery.from)) return;
+      // ONE LINE PER MESSAGE, whatever Slack calls the event. An app subscribed
+      // to both message.channels and app_mention receives a channel mention
+      // TWICE, once under each type, and both carry the same ts. Delivering both
+      // would wake the agent twice for one question and record two inbox items
+      // that need two answers.
+      if (this.deliveredTs.has(delivery.ts)) return;
+      this.deliveredTs.add(delivery.ts);
       if (wantsAll || channels.includes(delivery.channel)) {
         onLine(delivery);
       }

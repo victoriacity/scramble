@@ -1758,6 +1758,34 @@ async function cmdDoctor(argv: string[], io: Io): Promise<number> {
   // version in its own command line; comparing that against the installed one
   // answers "is this process running the code I have" without touching mtimes,
   // which for an installed copy describe the wrong tree entirely.
+  // TWO AGENTS ON ONE APP SPLIT ITS EVENTS. Slack hands a Socket Mode event to
+  // ONE open connection per app, so two consumers on one token halve each
+  // other's delivery, silently and at random. A fourth agent measured exactly
+  // that: its listener and a second bolt app on the same adopted token were
+  // splitting mentions between "a consumer that answers and a consumer that
+  // discards them", and a human asked the same question twice inside that window
+  // (2026-08-22).
+  //
+  // Slack exposes no way to ask how many connections an app has open, so this
+  // catches the half that IS knowable: another agent in this config pointed at
+  // the same app. A consumer on another machine is invisible here, and
+  // `doctor --wake` is the probe that would catch it.
+  {
+    const cfgNow = loadSlackConfig(io);
+    const mine = cfgNow?.agents[name];
+    const sharing = Object.entries(cfgNow?.agents ?? {})
+      .filter(([other, a]) => other !== name && mine !== undefined && a.appId !== undefined && a.appId === mine.appId)
+      .map(([other]) => other);
+    if (sharing.length > 0) {
+      problems.push(
+        `${sharing.join(", ")} share this agent's Slack app (${String(mine?.appId)}). Slack gives each ` +
+          `Socket Mode event to ONE connection per app, so listeners for these agents split the ` +
+          `same events between them at random: a mention delivered to one is never delivered to ` +
+          `the others. Give each agent its own app, or run one listener for all of them.`,
+      );
+    }
+  }
+
   // A HOST WHOSE PROCESS TABLE CANNOT BE READ SAYS SO. Both listener checks read
   // /proc, which a Linux host has and others do not, and both answer "nothing
   // wrong" when they cannot look. `ok` would then mean "checked and fine" on a

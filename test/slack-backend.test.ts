@@ -96,8 +96,13 @@ function frame(ev: SlackInboundEvent, envelope = "E1"): string {
   return JSON.stringify({ type: "events_api", envelope_id: envelope, payload: { event: ev } });
 }
 
+/** A DISTINCT ts per message, as Slack gives. The fixture reused "1.1" for every
+ *  message, which no real workspace does, and the dedup that makes one message
+ *  one line however Slack types the event read two fixtures as one message. */
+let msgSeq = 0;
 function msg(over: Partial<SlackInboundEvent>): SlackInboundEvent {
-  return { type: "message", channel: "C1", user: "U111", text: "hello", ts: "1.1", ...over };
+  msgSeq += 1;
+  return { type: "message", channel: "C1", user: "U111", text: "hello", ts: `1.${msgSeq}`, ...over };
 }
 
 async function pump(n = 8): Promise<void> {

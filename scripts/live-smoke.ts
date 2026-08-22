@@ -411,10 +411,55 @@ async function stageFreshCursor(): Promise<void> {
   );
 }
 
+/** A LISTENER RUNNING A COMMIT BEHIND THE INSTALL, which doctor has to name.
+ *
+ *  This is the shape that wasted the most time today. A landed fix does not reach
+ *  a running process, so a listener keeps the code it started with, and every
+ *  surface an agent looks at describes the REPOSITORY: the log, the tests, the
+ *  version. Three times I chased a defect that was already fixed, in a listener
+ *  that had never loaded the fix.
+ *
+ *  Started from an older installed copy, which is what makes the check
+ *  meaningful: the process names its own commit in its command line, so doctor
+ *  compares two facts instead of guessing from file times. */
+async function stageStaleListener(): Promise<void> {
+  const root = `${process.env.HOME ?? ""}/.local/share/scramble`;
+  const installed = (await Bun.file(`${root}/current/src/COMMIT`).text()).trim();
+  const dirs = [...new Bun.Glob("*/src/COMMIT").scanSync(root)]
+    .map((f) => f.split("/")[0] ?? "")
+    .filter((d) => d !== "" && d !== installed && d !== "current");
+  const older = dirs[0];
+  if (!check("staleListener/haveOlder", older !== undefined, `an older installed copy to run: ${older ?? "(none)"}`)) return;
+
+  // A listener from the OLD copy, in its own process group so one kill takes it.
+  const proc = Bun.spawn(["bun", `${root}/${older}/src/bin.ts`, "listen", "--as", SELF], {
+    env,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  try {
+    await sleep(4000);
+    const d = await scramble(["doctor", "--as", SELF]);
+    const said = `${d.out}\n${d.err}`;
+    const named = said.includes(String(older)) && said.includes("different commit");
+    check(
+      "staleListener/named",
+      named,
+      named
+        ? `doctor named the listener on ${older} against the installed ${installed}`
+        : `doctor did NOT name a listener running ${older} while the install is ${installed}: ${said.trim().slice(0, 200)}`,
+    );
+  } finally {
+    proc.kill();
+    await sleep(500);
+  }
+}
+
 const STAGES: Record<string, () => Promise<void>> = {
   read: stageRead,
   resolve: stageResolve,
   attachUnmapped: stageAttachUnmapped,
+  staleListener: stageStaleListener,
   freshCursor: stageFreshCursor,
   thread: stageThread,
   attach: stageAttach,
@@ -424,7 +469,7 @@ const STAGES: Record<string, () => Promise<void>> = {
 };
 
 /** The default run. `inbound` is excluded and must be asked for by name. */
-const DEFAULT_STAGES = ["read", "resolve", "thread", "attach", "attachUnmapped", "freshCursor", "wake", "check"];
+const DEFAULT_STAGES = ["read", "resolve", "thread", "attach", "attachUnmapped", "freshCursor", "wake", "check", "staleListener"];
 
 const asked = process.argv.slice(2).filter((a) => !a.startsWith("-"));
 const run = asked.length ? asked : DEFAULT_STAGES;

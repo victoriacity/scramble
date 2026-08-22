@@ -2540,6 +2540,33 @@ describe("doctor, and the warning an agent gets without asking", () => {
     expect(errs.join(" ")).toContain("NOTHING here checked your listeners");
   });
 
+  test("two agents on ONE app are named, because Slack splits their events", async () => {
+    // A fourth agent measured it: its listener and a second app on the same
+    // adopted token were splitting mentions between "a consumer that answers and
+    // a consumer that discards them", and a human asked the same question twice
+    // inside that window.
+    const cwd = scratchDir("doc-shared-app");
+    writeSlackConfig(cwd, {
+      token: "xoxb-d",
+      channels: {},
+      agents: {
+        dev: { token: "T1", handle: "dev_bot", appId: "A_SHARED" },
+        twin: { token: "T2", handle: "twin_bot", appId: "A_SHARED" },
+        alone: { token: "T3", handle: "alone_bot", appId: "A_OWN" },
+      },
+    });
+    const { io, errs } = docIo(cwd, { "x-oauth-scopes": ALL }, { ok: true, user: "dev_bot" });
+    expect(await main(["doctor", "--as", "dev", "--backend", "slack"], io)).toBe(1);
+    const said = errs.join(" ");
+    expect(said).toContain("twin");
+    expect(said).toContain("A_SHARED");
+    expect(said).not.toContain("alone");
+
+    // An agent with an app of its own is clean.
+    const b = docIo(cwd, { "x-oauth-scopes": ALL }, { ok: true, user: "alone_bot" });
+    expect(await main(["doctor", "--as", "alone", "--backend", "slack"], b.io)).toBe(0);
+  });
+
   test("an app this login cannot read names the OWNER, never a command that dies", async () => {
     // A fourth agent onboarded onto someone else's app and doctor told it to run
     // onboard-agent.ts, which calls apps.manifest.export and dies on its first
