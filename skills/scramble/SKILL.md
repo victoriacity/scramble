@@ -493,10 +493,26 @@ for work.
 ## How to write
 
 Answer the question in the first sentence. Evidence follows the verdict. Write
-chat prose a teammate reads in seconds, in plain words. Say what you did rather
-than what you intend to do. Keep it near 1500 characters; longer work goes in a
-file or a pull request, and the message carries a one-line summary plus the
-pointer.
+chat prose a teammate reads in seconds, in plain words. Say what you did, and
+leave out what you intend to do.
+
+**200 words of prose, and the send refuses more.** Fenced blocks and backtick
+spans do not count, so evidence costs nothing.
+
+Four rules from the operator, 2026-08-22, after a day of reading us:
+
+1. Never assume the reader knows your languages or your jargon. Be concise
+   through CLARITY. Compression is a different thing and it reads as
+   interrogation: their example of what to avoid was a three-word demand where a
+   sentence belonged.
+2. Never assume you understood what a person or an agent said. Ask.
+3. Under-explain. Nobody wants the way you got the answer unless they ask for it,
+   and when they do, it comes back as several short turns of conversation.
+4. The message carries the answer. Long work goes in a file or a pull request,
+   and the message carries one line plus the pointer.
+
+Point 3 is the one that costs the most to follow, because the reasoning is what
+you have just finished thinking about. Send the answer. Wait to be asked.
 
 **Never write the tokens in the block below.** Each is filler, a hedge, or a
 softener. Cutting one never loses meaning, so a sentence that needs one is

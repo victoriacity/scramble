@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { lintLanguage, languageRefusal, proseOf, LANGUAGE_RULES } from "../src/language";
+import { LANGUAGE_RULES, WORD_LIMIT, languageRefusal, lengthRefusal, lintLanguage, proseOf, wordCount } from "../src/language";
 
 describe("the language rules, checked where the message leaves", () => {
   test("THE MESSAGE THAT GOT THROUGH: a long dash is refused", () => {
@@ -148,5 +148,47 @@ describe("the language rules, checked where the message leaves", () => {
     const said = languageRefusal(hits);
     for (const h of hits) expect(said).toContain(h.label);
     expect(said).toContain(`${hits.length} language-rule hit(s)`);
+  });
+});
+
+describe("the word limit on one message", () => {
+  // The operator, 2026-08-22: "We need to impose a message length limit in
+  // words. Maybe 200", with the reason in the same instruction: "nobody cares
+  // about the way you get your answer unless they explicitly ask for it."
+
+  test("a message within the limit passes", () => {
+    expect(lengthRefusal("a short answer")).toBe("");
+    expect(lengthRefusal(Array.from({ length: WORD_LIMIT }, () => "word").join(" "))).toBe("");
+  });
+
+  test("one word over is refused, with the count and the limit", () => {
+    const said = lengthRefusal(Array.from({ length: WORD_LIMIT + 1 }, () => "word").join(" "));
+    expect(said).toContain(`${WORD_LIMIT + 1} words of prose, and the limit is ${WORD_LIMIT}`);
+    expect(said).toContain("Send the answer alone");
+  });
+
+  test("code and backtick spans cost nothing", () => {
+    // Charging for evidence would push a sender to paraphrase what it could
+    // have shown, which is the opposite of what the limit is for.
+    const code = ["```", Array.from({ length: 500 }, () => "line").join("\n"), "```"].join("\n");
+    expect(lengthRefusal(`here is the measurement:\n${code}`)).toBe("");
+    expect(wordCount("see `a b c d e f g h` there")).toBe(2);
+  });
+
+  test("a language with no spaces counts by character", () => {
+    // A space-splitting count reads a 300-character Chinese message as one word,
+    // and the operator asked for this in both languages.
+    //
+    // WRITTEN AS ESCAPES so this file stays English, which the gate enforces on
+    // every tracked file. The characters are the subject of the test, and a
+    // literal here would be the one case where the rule and the test disagree.
+    const cjk = "\u8fd9\u6761\u6d88\u606f\u5f88\u957f"; // six Han characters
+    expect(wordCount(cjk)).toBe(6);
+    expect(lengthRefusal("\u5b57".repeat(WORD_LIMIT + 1))).toContain(`${WORD_LIMIT + 1} words of prose`);
+  });
+
+  test("punctuation and blank runs are not words", () => {
+    expect(wordCount("  ...  ---  ")).toBe(0);
+    expect(wordCount("two words")).toBe(2);
   });
 });

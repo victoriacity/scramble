@@ -30,7 +30,7 @@ import {
 } from "./attachments";
 import { StatusManager } from "./status";
 import { SCOPE_NAMES, BOT_EVENT_NAMES } from "./app-manifest";
-import { lintLanguage, languageRefusal, lineOf } from "./language";
+import { languageRefusal, lengthRefusal, lineOf, lintLanguage } from "./language";
 import {
   originOf,
   peersPath,
@@ -1493,28 +1493,41 @@ async function cmdInbox(argv: string[], io: Io): Promise<number> {
   const sub = positionals[0] ?? "pending";
   const name = nameFor(flags, io);
   if (sub === "close") {
-    const id = positionals[1];
+    // MORE THAN ONE ID, because a thread of other people's work hands you a
+    // batch. I closed eight items one command at a time in ten minutes, which is
+    // the shape that teaches an agent to stop reading its own list.
+    //
+    // The bulk case where the agent SPEAKS is already covered elsewhere: a reply
+    // in a channel closes everything older there. This is for the case where it
+    // says nothing, and the reason then covers every id in the call.
+    const ids = positionals.slice(1);
     const why = flags.get("why");
-    if (id === undefined || id === "" || why === undefined || why.trim() === "") {
+    if (ids.length === 0 || why === undefined || why.trim() === "") {
       io.writeErr(
-        "inbox close needs the id and a reason: inbox close <ts> --why <text>. " +
-          "The reason is stored on the row, because closing with no reply is the agent " +
+        "inbox close needs at least one id and a reason: inbox close <ts> [<ts>...] --why <text>. " +
+          "The reason is stored on every row it closes, because closing with no reply is the agent " +
           "deciding an obligation is settled and that decision belongs on the record.",
       );
       return 1;
     }
-    const r = closeItemById(inboxPath(slackConfigPath(io), name), id, why.trim());
-    if (r.ok) {
-      io.writeErr(`closed ${id} with no reply: ${why.trim()}`);
-      return 0;
+    let failed = 0;
+    for (const id of ids) {
+      const r = closeItemById(inboxPath(slackConfigPath(io), name), id, why.trim());
+      if (r.ok) {
+        io.writeErr(`closed ${id} with no reply: ${why.trim()}`);
+        continue;
+      }
+      failed += 1;
+      // EVERY ID IS REPORTED, and one failure never hides the rest: a batch that
+      // stopped at the first bad id would leave the others silently untouched.
+      io.writeErr(
+        r.why === "answered"
+          ? `${id} was already answered by ${String(r.answeredBy)}, so there was nothing to close.`
+          : `${id} is not an open item for ${name}. \`inbox pending\` lists what is open, and ` +
+            `\`inbox trace ${id}\` says whether it ever reached this agent.`,
+      );
     }
-    io.writeErr(
-      r.why === "answered"
-        ? `${id} was already answered by ${String(r.answeredBy)}, so there was nothing to close.`
-        : `${id} is not an open item for ${name}. \`inbox pending\` lists what is open, and ` +
-          `\`inbox trace ${id}\` says whether it ever reached this agent.`,
-    );
-    return 1;
+    return failed === 0 ? 0 : 1;
   }
   if (sub === "trace") {
     const id = positionals[1];
@@ -1624,6 +1637,15 @@ async function cmdMessage(args: string[], io: Io, backend: "local" | "slack"): P
       const refusal = languageRefusal(lintLanguage(text));
       if (refusal !== "") {
         io.writeErr(refusal);
+        return 1;
+      }
+      // LENGTH IS CHECKED HERE TOO, for the same reason the language rules are:
+      // a limit the sender has to remember is a limit that holds until the
+      // sender is busy. Operator, 2026-08-22: "We need to impose a message
+      // length limit in words. Maybe 200."
+      const tooLong = lengthRefusal(text);
+      if (tooLong !== "") {
+        io.writeErr(tooLong);
         return 1;
       }
       // A REPLY GOES IN THE THREAD IT ANSWERS, by default (operator,
@@ -2432,7 +2454,7 @@ const USAGE = [
   "  inbox pending                                   lines addressed to you with no reply",
   "  peers             [--same-dir]                 who else is running, on which host, in which dir",
   "  inbox trace <ts>                                did that message reach you, and wake you",
-  "  inbox close <ts>  --why <text>                  settle an item the sender said needs no reply",
+  "  inbox close <ts>… --why <text>                 settle items the sender said need no reply",
   "  lint <file>...                                  the send's language rules, on any file",
   "  listen            [--addressed]                 stream deliveries, one JSON line each",
   "  next              [--timeout N]                 one delivery, then exit",

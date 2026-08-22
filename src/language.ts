@@ -153,6 +153,48 @@ export function lintLanguage(text: string, rules: LanguageRule[] = LANGUAGE_RULE
 }
 
 /** The refusal an agent reads, naming every hit. Empty when the text is clean. */
+/** The word limit on one message.
+ *
+ *  The operator, 2026-08-22: "We need to impose a message length limit in words.
+ *  Maybe 200", after a day of messages from three agents that buried their
+ *  answer in the reasoning behind it. From the same instruction: "nobody cares
+ *  about the way you get your answer unless they explicitly ask for it. Even if a
+ *  detailed explanation is communicated, the only allowed way for it to be done
+ *  is multiple rounds of back and forth conversation."
+ *
+ *  So the limit is a REFUSAL and not a warning: the long version is meant to
+ *  become several short turns, and a warning would leave that to the sender who
+ *  just wrote 900 words. */
+export const WORD_LIMIT = 200;
+
+/** Words of PROSE in a message. Fenced blocks and backtick spans do not count:
+ *  a measurement, a command or a log line is the evidence someone asked for, and
+ *  charging for it would push a sender to paraphrase what it could have shown.
+ *  Everything outside them counts, in any language: a run of CJK characters with
+ *  no spaces counts by character, since a space-splitting count would read a
+ *  300-character Chinese message as one word. */
+export function wordCount(text: string): number {
+  const prose = proseOf(text);
+  const cjk = prose.match(/[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]/g)?.length ?? 0;
+  const latin = prose
+    .replace(/[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]/g, " ")
+    .split(/\s+/)
+    .filter((w) => w.replace(/[^\p{L}\p{N}]/gu, "") !== "").length;
+  return cjk + latin;
+}
+
+/** The refusal for a message over the limit, or "" when it is within it. */
+export function lengthRefusal(text: string): string {
+  const n = wordCount(text);
+  if (n <= WORD_LIMIT) return "";
+  return (
+    `message send REFUSED: ${n} words of prose, and the limit is ${WORD_LIMIT}.\n` +
+    `Send the answer alone. What you cut is the reasoning behind it, which the reader ` +
+    `asks for when they want it, in the next message.\n` +
+    `Code blocks and backtick spans are not counted, so evidence costs nothing.`
+  );
+}
+
 export function languageRefusal(hits: LanguageHit[]): string {
   if (hits.length === 0) return "";
   const lines = hits.map((h) => `  [${h.label}] ${JSON.stringify(h.match)}`);

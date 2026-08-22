@@ -975,6 +975,10 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     const b = stubIo(cwd, async () => new Response("{}", { status: 200 }));
     expect(await main(["inbox", "close", "m1", "--as", "dev"], b.io)).toBe(1);
     expect(b.errs.join(" ")).toContain("belongs on the record");
+    // And no ids at all is the same refusal.
+    const b2 = stubIo(cwd, async () => new Response("{}", { status: 200 }));
+    expect(await main(["inbox", "close", "--why", "x", "--as", "dev"], b2.io)).toBe(1);
+    expect(b2.errs.join(" ")).toContain("at least one id");
     // With one: settled, nothing sent, and pending goes quiet.
     const c = stubIo(cwd, async () => new Response("{}", { status: 200 }));
     expect(await main(["inbox", "close", "m1", "--why", "sender said no reply needed", "--as", "dev"], c.io)).toBe(0);
@@ -989,6 +993,41 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     const f = stubIo(cwd, async () => new Response("{}", { status: 200 }));
     expect(await main(["inbox", "close", "999.9", "--why", "x", "--as", "dev"], f.io)).toBe(1);
     expect(f.errs.join(" ")).toContain("inbox trace 999.9");
+  });
+
+  test("a message over the word limit is REFUSED at the send", async () => {
+    // Operator, 2026-08-22: "We need to impose a message length limit in words.
+    // Maybe 200." A refusal and not a warning: the long version is meant to
+    // become several short turns, and a warning leaves that to the sender who
+    // just wrote 900 words.
+    const cwd = scratchDir("send-toolong");
+    const { io, errs } = stubIo(cwd, async () => new Response(JSON.stringify({ crossings: [] }), { status: 200 }));
+    io.readStdin = async () => Array.from({ length: 260 }, () => "word").join(" ");
+    expect(await main(["message", "send", "--target", "general", "--as", "dev"], io)).toBe(1);
+    expect(errs.join(" ")).toContain("260 words of prose, and the limit is 200");
+  });
+
+  test("`inbox close` takes SEVERAL ids, and one bad id never hides the rest", async () => {
+    // A thread of other people's work hands you a batch: I closed eight items one
+    // command at a time in ten minutes, which is the shape that teaches an agent
+    // to stop reading its own list. A batch that stopped at the first bad id
+    // would leave the others silently untouched, which is the same defect.
+    const cwd = scratchDir("inbox-close-many");
+    mkdirSync(join(cwd, ".scramble", "inbox"), { recursive: true });
+    const row = (id: string): string =>
+      JSON.stringify({ id, channel: "general", from: "andrew", text: "q", at: "2026-08-22T00:00:00Z" });
+    writeFileSync(join(cwd, ".scramble", "inbox", "dev.jsonl"), `${row("1.1")}\n${row("2.2")}\n${row("3.3")}\n`);
+    const { io, errs } = stubIo(cwd, async () => new Response("{}", { status: 200 }));
+    expect(await main(["inbox", "close", "1.1", "999.9", "3.3", "--why", "not mine", "--as", "dev"], io)).toBe(1);
+    const said = errs.join(" ");
+    expect(said).toContain("closed 1.1 with no reply: not mine");
+    expect(said).toContain("closed 3.3 with no reply: not mine");
+    expect(said).toContain("999.9 is not an open item");
+    // The two good ones ARE closed, and the untouched one is still open.
+    const p = stubIo(cwd, async () => new Response("{}", { status: 200 }));
+    expect(await main(["inbox", "pending", "--as", "dev"], p.io)).toBe(1);
+    expect(p.writes).toHaveLength(1);
+    expect(p.writes.join(" ")).toContain("2.2");
   });
 
   test("`inbox trace` without an id refuses instead of tracing nothing", async () => {
