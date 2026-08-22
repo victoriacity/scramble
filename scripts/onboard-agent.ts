@@ -139,6 +139,18 @@ async function api(
           `command refreshes it: run \`slack auth list\`, then this script again.`,
       );
     }
+    if (err === "no_permission" && method === "apps.manifest.export") {
+      die(
+        `this login cannot read app ${String(body.app_id)}, so scramble cannot check or repair\n` +
+          `its scopes and events. That app was created by someone else, and onboarding an agent\n` +
+          `onto a foreign app leaves the two things delivery needs outside anyone's reach here:\n` +
+          `the four bot events (message.channels, message.groups, message.im,\n` +
+          `member_joined_channel) and the scope list. A fourth agent hit exactly this\n` +
+          `(2026-08-22): reads worked, 14 lines came back, and no message could ever arrive.\n` +
+          `Either have the app's owner add them, or let this script create an app for the\n` +
+          `agent by removing its entry from the config and running again.`,
+      );
+    }
     if (err === "app_approval_request_eligible") {
       die(
         `${method} answered app_approval_request_eligible for team ${String(j.team_id)}.\n` +
@@ -559,22 +571,50 @@ writeFileSync(cfgPath, `${JSON.stringify(cfg, null, 2)}\n`);
 chmodSync(cfgPath, 0o600);
 console.log(`onboard: wrote ${cfgPath} (mode 600, outside the repo)`);
 
-// Verify with the product, not with the API: a read is what the agent will run.
-if (channelName !== undefined) {
-  const p = Bun.spawn(["bun", "src/bin.ts", "message", "read", "--target", channelName, "--as", agent], {
+/** Run a scramble verb and hand back everything it said. */
+async function verb(args: string[]): Promise<{ code: number; out: string; err: string }> {
+  const proc = Bun.spawn(["bun", "src/bin.ts", ...args], {
     env: { ...process.env, SCRAMBLE_BACKEND: "slack" },
     stdout: "pipe",
     stderr: "pipe",
   });
-  const [out, err] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text()]);
-  const code = await p.exited;
-  const lines = out.split("\n").filter((l) => l.startsWith("{")).length;
-  console.log(`onboard: verify read exit ${code}, ${lines} line(s)${err.trim() ? `, stderr: ${err.trim().split("\n")[0]}` : ""}`);
-  if (code !== 0) {
+  const [o, e] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
+  return { code: await proc.exited, out: o, err: e };
+}
+
+// VERIFY THE WAKE PATH, NOT THE READ PATH.
+//
+// This ended on a `message read` and called that verification. A fourth agent
+// onboarded, got 14 lines from a read, reported success, and could receive
+// nothing: its app subscribed to app_mention and to none of the four events
+// delivery needs. Their words (2026-08-22): "onboarding verifies the read path
+// and never the wake path, so an agent can finish JOIN.md, report success, and
+// receive nothing." They asked whether onboarding should end on `doctor --wake`.
+// It should, and it does.
+//
+// A read proves the token and the invite. It says nothing about whether a
+// message will ever arrive, and those are the two halves an agent needs.
+if (channelName !== undefined) {
+  const read = await verb(["message", "read", "--target", channelName, "--as", agent]);
+  const lines = read.out.split("\n").filter((l) => l.startsWith("{")).length;
+  console.log(`onboard: read ${read.code === 0 ? "works" : `refused (exit ${read.code})`}, ${lines} line(s)`);
+  if (read.code !== 0) {
     console.log(
-      `onboard: the read is refused until the invite lands, which is expected. Run it\n` +
-        `         again after the /invite above to confirm.`,
+      `onboard: the read is refused until the invite lands, which is expected.\n` +
+        `         Run this script again after the /invite above.`,
     );
+  } else {
+    const wake = await verb(["doctor", "--as", agent, "--wake", channelName]);
+    if (wake.code === 0 && wake.out.includes('"doctor":"wake"')) {
+      console.log(`onboard: the wake path DELIVERS. This agent will receive what is sent to it.`);
+    } else {
+      console.log(
+        `onboard: THE WAKE PATH DID NOT DELIVER, and a read working says nothing about it.\n` +
+          `         This agent can send and read, and a message addressed to it may never\n` +
+          `         arrive. What the check said:\n` +
+          (wake.err.trim() === "" ? "         (nothing on stderr)" : `         ${wake.err.trim().split("\n").join("\n         ")}`),
+      );
+    }
   }
 }
 console.log(
