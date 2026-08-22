@@ -30,7 +30,8 @@ describe("the language rules, checked where the message leaves", () => {
       ["en dash", "One thing – another thing."],
       ["'layer' as a name", "Add a validation layer above it."],
       ["adverb parked between commas", "The read, obviously, returned nothing."],
-      ["contrast tail at sentence end", "Slack answered with a refusal, not a miss."],
+      ["antithesis (A not B / A rather than B)", "It is per turn, not per item."],
+      ["contrast tail at sentence end", "The walk was a hundred times the size, worse than useless."],
       ["redundant closer / meta-commentary", "In short, the invite delivered nothing."],
     ];
     // Every rule in the list has a case here, so a rule added without one fails

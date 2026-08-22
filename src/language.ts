@@ -63,12 +63,23 @@ export const LANGUAGE_RULES: LanguageRule[] = [
     label: "adverb parked between commas",
     rx: /,\s*(honestly|frankly|basically|essentially|actually|candidly|truthfully|plainly|clearly|simply|obviously)\s*,/gi,
   },
+  // ANTITHESIS (operator 2026-08-22): "A not B or A rather than B or anything
+  // else like this is AI slop". The construction defines a thing by what it is
+  // not, which takes two clauses to say what one says: write the thing.
+  //
+  // This rule OWNS the construction, so the trailing-aside rule below no longer
+  // lists `not` — two rules matching one move would report it twice and neither
+  // would be the place to fix it.
+  {
+    label: "antithesis (A not B / A rather than B)",
+    rx: /\brather than\b|\binstead of\b|,\s*not\b|\bnot\b[^.\n]{0,40}\bbut\b/gi,
+  },
   // TRAILING ASIDE (operator 2026-08-21, on the heading "the wake path, before
   // you speak"): a qualification tacked on after a comma belongs inside the
   // sentence or in its own sentence.
   {
     label: "contrast tail at sentence end",
-    rx: /,\s+(not|never|worse|better|only|just|less|more)\b[^.!?\n]{0,30}[.!?]/gi,
+    rx: /,\s+(never|worse|better|only|just|less|more)\b[^.!?\n]{0,30}[.!?]/gi,
   },
   // REDUNDANT CLOSER (operator 2026-08-21, on "This is the whole memory story:
   // no side directory, no index file to maintain"): a sentence that restates the
