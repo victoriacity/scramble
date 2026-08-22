@@ -15,6 +15,7 @@ import type { Delivery, Message, Attachment } from "./types";
 import { DM_PREFIX } from "./types";
 import type { SlackSocket } from "./slack-transport";
 import { STATUS_METADATA_TYPE } from "./status";
+import { originMetadata, readOrigin, type Origin } from "./origin";
 import { downloadFile, uploadToSlack, type SlackFileMeta } from "./attachments";
 
 // --- slack endpoint URLs ------------------------------------------------
@@ -68,8 +69,9 @@ export interface SlackInboundEvent {
   /** `member_joined_channel` carries the id of the member who joined and, when
    *  someone added them, the inviter. */
   inviter?: string;
-  /** Slack message metadata; a scramble status carries STATUS_METADATA_TYPE. */
-  metadata?: { event_type?: string };
+  /** Slack message metadata; a scramble status carries STATUS_METADATA_TYPE and
+   *  an ordinary message carries its sender's ORIGIN_METADATA_TYPE. */
+  metadata?: { event_type?: string; event_payload?: Record<string, unknown> };
   subtype?: string;
   text?: string;
   channel?: string;
@@ -106,6 +108,9 @@ export interface SlackBackendConfig {
   agents: Record<string, { token?: string; appToken?: string; handle?: string; appId?: string }>;
   /** Slack user id of the human who authorized this machine's session. */
   humanUserId?: string;
+  /** Where THIS process runs, stamped onto every message it posts so peers can
+   *  learn it without anyone typing it into prose. */
+  origin?: Origin;
   /** The Slack CLI's app-configuration token, when this host has one. It is the
    *  ONLY credential that can read another app's description
    *  (apps.manifest.export), since users.info returns an empty title for a bot
@@ -170,8 +175,9 @@ async function readOk<T = Record<string, unknown>>(
 /** A line (message) read from conversations.history. */
 export interface SlackHistoryMessage {
   ts?: string;
-  /** Slack message metadata; a scramble status carries STATUS_METADATA_TYPE. */
-  metadata?: { event_type?: string };
+  /** Slack message metadata; a scramble status carries STATUS_METADATA_TYPE and
+   *  an ordinary message carries its sender's ORIGIN_METADATA_TYPE. */
+  metadata?: { event_type?: string; event_payload?: Record<string, unknown> };
   thread_ts?: string;
   /** Slack's count of replies under this message when it is a threaded root
    *  (reply_count above zero with thread_ts equal to its own ts marks the
@@ -275,6 +281,7 @@ export class SlackBackend {
   private rosterLoaded = false;
   private readonly rosterMisses = new Set<string>();
   private readonly roster: Record<string, string>;
+  private readonly origin: Origin | undefined;
   private readonly filesDir: string;
   /** Cache of users.info answers so a repeat unknown id never re-queries. The
    *  key is `<acting token>:<user id>` because each agent resolves names under
@@ -293,6 +300,7 @@ export class SlackBackend {
     this.humanUserId = cfg.humanUserId;
     this.cliToken = cfg.cliToken;
     this.roster = cfg.roster;
+    this.origin = cfg.origin;
     this.filesDir = cfg.filesDir;
     this.dmChannels = cfg.dmChannels;
     this.channelById = Object.fromEntries(Object.entries(cfg.channels).map(([r, c]) => [c, r]));
@@ -777,6 +785,11 @@ export class SlackBackend {
         channel: slackChannel,
         text: denormalize(text, this.roster),
         ...(thread !== undefined ? { thread_ts: thread } : {}),
+        // WHERE THIS AGENT RUNS, on the message itself. Slack carries metadata
+        // through history and through the socket, which is how a peer's status
+        // line is already recognised, so this needs no app change from anyone
+        // and works for an app owned by a different login.
+        ...(this.origin === undefined ? {} : { metadata: originMetadata(this.origin) }),
       }),
     });
     if (!r.ok) return { ok: false, error: r.error };
@@ -1045,6 +1058,9 @@ export class SlackBackend {
     // The GUARD is on the call, not inside it: an `await` on the delivery path
     // costs a turn of the event loop even when the function returns at once, and
     // this lookup is impossible without the CLI credential anyway.
+    // The sender's own account of where it runs. Malformed metadata reads as no
+    // origin and never blocks the delivery: the message is the point.
+    const origin = readOrigin(ev.metadata);
     const description =
       wantThreadWake && this.cliToken !== undefined && this.cliToken !== ""
         ? await this.describeSender(token, ev)
@@ -1067,6 +1083,7 @@ export class SlackBackend {
       ...(thread !== undefined ? { thread } : {}),
       ...(this.senderKind(ev) !== undefined ? { sender: this.senderKind(ev) } : {}),
       ...(wantThreadWake && description !== undefined ? { description } : {}),
+      ...(origin === undefined ? {} : { origin }),
     };
     if (dl.files.length > 0) delivery.files = dl.files;
     return { delivery, problems: dl.problems };
@@ -1181,7 +1198,12 @@ export class SlackBackend {
   ): Promise<number> {
     if (isStatusLine(m)) return seq;
     const { delivery, problems: dlProblems } = await this.toDelivery(
-      { type: "message", channel: slackChannel, user: m.user, username: m.user, ts: m.ts, thread_ts: m.thread_ts, text: m.text, bot_id: m.bot_id, files: m.files },
+      // METADATA IS CARRIED THROUGH. This projection names every field the
+      // converter may read, so a field left out of it is invisible on the drain
+      // path while working on the socket. The sender's origin arrived that way:
+      // stamped, delivered live, and dropped by `message check` because this
+      // list did not mention it.
+      { type: "message", channel: slackChannel, user: m.user, username: m.user, ts: m.ts, thread_ts: m.thread_ts, text: m.text, bot_id: m.bot_id, files: m.files, metadata: m.metadata },
       as,
       token,
       forDelivery,

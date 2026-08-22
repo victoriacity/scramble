@@ -32,6 +32,14 @@ import { StatusManager } from "./status";
 import { SCOPE_NAMES, BOT_EVENT_NAMES } from "./app-manifest";
 import { lintLanguage, languageRefusal, lineOf } from "./language";
 import {
+  originOf,
+  peersPath,
+  peersReport,
+  readPeers,
+  recordPeer,
+  type Origin,
+} from "./origin";
+import {
   closeAnsweredBefore,
   closeInboxItems,
   closeItemById,
@@ -71,6 +79,10 @@ export interface Io {
    *  file an install writes beside it. The real value comes from src/bin.ts;
    *  absent under test, which reads as a checkout. */
   moduleDir?(): string;
+  /** This machine's hostname, for the origin an agent publishes on its messages.
+   *  A seam so a test is deterministic, and absent means this build publishes no
+   *  origin at all. */
+  hostname?(): string;
 }
 
 /** The CLI owns --bind string parsing. The one interpretation site: it turns a
@@ -784,6 +796,17 @@ export function slackCliToken(io: Io): string | undefined {
   return undefined;
 }
 
+/** Where THIS process runs, or undefined when the host cannot be read.
+ *
+ *  Undefined means this build publishes NO origin, which is the honest state for
+ *  an Io with no hostname seam. A guessed host would be worse than none: a peer
+ *  reading it would believe it. */
+export function agentOrigin(io: Io): Origin | undefined {
+  const host = io.hostname === undefined ? "" : io.hostname();
+  if (host === "") return undefined;
+  return originOf(host, io.cwd(), installedCommit(io));
+}
+
 function slackBackend(io: Io): { backend?: SlackBackend; error?: string } {
   const cfg = loadSlackConfig(io);
   if (cfg === null) return { error: `${slackConfigPath(io)} is missing or malformed` };
@@ -800,6 +823,7 @@ function slackBackend(io: Io): { backend?: SlackBackend; error?: string } {
       filesDir: slackFilesDir(io),
       humanUserId: cfg.humanUserId,
       cliToken: slackCliToken(io),
+      ...(agentOrigin(io) === undefined ? {} : { origin: agentOrigin(io) }),
     },
     { fetch: io.fetch, createSocket: io.createSocket, sleep: io.sleep },
   );
@@ -1439,6 +1463,24 @@ async function cmdLint(argv: string[], io: Io): Promise<number> {
   return total === 0 ? 0 : 1;
 }
 
+/** `scramble peers [--same-dir]`: who else is running, on which host, in which
+ *  directory.
+ *
+ *  The operator, 2026-08-22: "Does each agent record its hostname and working
+ *  directory on scramble and an agent may know its same directory peers?"
+ *
+ *  `--same-dir` matches HOST AND directory together. The path alone is not an
+ *  identity: two agents measured the SAME absolute path on two machines, backed
+ *  by different filesystems, and neither could see the other's files
+ *  (2026-08-22). Grouping by path would have told them they shared a directory
+ *  when they shared a string. */
+async function cmdPeers(argv: string[], io: Io): Promise<number> {
+  const { flags } = parseArgs(argv);
+  const rows = readPeers(peersPath(slackConfigPath(io)));
+  io.write(peersReport(rows, agentOrigin(io), flags.has("same-dir")));
+  return 0;
+}
+
 /** `scramble inbox pending --as <name>`: every line addressed to this agent that
  *  nothing has answered, one JSON object per line, and EXIT 1 while any is open.
  *
@@ -1522,6 +1564,21 @@ function emitDelivery(io: Io, agent: string, line: Record<string, unknown>, addr
   // the second kind of row, the ledger's silence about a message has two
   // meanings and no way to choose, which is what sent four agents grepping a
   // text log for a timestamp.
+  // WHERE THE SENDER RUNS, recorded from its own stamp. Learned passively from
+  // any message, addressed or not, since knowing where a peer is does not depend
+  // on it talking to you.
+  const from = typeof line.from === "string" ? line.from : "";
+  const org = line.origin;
+  if (from !== "" && from !== agent && typeof org === "object" && org !== null) {
+    const o = org as Origin;
+    if (typeof o.host === "string" && typeof o.dir === "string") {
+      try {
+        recordPeer(peersPath(slackConfigPath(io)), from, o, new Date().toISOString());
+      } catch (e) {
+        io.writeErr(`peer record not written for ${from}: ${String(e)}`);
+      }
+    }
+  }
   const addressed = isAddressed(line, names);
   // THE FILTER LIVES HERE, where `addressed` is computed, and never in a grep
   // downstream. `scripts/inbox.sh` matched the literal `"mentioned":true`
@@ -2373,6 +2430,7 @@ const USAGE = [
   "  message check                                   drain what arrived, and what you owe",
   "  message react     --target <channel> --to <ts> --emoji <name>",
   "  inbox pending                                   lines addressed to you with no reply",
+  "  peers             [--same-dir]                 who else is running, on which host, in which dir",
   "  inbox trace <ts>                                did that message reach you, and wake you",
   "  inbox close <ts>  --why <text>                  settle an item the sender said needs no reply",
   "  lint <file>...                                  the send's language rules, on any file",
@@ -2422,6 +2480,8 @@ export async function main(argv: string[], io: Io): Promise<number> {
       return cmdProfile(argv.slice(1), io);
     case "channel":
       return cmdChannel(argv.slice(1), io);
+    case "peers":
+      return cmdPeers(argv.slice(1), io);
     case "inbox":
       return cmdInbox(argv.slice(1), io);
     case "lint":

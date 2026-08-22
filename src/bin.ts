@@ -7,6 +7,7 @@ import { createStore, type ChannelStore } from "./store";
 import { serve, type ServeOptions } from "./server";
 import type { SlackSocket } from "./slack-transport";
 import { main } from "./cli";
+import { hostname } from "node:os";
 
 // Adapt bun's WebSocket onto the SlackSocket surface that the slack BACKEND
 // uses for its Socket Mode stream. Kept at the edge so no test needs a socket.
@@ -51,6 +52,9 @@ const io = {
   },
   moduleDir(): string {
     return import.meta.dir;
+  },
+  hostname(): string {
+    return hostname();
   },
   serve(store: ChannelStore, opts: ServeOptions): Promise<number> {
     const srv = serve(store, opts);

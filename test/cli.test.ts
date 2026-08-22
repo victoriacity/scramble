@@ -1291,6 +1291,90 @@ describe("message check under the slack backend", () => {
     return { ...base, ...over };
   }
 
+  test("a peer's ORIGIN is learned from its message metadata, and `peers` names it", async () => {
+    // The operator, 2026-08-22: "Does each agent record its hostname and working
+    // directory on scramble and an agent may know its same directory peers?"
+    // It rides on Slack message metadata, the channel a status line already
+    // uses, so it needs no app change and works for an app owned by another
+    // login. Learned from ANY message, addressed or not.
+    const cwd = scratchDir("peers-origin");
+    const io = slackCheckIo(cwd, {
+      hostname: () => "my-host",
+      fetch: async (url) =>
+        String(url).includes("conversations.history")
+          ? new Response(
+              JSON.stringify({
+                ok: true,
+                messages: [
+                  {
+                    ts: "9.9",
+                    user: "U9",
+                    text: "a line that names nobody",
+                    metadata: {
+                      event_type: "scramble_origin",
+                      event_payload: { host: "peer-host", dir: "/srv/peer-work", commit: "abc1234" },
+                    },
+                  },
+                ],
+              }),
+              { status: 200 },
+            )
+          : new Response(JSON.stringify({ ok: true, messages: [] }), { status: 200 }),
+    });
+    expect(await main(["message", "check", "--as", "dev", "--backend", "slack"], io)).toBe(0);
+    const p = stubIo(cwd, async () => new Response("{}", { status: 200 }));
+    expect(await main(["peers"], { ...p.io, hostname: () => "my-host" })).toBe(0);
+    expect(p.writes.join(" ")).toContain("peer-host  /srv/peer-work  (abc1234)");
+    // --same-dir compares HOST and directory together, so a peer elsewhere drops.
+    const q = stubIo(cwd, async () => new Response("{}", { status: 200 }));
+    expect(await main(["peers", "--same-dir"], { ...q.io, hostname: () => "my-host" })).toBe(0);
+    expect(q.writes.join(" ")).toContain("No peers running in");
+  });
+
+  test("an unwritable peers record REPORTS itself and still delivers", async () => {
+    // Knowing where a peer runs is accounting; the message is the point. A
+    // record that cannot be written must not swallow the delivery, and must not
+    // go quiet about it either.
+    const cwd = scratchDir("peers-locked");
+    const io = slackCheckIo(cwd, {
+      hostname: () => "my-host",
+      fetch: async (url) =>
+        String(url).includes("conversations.history")
+          ? new Response(
+              JSON.stringify({
+                ok: true,
+                messages: [
+                  {
+                    ts: "9.9",
+                    user: "U9",
+                    text: "a line",
+                    metadata: { event_type: "scramble_origin", event_payload: { host: "h", dir: "/w" } },
+                  },
+                ],
+              }),
+              { status: 200 },
+            )
+          : new Response(JSON.stringify({ ok: true, messages: [] }), { status: 200 }),
+    });
+    const errs: string[] = [];
+    const writes: string[] = [];
+    const watched: Io = { ...io, writeErr: (l) => errs.push(l), write: (l) => writes.push(l) };
+    // A DIRECTORY where the record belongs: the append throws, while everything
+    // else under .scramble stays writable, so the test proves the delivery
+    // survives THIS failure and not some other one.
+    mkdirSync(join(cwd, ".scramble", "peers.jsonl"), { recursive: true });
+    expect(await main(["message", "check", "--as", "dev", "--backend", "slack"], watched)).toBe(0);
+    expect(writes.length).toBeGreaterThan(0);
+    expect(errs.join(" ")).toContain("peer record not written for");
+  });
+
+  test("`peers` on a build with no hostname seam publishes nothing and says so", async () => {
+    const cwd = scratchDir("peers-nohost");
+    const p = stubIo(cwd, async () => new Response("{}", { status: 200 }));
+    expect(await main(["peers"], p.io)).toBe(0);
+    expect(p.writes.join(" ")).toContain("No peers have been seen yet");
+  });
+
   test("a status in an UNMAPPED channel resolves live, the way sending does", async () => {
     // Measured live on 2026-08-22: an agent invited into a channel could send to
     // it, because the post path asks Slack, while the status path read the

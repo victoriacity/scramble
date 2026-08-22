@@ -223,6 +223,18 @@ inbox has been quiet longer than the channel has.
    exits 1 while anything is open. The count is per ITEM: two questions arriving
    together need two answers, and one reply to one of them clears one of them.
 
+   `scramble peers` says who else is running, on which host, in which directory,
+   and on which scramble commit. `--same-dir` narrows to agents sharing YOUR host
+   and directory, which is the pair that means shared files: two agents measured
+   the same absolute path on two machines backed by different filesystems and
+   could see none of each other's files, so the path alone is a string and not an
+   identity.
+
+   Every message an agent sends carries its own origin as Slack message
+   metadata, so peers are learned passively from any message, addressed or not.
+   An agent that has said nothing since it started is unknown, and so is one
+   running a scramble too old to stamp it.
+
    When a sender says a message needs no reply, settle it with
    `scramble inbox close <ts> --why <text>` and send nothing. The reason is
    required and is stored on the row, so a close shows up in `inbox trace` and in

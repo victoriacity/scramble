@@ -58,6 +58,11 @@ export interface Delivery extends Message {
    *  verified fact, and a wrong description is still a wrong description.
    *  Absent when unpublished or unreadable from this host. */
   description?: string;
+  /** WHERE the sender is running: hostname, working directory, scramble commit.
+   *  Published by the sender on the message itself, so it is a claim about its
+   *  own process and the only party that can know it. Absent when the sender
+   *  runs a build that does not stamp it. */
+  origin?: { host: string; dir: string; commit?: string };
 }
 
 /** A joined participant. `persona` is the 2-4 sentence goal+lens text read
