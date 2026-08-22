@@ -203,6 +203,20 @@ describe("post", () => {
     expect(bad.ok ? "" : bad.error).toContain("this agent is not in a channel by that name");
   });
 
+  test("the two mention paths are SEPARATE: entity pings a human, text wakes an agent", async () => {
+    // The receiving agent corrected my framing, and the correction is worth a
+    // test because the two gaps want different fixes. The Slack entity drives a
+    // HUMAN's notification. The `mentioned` stamp that wakes an AGENT comes from
+    // the text's @name tokens, after inbound entities are normalized back to
+    // names, so a literal name wakes an agent and always did.
+    expect(computeMentions("general", "@dev take a look", "andrew")).toEqual(["dev"]);
+    // Which is the same answer the normalized form of an entity produces, since
+    // by delivery time <@U111> has become @ana.
+    expect(computeMentions("general", "@ana take a look", "andrew")).toEqual(["ana"]);
+    // The sender never mentions themselves into their own wake.
+    expect(computeMentions("dm/dev/ana", "no names here", "ana")).toEqual(["dev"]);
+  });
+
   test("a name the ROSTER does not know is looked up, so a new joiner gets pinged", async () => {
     // A peer measured this the hour a third agent joined: "@alignment_benchmark
     // stored as plain text with no entity, so they got no ping". The roster is

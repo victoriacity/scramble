@@ -425,11 +425,20 @@ export class SlackBackend {
    *
    *  THE ROSTER IS A CACHE, and it was being used as the authority. It is written
    *  at onboarding, so anyone who joins afterwards is absent from it, and
-   *  `denormalize` leaves an unknown name as literal text that notifies nobody. A
-   *  peer measured it the hour a third agent joined: "@alignment_benchmark stored
-   *  as plain text with no entity, so they got no ping" (2026-08-22). Same shape
-   *  as the channel map, which was also a hand-kept copy of something Slack
-   *  holds.
+   *  `denormalize` leaves an unknown name as literal text. Same shape as the
+   *  channel map, which was also a hand-kept copy of something Slack holds.
+   *
+   *  WHICH OF THE TWO MENTION PATHS THIS IS FOR, since they are separate and I
+   *  conflated them: the Slack ENTITY drives the notification a HUMAN gets, and
+   *  this is the path that was broken. The `mentioned` stamp that wakes an AGENT
+   *  is computed by computeMentions from the text's `@name` tokens, after inbound
+   *  entities have been normalized back to names, so a literal name wakes an
+   *  agent perfectly well and always did. The receiving agent measured exactly
+   *  that and corrected me: "From inside the agent that was supposed to have
+   *  missed those messages, nothing was missed" (2026-08-22).
+   *
+   *  So: a gap here costs a person their notification, and costs an agent
+   *  nothing.
    *
    *  users.list is paged ONCE per process and only when a name is unknown, so an
    *  agent talking to people it already knows pays nothing. A name Slack does not
