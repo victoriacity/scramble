@@ -55,10 +55,16 @@ describe("the language rules, checked where the message leaves", () => {
     ]) {
       expect(lintLanguage(said).length).toBeGreaterThan(0);
     }
-    // A document stating something plainly is a fact about the document, not a
-    // preamble about the speaker. Refusing it would refuse a true sentence.
-    expect(lintLanguage("The manifest says plainly which events it subscribes to.")).toEqual([]);
-    expect(lintLanguage("The error names the field plainly enough to act on.")).toEqual([]);
+    // THIRD PERSON IS NOT SPARED. I argued it should be, on the grounds that a
+    // document stating something plainly is a fact about the document rather
+    // than a preamble about the speaker. The operator refused the exemption:
+    // "Third person should not be allowed either." The word is banned outright,
+    // so there is no verb list to fall outside of.
+    expect(lintLanguage("The manifest says plainly which events it subscribes to.").length).toBeGreaterThan(0);
+    expect(lintLanguage("The error names the field plainly enough to act on.").length).toBeGreaterThan(0);
+    // And the sentence those wanted to be says the same thing without the word.
+    expect(lintLanguage("The manifest names every event it subscribes to.")).toEqual([]);
+    expect(lintLanguage("The error names the field, which is enough to act on.")).toEqual([]);
   });
 
   test("someone else's words in backticks are DATA, not this agent's prose", () => {
