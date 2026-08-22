@@ -2404,7 +2404,7 @@ describe("doctor, and the warning an agent gets without asking", () => {
     expect(await main(["doctor", "--as", "dev", "--backend", "slack"], io)).toBe(0);
   });
 
-  test("an unreadable CLI credential, an empty one, and a refused export all leave the question open", async () => {
+  test("no CLI credential leaves the question open; a REFUSED export is reported", async () => {
     // Each of these means "cannot tell", and a check that cannot tell must not
     // report a defect: a false alarm on the wake path would send an agent to
     // reinstall an app that is fine.
@@ -2444,11 +2444,13 @@ describe("doctor, and the warning an agent gets without asking", () => {
       mkdirSync(join(h, ".slack"), { recursive: true });
       writeFileSync(join(h, ".slack", "credentials.json"), JSON.stringify({ E1: {} }));
     }, true)).toBe(0);
-    // the export itself is refused
+    // A REFUSED EXPORT IS NO LONGER AN OPEN QUESTION. With a credential present
+    // and the export refused, the app is not this login's to read, so its scopes
+    // and events cannot be checked or repaired from here, and that is reported.
     expect(await run((h) => {
       mkdirSync(join(h, ".slack"), { recursive: true });
       writeFileSync(join(h, ".slack", "credentials.json"), JSON.stringify({ E1: { token: "x" } }));
-    }, false)).toBe(0);
+    }, false)).toBe(1);
   });
 
   test("an agent with no recorded appId leaves the org-deploy question open", async () => {
@@ -2536,6 +2538,45 @@ describe("doctor, and the warning an agent gets without asking", () => {
     };
     expect(await main(["doctor", "--as", "dev", "--backend", "slack"], io)).toBe(1);
     expect(errs.join(" ")).toContain("NOTHING here checked your listeners");
+  });
+
+  test("an app this login cannot read names the OWNER, never a command that dies", async () => {
+    // A fourth agent onboarded onto someone else's app and doctor told it to run
+    // onboard-agent.ts, which calls apps.manifest.export and dies on its first
+    // call for the same reason: "The repair line assumes the agent owns the app."
+    const home = scratchDir("doc-foreign-home");
+    mkdirSync(join(home, ".slack"), { recursive: true });
+    writeFileSync(join(home, ".slack", "credentials.json"), JSON.stringify({ E1: { token: "xoxe-cli" } }));
+    const cwd = scratchDir("doc-foreign");
+    writeSlackConfig(cwd, {
+      token: "xoxb-d",
+      channels: {},
+      agents: { dev: { token: "T", handle: "dev_bot", appId: "A_SOMEONE_ELSE" } },
+    });
+    const errs: string[] = [];
+    const io: Io = {
+      write: () => {},
+      writeErr: (l) => errs.push(l),
+      fetch: async (input) =>
+        String(input).includes("auth.test")
+          ? new Response(JSON.stringify({ ok: true, user: "dev_bot" }), { status: 200, headers: { "x-oauth-scopes": ALL } })
+          : new Response(JSON.stringify({ ok: false, error: "no_permission" }), { status: 200 }),
+      env: (n) =>
+        n === "HOME" ? home
+        : n === "SCRAMBLE_SLACK_CONFIG" ? join(cwd, ".scramble", "slack.json")
+        : n === "SCRAMBLE_PROC" ? EMPTY_PROC
+        : undefined,
+      cwd: () => cwd,
+      sleep: async () => {},
+      serve: async () => 0,
+      createSocket: () => ({ send: () => {}, close: () => {}, onopen: null, onmessage: null, onclose: null, onerror: null }),
+    };
+    expect(await main(["doctor", "--as", "dev", "--backend", "slack"], io)).toBe(1);
+    const said = errs.join(" ");
+    expect(said).toContain("no_permission");
+    expect(said).toContain("ask its owner");
+    // The command that cannot run is NOT named as the fix.
+    expect(said).not.toContain("Fix: bun scripts/onboard-agent.ts");
   });
 
   test("doctor --wake REFUSES to run while a listener holds the socket", async () => {

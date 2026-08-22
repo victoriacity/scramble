@@ -1712,13 +1712,30 @@ async function cmdDoctor(argv: string[], io: Io): Promise<number> {
   // invite delivered nothing while mentions kept arriving (operator, 2026-08-22:
   // "invited but inbox does not fire"). Both answers come from ONE manifest read.
   const declared = await declaredManifest(io, name);
-  if (declared !== undefined) {
+  // AN APP THIS LOGIN CANNOT READ cannot be repaired by this login either, so
+  // naming the repair command would send the agent at something that dies on its
+  // first call. Say who has to act instead.
+  const foreign = declared !== undefined && declared.unreadable !== undefined;
+  const repair = foreign
+    ? `This app was created by another login, so nothing here can change it: ask its owner to ` +
+      `add them, or drop this agent's entry from the config and let onboard-agent.ts create an ` +
+      `app the agent owns.`
+    : `Fix: bun scripts/onboard-agent.ts ${name}`;
+  if (foreign) {
+    problems.push(
+      `this app's manifest cannot be read by this login (apps.manifest.export answered ` +
+        `${declared.unreadable}), so its scopes and events cannot be checked or repaired from ` +
+        `here. Whether delivery works at all is unknown, and a working read says nothing about ` +
+        `it. ${repair}`,
+    );
+  }
+  if (declared !== undefined && declared.unreadable === undefined) {
     if (body.is_enterprise_install === true && !declared.orgDeploy) {
       problems.push(
         `this app is installed ORG-WIDE (auth.test: is_enterprise_install true) while its ` +
           `manifest declares org_deploy_enabled:false. Slack accepts that combination and ` +
           `delivers NO events for it, so your inbox monitor will sit silent forever while ` +
-          `every read still works. Fix: bun scripts/onboard-agent.ts ${name}`,
+          `every read still works. ${repair}`,
       );
     }
     const unsubscribed = BOT_EVENT_NAMES.filter((e) => !declared.botEvents.includes(e));
@@ -1726,7 +1743,7 @@ async function cmdDoctor(argv: string[], io: Io): Promise<number> {
       problems.push(
         `this app does not subscribe to ${unsubscribed.join(", ")}. Slack delivers NOTHING ` +
           `for an unsubscribed event, so that news never reaches your inbox while everything ` +
-          `else arrives normally. Fix: bun scripts/onboard-agent.ts ${name}`,
+          `else arrives normally. ${repair}`,
       );
     }
   }
@@ -1767,8 +1784,7 @@ async function cmdDoctor(argv: string[], io: Io): Promise<number> {
   if (missing.length > 0) {
     problems.push(
       `this app is missing ${missing.length} scope(s): ${missing.join(", ")}. ` +
-        `A scope needs a reinstall, which the agent does for itself: ` +
-        `bun scripts/onboard-agent.ts ${name}`,
+        `A scope needs a reinstall. ${repair}`,
     );
   }
 
@@ -2082,7 +2098,7 @@ export function pickStale(
 async function declaredManifest(
   io: Io,
   agent: string,
-): Promise<{ orgDeploy: boolean; botEvents: string[] } | undefined> {
+): Promise<{ orgDeploy: boolean; botEvents: string[]; unreadable?: undefined } | { unreadable: string } | undefined> {
   const home = io.env("HOME");
   if (home === undefined || home === "") return undefined;
   let cliToken = "";
@@ -2116,11 +2132,17 @@ async function declaredManifest(
   });
   const j = (await r.json()) as {
     ok?: boolean;
+    error?: string;
     manifest?: {
       settings?: { org_deploy_enabled?: boolean; event_subscriptions?: { bot_events?: string[] } };
     };
   };
-  if (j.ok !== true) return undefined;
+  // AN APP THIS LOGIN DOES NOT OWN answers no_permission, and that is a
+  // different fact from "no credential here". A fourth agent onboarded onto
+  // someone else's app and doctor told it to run onboard-agent.ts, which dies on
+  // its first call for exactly that reason: "The repair line assumes the agent
+  // owns the app" (2026-08-22).
+  if (j.ok !== true) return { unreadable: String(j.error ?? "unknown") };
   const settings = j.manifest?.settings;
   return {
     orgDeploy: settings?.org_deploy_enabled === true,

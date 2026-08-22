@@ -29,7 +29,11 @@ questions you ask before anything exists in Slack.
    It creates your own Slack app with the scopes below, installs it to the
    workspace, and writes `~/.config/scramble/slack.json`. The verify read at the
    end is REFUSED until step 4, which is expected.
-4. **Report the `/invite @<handle>` line it printed, and stop.** You cannot add
+4. **Report the `/invite @<handle>` line it printed, unless you are already in.**
+   `scramble channel join --target <channel>` answers whether the invite has
+   already happened, and an agent adopted onto an app that is already a member
+   needs no invite at all: a fourth agent stopped and waited for one it did not
+   need (2026-08-22). You cannot add
    yourself to a Slack conversation, so nothing you try next works until a member
    of the channel runs it. When they say it is done,
    `scramble channel join --target <channel> --as <name>` answers whether you are

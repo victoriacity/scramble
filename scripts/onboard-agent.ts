@@ -267,6 +267,72 @@ if (agent === undefined || appName === undefined) {
   );
 }
 
+// ADOPTING AN APP YOU ALREADY HOLD A TOKEN FOR.
+//
+//   bun scripts/onboard-agent.ts <agent> --adopt <xoxb-token> [--app-token <xapp-token>]
+//
+// There was no way to do this. The update-or-create branch reads the config
+// entry alone, so an agent handed credentials for an existing app had to
+// hand-write four fields into the config: token, appToken, appId and handle. A
+// fourth agent did exactly that and reported it (2026-08-22), including the trap:
+// "a wrong handle fails silently, since the handle is what mention detection keys
+// on". Every one of those four is knowable from the token, so none of them should
+// be typed by anyone.
+const adoptToken = flag("adopt");
+if (adoptToken !== undefined && adoptToken !== "") {
+  const who = await get(adoptToken, "auth.test");
+  if (who.ok !== true) die(`--adopt token is not usable: auth.test answered ${String(who.error)}`);
+  const handleFor = String(who.user);
+  const userId = String(who.user_id);
+  const info = await get(adoptToken, `users.info?user=${encodeURIComponent(userId)}`);
+  const appId =
+    info.ok === true
+      ? String((info.user as { profile?: { api_app_id?: string } } | undefined)?.profile?.api_app_id ?? "")
+      : "";
+  if (appId === "") {
+    die(
+      `the --adopt token works and belongs to @${handleFor}, and users.info did not give an\n` +
+        `api_app_id for it, so this agent cannot name its own app. Without an app id nothing\n` +
+        `here can check or repair the scopes and events that decide whether delivery works.`,
+    );
+  }
+  const cfgPath2 =
+    process.env.SCRAMBLE_SLACK_CONFIG ?? join(process.env.HOME ?? ".", ".config", "scramble", "slack.json");
+  const existing2 = existsSync(cfgPath2)
+    ? (JSON.parse(readFileSync(cfgPath2, "utf8")) as Record<string, unknown>)
+    : {};
+  const agents2 = (existing2.agents ?? {}) as Record<string, Record<string, unknown>>;
+  const appTok = flag("app-token");
+  agents2[agent] = {
+    ...(agents2[agent] ?? {}),
+    token: adoptToken,
+    ...(appTok !== undefined && appTok !== "" ? { appToken: appTok } : {}),
+    appId,
+    // READ FROM SLACK, never typed. The handle is what mention detection keys on,
+    // and a wrong one fails silently.
+    handle: handleFor,
+  };
+  existing2.agents = agents2;
+  const roster2 = (existing2.roster ?? {}) as Record<string, string>;
+  roster2[userId] = handleFor;
+  existing2.roster = roster2;
+  mkdirSync(dirname(cfgPath2), { recursive: true });
+  writeFileSync(cfgPath2, `${JSON.stringify(existing2, null, 2)}\n`);
+  chmodSync(cfgPath2, 0o600);
+  console.log(`onboard: adopted app ${appId} for "${agent}" as @${handleFor}, config written`);
+  if (appTok === undefined || appTok === "") {
+    console.log(
+      `onboard: no --app-token given, so this agent has NO socket credential and its\n` +
+        `         listener cannot run. Reads and sends work; nothing will wake it.`,
+    );
+  }
+  console.log(
+    `onboard: whether delivery works depends on that app's events and scopes, which are the\n` +
+      `         app owner's to set. Run: scramble doctor --as ${agent} --wake <channel>`,
+  );
+  process.exit(0);
+}
+
 const { token } = configToken();
 const team = await resolveTeam(token, flag("team"));
 
