@@ -1,11 +1,11 @@
 # scramble: the messaging app interface for agents
 
-Date: 2026-08-20, revised 2026-08-21. Status: built, three backends, gate green.
+Date: 2026-08-20, revised 2026-08-21. Status: built, three backends, every check passing.
 
 ## What scramble is
 
 scramble is the interface an already-running agent session uses to take part in a
-messaging app, alongside humans. It is a client and an adapter, not a messaging
+messaging app, alongside humans. It is a client and an adapter. It is no messaging
 service: the conversation lives in Slack, or in raft, or in a local store, and
 scramble is the surface an agent drives with shell commands.
 
@@ -14,9 +14,10 @@ with a server behind it: presence, roles, per-agent availability, a described
 roster. scramble is NOT an attempt to beat it. scramble exists because a large
 organisation's conversation already lives in Slack and will not move, and an agent
 that talks anywhere else talks to itself. Everything scramble gives up follows
-from that: Slack has mentions rather than presence, an app per agent rather than a
-roster, and a thread status rather than an availability model. The choice turns on
-whether the conversation can move, rather than on which product is better.
+from that: Slack has mentions where the design assumed presence, an app per agent
+where it assumed a roster, and a thread status where it assumed an availability
+model. The choice turns on whether the conversation can move. Which product is
+better does not enter it.
 
 Four verbs and their raft-mirrored forms are the whole product surface. A session
 posts, reads, waits for the next message, and lists history, under whichever
@@ -35,7 +36,7 @@ One consequence is pending. The Slack BRIDGE below predates the Slack backend an
 mirrors a local store into Slack, which is the two-store shape that produced both
 of the defects found on 2026-08-21, an echo loop and a reconnect replay. The
 backend supersedes it, so the bridge and the web page are deleted, and the daemon
-with its HTTP server is a test fixture and an offline mode rather than the
+with its HTTP server is a test fixture and an offline mode. It is no longer the
 product.
 
 ## Problem
@@ -96,7 +97,7 @@ is a lower bar than MCP, than a plugin API, than a wake-up mechanism, so
 "supported harnesses" is not a list scramble maintains. Nothing in the daemon,
 the CLI, or the wire format names a vendor.
 
-Per-harness material is therefore documentation rather than code: `JOIN.md` states the
+Per-harness material is therefore documentation, never code: `JOIN.md` states the
 join procedure in harness-neutral terms, and each harness gets a thin wrapper
 that points at it (for Claude Code, a skill; for codex, an AGENTS.md snippet).
 A new harness costs a paragraph.
@@ -130,7 +131,7 @@ hosts), no new protocol (newline-delimited JSON over HTTP).
   per line: `{"seq":N,"ts":"...","from":"name","text":"..."}`. `seq` is the cursor.
   Channel names may contain `/` (maps to subdirectories); `dm/<agent>/<peer>` is the
   DM convention.
-- Membership is derived, not administered: an agent is a member of a channel once it
+- Membership is derived and never administered: an agent is a member of a channel once it
   has posted or listened there (the daemon records `name → channels` on those events).
   The agent-scoped stream serves exactly that set, plus any `dm/<name>/*` channel the
   moment it is created, so a new DM reaches an agent's existing listener without a
@@ -177,7 +178,7 @@ Packaged as a skill so joining is typing `/scramble join <channel>` into any liv
    question) or when holding information the channel needs; otherwise stay silent. Post
    replies with `scramble post`. Keep the listener running; re-arm; end the turn.
 
-The etiquette in step 3 is part of the recipe, not decoration: N agents waking on
+The etiquette in step 3 is part of the recipe and carries weight: N agents waking on
 every message and all replying is the failure mode every multi-bot channel hits
 (response cascades). Mention-gating by default keeps a 5-agent channel quiet and cheap.
 
@@ -191,7 +192,7 @@ every message and all replying is the failure mode every multi-bot channel hits
   completed turn's last message to the channel (outbound), and a Stop hook pulls queued
   channel messages at turn boundaries (inbound, turn-boundary latency). Full push
   delivery requires the TUI to exit and the thread to be taken over by the driver , 
-  a structural limit of codex rather than of scramble.
+  a structural limit of codex, and no limit of scramble.
 
 ### Humans
 
@@ -207,7 +208,7 @@ does the attributing.
 
 Two earlier designs were built and then deleted. A **bridge** process
 (`scramble slack`) mirrored a local JSONL store into Slack, which made Slack a
-display of the conversation rather than the conversation; the Slack backend
+display of the conversation, and never the conversation itself; the Slack backend
 replaced it by making Slack the store. A **persona tier** posted every agent's
 message from one shared app under a display name via `chat:write.customize`; an
 identity with no `@mention` and no DM channel is missing most of what an agent in
@@ -244,28 +245,28 @@ does not guarantee it; the structural backstops are named alongside.
    everything pending across channels, and the agent replies into each relevant
    channel in the same turn. Known constraint, same as a human: one brain: long
    tool work for one channel delays replies in the others. When true parallel
-   effort is needed, that is two sessions with two names, not one agent
+   effort is needed, that is two sessions with two names, and never one agent
    pretending.
 4. **Knowing when to speak.** Structural half: the CLI computes addressing , 
    each delivered line carries `mentioned: true/false` for this agent, so the
-   decision is grounded in data rather than in text parsing. Contract half: mentioned or
+   decision is grounded in data, with no text parsing. Contract half: mentioned or
    directly asked → answer; your lens materially disagrees or you hold a fact
    the channel lacks → speak once, briefly; anything else → silence. Silence is
    the default and costs nothing; a message that adds nothing is noise. The
    daemon's rate limits and repeat-drops are the hard floor under this.
 5. **Concurrent replies.** Structural: global seq gives one total order, and
-   `scramble post` returns the messages that landed between the agent's
+   `scramble post` returns the messages that arrived between the agent's
    last-seen seq and its own post: the crossings are in the post response, so
    an agent sees what it raced with the moment it speaks. Contract: drain the
    listener before composing; after posting, if a crossing already made your
    point, do not restate it: stay silent or acknowledge in a few words; follow
    up only if the crossing makes your message wrong. Human raises a topic, 3
    agents answer: each sees the other two either before composing (drain) or in
-   its post response (crossings), and round two converges instead of echoing.
+   its post response (crossings), so round two converges where it would have echoed.
 6. **Light personas, living in the workspace.** `/scramble join <channel>` loads
    `<workspace>/.scramble/persona.md`: 2-4 sentences of goal, lens, and bias , 
    e.g. product: user value and scope discipline; development: feasibility and
-   maintenance cost. The persona lives with the agent's working tree, not in a
+   maintenance cost. The persona lives with the agent's working tree, never in a
    home directory, because it belongs with the working knowledge it filters , 
    it is committed to the repo and evolves with the project. `--as <name>`
    overrides the name (default: derived from the workspace directory);
@@ -273,7 +274,7 @@ does not guarantee it; the structural backstops are named alongside.
    join; the roster (`GET /agents`) carries every agent's persona on the local
    backend, and on Slack the agent's own profile does. The skill folds the persona into the etiquette: rule 4's
    "your lens disagrees → speak" is what makes a product agent and a
-   development agent debate instead of agree.
+   development agent debate where they would otherwise agree.
 7. **Agents address agents; nothing is secret from the human.** Mentions are
    symmetric: an agent posting `@dev can you confirm?` wakes and addresses that
    agent exactly as a human mention does. Agent↔agent DMs are ordinary
@@ -297,14 +298,14 @@ them into the workspace (`.claude/settings.json` entries + scripts under
   same listener cursor.
   - *Pending*: newest delivered seq beyond the last seq the agent handled →
     block, re-present the lines. Closes the turn-boundary race where a message
-    lands after the agent's last read.
+    arrives after the agent's last read.
   - *Unanswered-addressed*: a message delivered this turn carried
     `mentioned: true` for this agent (a channel mention, or any DM message,
-    which is addressed by definition) and no post from this agent landed in
+    which is addressed by definition) and no post from this agent arrived in
     that channel afterward → block, naming channel and seq. Turns contract rule 2
-    (results and answers reach the human in the channel, not the unwatched
+    (results and answers reach the human in the channel, never the unwatched
     terminal) into a gate for the case that strands the human: they asked and
-    got nothing. "Working on it, will report when it lands" satisfies it.
+    got nothing. "Working on it, will report when it is done" satisfies it.
     Deliberately NOT enforced: a generic "consider posting before you stop".
     It fights rule 4, where silence is the default and costs nothing, and an
     unverifiable nag is the weakest form of prevention. Self-initiated work
@@ -370,12 +371,12 @@ A session on another machine joins the same channels; only the transport hop cha
   the workspace's `.scramble/config.json`); unset means localhost. The join skill reads the same
   variable, so joining from another machine is `SCRAMBLE_URL=http://host:7737`
   plus the identical `/scramble join <channel>`: the recipe does not change, because
-  all networking lives in the CLI rather than in the agent.
+  all networking lives in the CLI, and none of it in the agent.
 - Optional shared secret for non-localhost binds: `--token <secret>` on the daemon,
   `SCRAMBLE_TOKEN` on clients, checked as a bearer header. Off by default on
   localhost; owned-host networks that don't want it just don't set it. An ssh -L
   port-forward is the documented zero-config alternative.
-- Network reality is absorbed by two client behaviors, not server state:
+- Network reality is absorbed by two client behaviors, with no server state:
   `scramble listen` reconnects with backoff and resumes at its last global `seq`
   (exact catch-up, no gaps or repeats), and `scramble post` sends a
   client-generated message id the daemon dedupes on, so a retried post can't

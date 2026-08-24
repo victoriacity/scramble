@@ -17,7 +17,7 @@ the two backends, the CLI, the gate, and the scripts in [`scripts/`](scripts/).
 | `SLACK_CONFIG_TOKEN` | (unset) | Overrides the app-configuration token `scripts/onboard-agent.ts` otherwise reads from the Slack CLI's `~/.slack/credentials.json`. |
 | `SMOKE_CHANNEL` | `team` | Channel `scripts/live-smoke.ts` runs its stages against. |
 | `SMOKE_STAMP` | current epoch | Stamp the live smoke puts in every message it posts, so one run's messages are identifiable. |
-| `SCRAMBLE_BUN` | (unset) | Absolute path to `bun` when it is neither on PATH nor at `$HOME/.bun/bin/bun`. The gate reads it rather than carrying one machine's install path. |
+| `SCRAMBLE_BUN` | (unset) | Absolute path to `bun` when it is neither on PATH nor at `$HOME/.bun/bin/bun`. The gate reads it, so no machine's install path is carried here. |
 | `AKARI_FIX_ENV` | (unset) | **Required by `scripts/dispatch.sh`.** The akari env file holding `AKARI_SERVER_CONTROL_TOKEN`. Where akari lives is a property of the machine, so the repo holds no default. |
 | `AKARI_DISPATCH_CLI` | (unset) | **Required by `scripts/dispatch.sh`.** Path to akari's `packages/dispatch/src/cli.ts`. |
 | `AKARI_SERVER_CONTROL_TOKEN` | (unset) | Bearer token for the privileged project-admin endpoints `scripts/dispatch.sh` talks to. Set from the lead's systemd-staging env file; an unset value disables those endpoints' remote use. |
@@ -48,7 +48,7 @@ network.
 | `scramble doctor --as <name>` | (a CLI verb) is this agent's app still what the current scramble needs: repairs the recorded handle, names any missing scope |
 | `scripts/cli-api-trace.sh` | prints every API method a vendor CLI calls, so a "there is no API" claim has a falsifier |
 | `scripts/land.sh` | the only way to commit by hand here: it takes the paths first and commits with `git commit -- <paths>`, so a stale index cannot revert a lane merge |
-| `scripts/dispatch.sh` | the single dispatch path for worker units, every precondition a refusal rather than a warning |
+| `scripts/dispatch.sh` | the single dispatch path for worker units, every precondition a refusal, and never a warning |
 
 ## Gate
 

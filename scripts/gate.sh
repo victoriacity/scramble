@@ -143,13 +143,19 @@ lang_rc=$?
 # those rules forbid, teaches the opposite of what it says. Asked for directly
 # after the communication skill shipped, and it belongs in the gate because a
 # rule anybody has to remember is one that holds until they are busy.
-echo "== every skill file passes the language check =="
-# SCOPED TO WHAT AN AGENT READS AS INSTRUCTIONS: the skills, the joining
-# instructions handed to every new agent, and the persona this agent publishes
-# about itself. The design documents are prose about the build and carry 39 hits
-# today; widening this stage to them is a separate piece of work, and naming this
-# stage for what it actually checks keeps the summary honest.
-SKILL_FILES=$(git -C "$REPO" ls-files 'skills/*.md' 'JOIN.md' '.scramble/persona.md' || true)
+echo "== every tracked markdown file passes the language check =="
+# EVERY TRACKED MARKDOWN FILE, which is the whole repo an outsider reads: the
+# README first, the skills, the joining instructions, the design and plan
+# documents, this agent's published persona.
+#
+# It was scoped to the skills when it was added, and README.md sat outside it.
+# The README happened to be clean, which was luck: nothing was keeping it that
+# way, and being asked whether it had been linted is what surfaced that. The
+# design documents carried 41 hits between them and are fixed.
+#
+# log/ is excluded: those are dated records of what was said and measured at the
+# time, and rewriting them to pass a rule written later would destroy the record.
+SKILL_FILES=$(git -C "$REPO" ls-files '*.md' | grep -v '^log/' || true)
 if [ -n "$SKILL_FILES" ]; then
   # shellcheck disable=SC2086
   ( cd "$REPO" && "$BUN" src/bin.ts lint $SKILL_FILES )

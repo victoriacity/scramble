@@ -48,11 +48,12 @@ nohup akari run $REPO/scramble.workflow.ts > run.log 2>&1 &
 
 Four things that cost a round when learned the hard way:
 
-1. **A worker runs in a lane overlay rather than in this directory.** The server seeds
+1. **A worker runs in a lane overlay.** Its edits appear there, and this
+   directory stays untouched. The server seeds
    `akari's `.akari/lanes/lane-NN-default`` from this repo, runs the
    worker there, gates it, then reconciles the writes back here as a
    green-gated commit. So `/api/workers` showing a `lane_id` and a `merge` tool
-   call is NORMAL rather than a misdispatch. Do not cancel on that evidence.
+   call is NORMAL, and no misdispatch. Do not cancel on that evidence.
 2. **The control token is required** (POST /api/projects is 401 without it) and
    `akari-fix.env` is systemd-format: `source` dies on its unquoted
    AKARI_PROVIDER_CHAIN JSON, and its PATH line drops the dir holding the
@@ -74,13 +75,13 @@ Four things that cost a round when learned the hard way:
 
 `.akari/gate.toml` can declare `[[gate.steps]]` with a `name`/`cmd`, which would
 make akari run `bash scripts/gate.sh` before each unit's merge: attractive,
-since it would enforce tsc-clean + 100% coverage at merge time instead of only
+since it would enforce tsc-clean + 100% coverage at merge time, where today only
 at the lead's final check. It stays undeclared for one concrete reason: a lane
 overlay is a git worktree, and `node_modules/` is gitignored, so it is ABSENT
 there. `bun test` still works (bun:test is built in, and scramble has zero
 runtime dependencies), but `bun x tsc` has no typescript to run and would either
 fetch from the network mid-gate or fail. The gate is otherwise ready for this
-role: bun resolution handles a worker's HOME and PATH, verified GATE GREEN under
+role: bun resolution handles a worker's HOME and PATH, verified with every check passing under
 `PATH=/usr/local/bin:/usr/bin:/bin HOME=/root`.
 
 To adopt it later, the missing piece is making typescript available in the
@@ -90,8 +91,8 @@ overlay (vendor it, or split a `gate.sh --tests-only` step that skips tsc).
 
 `src/cli.ts` exports `main(argv: string[], io): Promise<number>`. This surface is
 fixed here so the cli unit, the join-docs unit and the readme unit can be written
-in PARALLEL instead of each waiting to read the previous one's output. A
-deviation from this table is a defect in the deviating unit rather than a new contract.
+in PARALLEL, with no unit waiting to read the previous one's output. A
+deviation from this table is a defect in the deviating unit, and never a new contract.
 
 | command | flags | behavior | exit |
 |---|---|---|---|
@@ -102,13 +103,13 @@ deviation from this table is a defect in the deviating unit rather than a new co
 | `attachment upload` | `--path <file>`, `--target <channel>`, `--mime-type <t>`, `--as <name>` | uploads one file and prints its id | 0; 1 on a refused upload |
 | `attachment view` | `<attachmentId>`, `--path <out>` | resolves an attachment id to a local path | 0; 1 when unknown |
 | `profile show` / `profile update` | `--description <text>`, `--as <name>` | reads or writes `.scramble/persona.md` | 0 |
-| `channel join` | `--target <channel>`, `--as <name>`, `--backend <name>` | on Slack, reports whether the invite has landed and prints the `/invite` line when it has not. On the local store, registers with the daemon | 0 joined; 1 not joined |
+| `channel join` | `--target <channel>`, `--as <name>`, `--backend <name>` | on Slack, reports whether the invite arrived and prints the `/invite` line when it has not. On the local store, registers with the daemon | 0 joined; 1 not joined |
 | `listen [<channel>...]` | `--as <name>`, `--backend <name>` | streams; one JSON line per message, channel-tagged, `mentioned` stamped, own messages excluded; reconnects resuming at the last cursor. No channel argument = every channel the agent is in | 0 on clean stop; 1 when the connection was never established |
 | `next [<channel>...]` | `--as <name>`, `--timeout <secs>` (default 300), `--backend <name>` | BLOCKS for ONE message, prints it as one JSON line, exits. Same line format as `listen` | 0 message, 64 quiet, 1 could not look |
 | `post <channel> <text>` | `--as <name>`, `--thread <id>`, `--backend <name>` | the alias for `message send` with the text as arguments | 0 |
 | `history <channel>` | `--since <cursor>`, `--as <name>`, `--backend <name>` | the alias for `message read` | 0 |
 | `join <channel>` | `--as <name>`, `--persona <text>` | reads `.scramble/persona.md`, scaffolds `.scramble/` when absent, registers with the daemon | 0 |
-| `doctor` | `--as <name>`, `--wake <channel>`, `--wake-timeout <secs>`, `--backend <name>` | is this agent's Slack app still what the current scramble needs: repairs the recorded handle from `auth.test`, names any missing scope and the command that reinstalls it. `--wake` posts one probe line and requires its frame back over the socket, proving the wake path carries a message rather than merely connecting | 0 current; 1 with a gap named |
+| `doctor` | `--as <name>`, `--wake <channel>`, `--wake-timeout <secs>`, `--backend <name>` | is this agent's Slack app still what the current scramble needs: repairs the recorded handle from `auth.test`, names any missing scope and the command that reinstalls it. `--wake` posts one probe line and requires its frame back over the socket, proving the wake path carries a message, where connecting alone proves nothing | 0 current; 1 with a gap named |
 | `serve` | `--bind <addr>`, `--token <t>`, `--data <dir>` | runs the local JSONL store's daemon | none |
 
 Global on every command: `--backend <local|slack>`, and `--url` / `--token` for
@@ -177,7 +178,7 @@ rename is worse than the old word:
 
 Two things that do NOT change. The wire shape stays one JSON line per message,
 so the hooks and the skill keep reading the same fields, with `room` renamed to
-`channel`. And the CLI keeps `--target` rather than `--channel`, matching raft,
+`channel`. And the CLI keeps `--target` over `--channel`, matching raft,
 because a target may be a channel or a DM and the flag names either.
 
 ## Coverage rules (read before writing any module)
@@ -202,7 +203,7 @@ structure a module:
 inline-table form and exits 0 at partial coverage (verified 57% -> rc=1 scalar,
 rc=0 table).
 
-## Units (akari AGENT tasks: goal + deliverable + invariants, not steps)
+## Units (akari AGENT tasks: goal + deliverable + invariants, with no steps)
 
 Dependency DAG; width bounded by the lane pool. Units in the same round fire
 concurrently; same-file overlap is acceptable, the lead merges.
@@ -216,7 +217,7 @@ concurrently; same-file overlap is acceptable, the lead merges.
   id dedup window; channel names may contain `/`. Invariants: append is the only
   write; a message is never mutated or lost after ack; reboot loses nothing.
 
-**Round 2** (after U1's interface lands)
+**Round 2** (after U1's interface is merged)
 
 - **U2 daemon**: `src/daemon.ts` + tests. Endpoints per DESIGN.md: post,
   channel catch-up, channel stream, agent stream, `GET /` static page passthrough,
@@ -224,13 +225,13 @@ concurrently; same-file overlap is acceptable, the lead merges.
   including `dm/*`), and a firehose stream (`GET /stream`, every channel) for the
   bridge's DM mirror. Line-delimited JSON streams with
   heartbeat comments; `since` resume on both stream kinds; post response
-  includes the crossings (messages landed between the sender's last-seen seq
+  includes the crossings (messages that arrived between the sender's last-seen seq
   and the new one); message length cap (config, default ~1500 chars, reject
   with "shorten"); loop guards (per-sender rate limit, identical-repeat drop,
   channel-level agent-sender pause that never pauses humans); optional
   bearer-token check active only when `--token` is set; binds `127.0.0.1`
   default, `--bind` to widen. Invariant: a guard that trips reports what it dropped in
-  the response and the daemon log rather than silently.
+  the response and the daemon log. Nothing about it is silent.
 
 **Round 3** (after U2; four units in parallel)
 
@@ -252,12 +253,12 @@ concurrently; same-file overlap is acceptable, the lead merges.
   the tests, serving no page.
 - **U5 slack bridge**: BUILT, then DELETED and replaced by the Slack BACKEND
   (`src/slack-backend.ts` + `src/slack-transport.ts`). The bridge mirrored a
-  local store into Slack, so Slack displayed the conversation instead of holding
+  local store into Slack, so Slack displayed the conversation without holding
   it, and the echo loop plus the reconnect replay were both defects of that
   mirroring. The backend makes Slack the store: `conversations.history` to read,
   `chat.postMessage` to write, Socket Mode for the live wake. The persona tier
   went with it, since one app per agent gives each agent a real `@mention` and a
-  DM channel. Live-workspace smoke is a lead step rather than the worker's gate.
+  DM channel. Live-workspace smoke is a lead step, and no part of the worker's gate.
 - **U6 codex driver**: CUT. Superseded by the `next` verb in the CLI contract:
   a codex agent parks a turn on `scramble next` and answers with `scramble post`,
   so no driver, no app-server client, and no vendor flags ship. See DESIGN.md
