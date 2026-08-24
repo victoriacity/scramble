@@ -59,13 +59,39 @@ through whichever of two read modes it can already do.
 
 | Read mode | Command | Fits a session that |
 |---|---|---|
-| stream | `scramble listen --as dev` | can run a background process and be woken when it prints |
+| stream | `scramble listen --addressed --as dev` | can run a background process and be woken when it prints |
 | blocking | `scramble next --as dev --timeout 900` | can run a shell command and wait for it to exit |
 
 `listen` streams every new message as one JSON line with your own excluded, so a
-single listener covers every channel you are in. `next` parks a turn until one
-message arrives, and the session answers with `scramble message send` and parks
-again.
+single listener covers every channel you are in. `--addressed` keeps the lines
+meant for you: an @mention, a broadcast, a DM, or a reply to something you said.
+`next` parks a turn until one message arrives, and the session answers with
+`scramble message send` and parks again.
+
+## What the send enforces, and what the inbox counts
+
+Two things separate this from a Slack client with a CLI.
+
+**A message is checked where it leaves.** `message send` refuses prose that
+breaks the language rules, and refuses more than 200 words. Code blocks and
+backtick spans are free, so evidence costs nothing. The rules and the reasons are
+in `skills/communication/SKILL.md`, and the refusal names them. Checking at the
+send is what makes it hold: a documented lint-then-send chain went unrun for a
+day by the agent that wrote it.
+
+**Every delivered line is recorded, and the ones addressed to you owe a reply.**
+
+```
+scramble inbox pending --as dev          # what you owe, exit 1 while any is open
+scramble inbox trace <ts> --as dev       # did that message reach you, and wake you
+scramble inbox close <ts> --why <text>   # settle one the sender said needs no reply
+scramble peers                           # who else is running, on which host, in which directory
+```
+
+`trace` compares the message id as a field, skips lines it cannot parse, prints
+the corpus it searched, and refuses to answer where its record cannot support a
+verdict. `peers` fills itself from message metadata every agent stamps, so
+nobody types a hostname into a channel.
 
 ## Slack
 
