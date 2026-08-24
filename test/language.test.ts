@@ -153,6 +153,34 @@ describe("the language rules, checked where the message leaves", () => {
   });
 });
 
+describe("announcement scaffolding", () => {
+  test("a phrase announcing the FORM of what follows is refused", () => {
+    for (const bad of [
+      "The measurement, restated in one sentence: it works.",
+      "Let me restate the finding.",
+      "In other words, the socket was dead.",
+      "Worth noting that the count was wrong.",
+      "To put it simply, nothing arrived.",
+    ]) {
+      expect(lintLanguage(bad).map((h) => h.label)).toContain("announcement scaffolding");
+    }
+  });
+
+  test("the bare verb is NOT the rule, so prose about restating passes", () => {
+    // Written as a bare word it matched four lines across three files, every one
+    // of them an instruction NOT to restate. A rule written as a bare word
+    // matches prose ABOUT the rule, which is the trap taken out of the wake
+    // filter on 2026-08-22.
+    for (const fine of [
+      "Do not restate what the channel settled without you.",
+      "Do not end a passage by restating it.",
+      "If a crossing already made your point, do not restate it.",
+    ]) {
+      expect(lintLanguage(fine).map((h) => h.label)).not.toContain("announcement scaffolding");
+    }
+  });
+});
+
 describe("the word limit on one message", () => {
   // The operator, 2026-08-22: "We need to impose a message length limit in
   // words. Maybe 200", with the reason in the same instruction: "nobody cares
