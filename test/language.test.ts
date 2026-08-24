@@ -42,6 +42,7 @@ describe("the language rules, checked where the message leaves", () => {
       ["antithesis (A not B / A rather than B)", "It is per turn, not per item."],
       ["contrast tail at sentence end", "The walk was a hundred times the size, worse than useless."],
       ["redundant closer / meta-commentary", "In short, the invite delivered nothing."],
+      ["announcement scaffolding", "The measurement, restated in one sentence: we compared rolls."],
     ];
     // Every rule in the list has a case here, so a rule added without one fails
     // this test rather than shipping unexercised.

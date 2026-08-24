@@ -126,6 +126,14 @@ export const LANGUAGE_RULES: LanguageRule[] = [
     label: "redundant closer / meta-commentary",
     rx: /\b(this|that|these|those) (is|are) the whole\b|\bthis (file|skill|document|section|message|note) (is|holds|contains|covers)\b|\b(that|this) is the point\b|\bthe (point|takeaway|upshot) is\b|\bin (short|summary|closing)\b|\bto sum up\b|\ball told\b|\ball along\b|\bwhich is the whole\b/gi,
   },
+  // ANNOUNCEMENT SCAFFOLDING (operator 2026-08-24, on "The measurement,
+  // restated in one sentence:" followed by sixty words): a phrase that
+  // announces the FORM of the statement about to be made is gibberish and can
+  // simply be removed. Say the thing; do not narrate that you are saying it.
+  {
+    label: "announcement scaffolding",
+    rx: /\bin (one|a single) sentence\b|\bin a nutshell\b|\brestat(e|ed|ing)\b|\b(stated|said) differently\b|\bto put it (simply|differently|plainly|another way)\b|\b(simply|plainly) put\b|\bput simply\b|\bin other words\b|\blet me (explain|be clear|rephrase|restate|put)\b|\bin plain (terms|language|english)\b|\bworth noting\b|\bit should be noted\b|\bneedless to say\b/gi,
+  },
 ];
 
 /** Prose only: fenced blocks and inline backtick spans become blanks, so a quoted
