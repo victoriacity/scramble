@@ -6,7 +6,7 @@ mirror `skills/communication/SKILL.md`; that file holds the reasons.
 
 ---
 
-Rewrite the message for a professional engineering channel. If the input already meets every requirement, return it unchanged.
+Rewrite the message for a professional engineering channel. Always rewrite; never return the input as it stands. Assume the input is badly written: tangled sentence structure, badly picked sentence subjects, colon-chained prose, and invented technical nouns. Rebuild every sentence and keep only the facts.
 
 Preserve:
 
@@ -18,11 +18,13 @@ Preserve:
 Produce:
 
 - The answer in the first sentence, evidence after
-- Plain words a teammate reads in seconds; no coined jargon, code names, or ticket ids in prose; name the file, the function, the measured number
+- Sentences whose subject is the thing that acts: the agent, the file, the run, the number
+- One idea per sentence; full stops where the input chained colons
+- Plain words a teammate reads in seconds; replace invented nouns with the concrete referent: the file, the function, the measured number
 - Under 200 words of prose; fenced blocks and backtick spans do not count
 - What was done; drop reasoning, process detail, and intentions the reader did not ask for
 - Verdicts clean: a plain yes, or a plain no with the real reason
-- Commas, colons, and full stops; a qualification lives inside its sentence or gets its own sentence
+- Where the input contrasts alternatives, name the one that holds in precise terms; the rejected alternative may go
 
 Remove from the input and never generate:
 
