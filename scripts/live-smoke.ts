@@ -53,7 +53,24 @@ const SELF: string = firstAgent;
 const PEER: string = secondAgent;
 const TOKEN = cfg.agents[SELF]!.token!;
 const stamp = process.env.SMOKE_STAMP ?? String(Math.floor(Date.now() / 1000));
-const env = { ...process.env, SCRAMBLE_BACKEND: "slack" };
+// THE SMOKE RUNS WITH THE REWRITE OFF. Every stage here asserts on the exact
+// text it posted, and this file tests DELIVERY. With a key on the host, the
+// rewriter rephrased every fixture and six stages failed: the smoke posted
+// `smoke <stamp> @akari wake check` and the channel held `I am doing a wake
+// check for @akari on smoke <stamp>.` (2026-08-25).
+//
+// bun also loads `.env` from the checkout into every process it starts, so
+// clearing these by name is what makes the run independent of the machine.
+// EMPTIED, never deleted. bun loads `.env` from the checkout into every process
+// it starts, and a deleted name is simply absent, so the child reads it back out
+// of the file. An already-set name wins over the file, and rewriteConfig treats
+// an empty key as no key.
+const env: Record<string, string> = {
+  ...(process.env as Record<string, string>),
+  SCRAMBLE_BACKEND: "slack",
+  SCRAMBLE_REWRITE_KEY: "",
+  GEMINI_API_KEY: "",
+};
 
 /** Run the CLI through its real entrypoint and hand back everything it said.
  *  Nothing is filtered: a stage that fails prints the whole of stdout and

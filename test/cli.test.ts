@@ -1123,6 +1123,43 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     expect(said).toContain("Every mention survived: @dev");
   });
 
+  test("`--verify` reads a THREAD REPLY, which history never returns", async () => {
+    // Measured by the agent it happened to: verify answered "slack has no
+    // message at <ts>" for its own threaded reply, while `message read` found
+    // that ts with its text intact. A reply is absent from conversations.history
+    // and present in conversations.replies on its root (2026-08-25).
+    const cwd = scratchDir("send-verify-thread");
+    const asked: string[] = [];
+    const { io, errs } = stubIo(cwd, async (u) => {
+      const url = String(u);
+      asked.push(url);
+      if (url.includes("chat.postMessage"))
+        return new Response(JSON.stringify({ ok: true, ts: "55.5", message: { thread_ts: "44.4" } }), { status: 200 });
+      if (url.includes("conversations.replies"))
+        return new Response(
+          JSON.stringify({ ok: true, messages: [{ ts: "44.4", text: "the root" }, { ts: "55.5", text: "the reply as stored" }] }),
+          { status: 200 },
+        );
+      // history answers with nothing, as Slack does for a reply.
+      return new Response(JSON.stringify({ ok: true, messages: [] }), { status: 200 });
+    });
+    writeSlackConfig(cwd, {
+      appToken: "xapp-1",
+      token: "xoxb-1",
+      channels: { general: "C1" },
+      agents: { dev: { token: "T", handle: "dev" } },
+    });
+    io.readStdin = async () => "the reply as written";
+    expect(
+      await main(
+        ["message", "send", "--target", "general", "--as", "dev", "--thread", "44.4", "--verify", "--backend", "slack"],
+        io,
+      ),
+    ).toBe(0);
+    expect(asked.some((u) => u.includes("conversations.replies") && u.includes("ts=44.4"))).toBe(true);
+    expect(errs.join(" ")).toContain("the reply as stored");
+  });
+
   test("`--verify` on an unchanged message says so in one line", async () => {
     const cwd = scratchDir("send-verify-same");
     const { io, errs } = stubIo(cwd, async (u) => {

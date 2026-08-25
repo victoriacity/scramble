@@ -898,14 +898,23 @@ export class SlackBackend {
     channel: string,
     ts: string,
     as: string,
+    thread?: string,
   ): Promise<{ ok: true; text: string; mentions: string[] } | { ok: false; error: string }> {
     const resolved = await this.slackChannelFor(this.tokenOrDefault(as), channel);
     if (resolved.id === undefined) return { ok: false, error: resolved.error };
     const t = this.agentToken(as);
     if (!t.ok) return { ok: false, error: t.error };
+    // A THREAD REPLY IS ABSENT FROM conversations.history, so verifying one
+    // answered "slack has no message at <ts>" while `message read` found it and
+    // its text was intact. An agent measured that on its own threaded reply and
+    // kept its wrapper for the case (2026-08-25). A reply is read through
+    // conversations.replies on its ROOT, which is the ts the send threaded under.
     const q =
-      `${HISTORY_URL}?channel=${encodeURIComponent(resolved.id)}&${WITH_METADATA}` +
-      `&oldest=${encodeURIComponent(ts)}&latest=${encodeURIComponent(ts)}&inclusive=true&limit=1`;
+      thread !== undefined && thread !== ""
+        ? `${REPLIES_URL}?channel=${encodeURIComponent(resolved.id)}&${WITH_METADATA}` +
+          `&ts=${encodeURIComponent(thread)}&limit=200`
+        : `${HISTORY_URL}?channel=${encodeURIComponent(resolved.id)}&${WITH_METADATA}` +
+          `&oldest=${encodeURIComponent(ts)}&latest=${encodeURIComponent(ts)}&inclusive=true&limit=1`;
     const r = await readOk<{ messages?: Array<{ ts?: string; text?: string }> }>(this.fetch, q, {
       headers: { authorization: `Bearer ${t.token}` },
     });

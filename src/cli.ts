@@ -458,7 +458,7 @@ async function postText(
       if (r.ts === undefined) {
         io.writeErr(`verify: slack returned no ts for this message, so nothing can be read back.`);
       } else {
-        const stored = await s.backend.storedMessage(channel, r.ts, from);
+        const stored = await s.backend.storedMessage(channel, r.ts, from, thread);
         if (!stored.ok) {
           io.writeErr(`verify: could not read the message back: ${stored.error}`);
         } else if (stored.text.trim() === text.trim()) {
