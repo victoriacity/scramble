@@ -453,3 +453,31 @@ describe("the record of what this agent said", () => {
     expect(kept[0]).toBe("20.0");
   });
 });
+
+describe("the ledger survives several processes closing at once", () => {
+  // MEASURED before the fix: eight processes each closing one item left TWO
+  // still open. Every close read the whole ledger, changed what it read, and
+  // wrote it back, and the last writer won. A lost close nags an agent about a
+  // question it has answered, which is how an agent learns to stop reading its
+  // own list (2026-08-25).
+  test("eight concurrent closes all take", async () => {
+    const dir = scratch();
+    const p = join(dir, "inbox", "dev.jsonl");
+    for (let i = 0; i < 8; i += 1) recordInboxItem(p, item({ id: `${i}.0`, addressed: true }));
+    const probe = join(dir, "close.ts");
+    writeFileSync(
+      probe,
+      [
+        `import { closeItemById } from "${join(import.meta.dir, "..", "src", "inbox")}";`,
+        `closeItemById(${JSON.stringify(p)}, process.argv[2]!, "concurrent");`,
+      ].join("\n"),
+    );
+    await Promise.all(
+      Array.from({ length: 8 }, (_, i) =>
+        Bun.spawn(["bun", probe, `${i}.0`], { stdout: "ignore", stderr: "ignore" }).exited,
+      ),
+    );
+    expect(readInbox(p)).toHaveLength(8);
+    expect(pendingInbox(p)).toHaveLength(0);
+  }, 30_000);
+});

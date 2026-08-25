@@ -16,6 +16,7 @@
 // that it counts. Neither end asks an agent to remember anything.
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { withFileLock } from "./filelock";
 import { BROADCAST_NAMES } from "./slack-backend";
 
 /** One addressed line, and what has answered it. */
@@ -95,10 +96,13 @@ export function readInbox(path: string): InboxItem[] {
  *  from one channel because another channel happened to carry a message at the
  *  same instant. A test found that by asserting two channels at one ts. */
 export function recordInboxItem(path: string, item: InboxItem): void {
-  const existing = readInbox(path);
-  if (existing.some((r) => r.id === item.id && r.channel === item.channel)) return;
-  mkdirSync(dirname(path), { recursive: true });
-  appendFileSync(path, `${JSON.stringify(item)}\n`);
+  // The dedup READ and the append are one step: two processes delivering the
+  // same message at once would both read no row and both append.
+  withFileLock(path, () => {
+    const existing = readInbox(path);
+    if (existing.some((r) => r.id === item.id && r.channel === item.channel)) return;
+    appendFileSync(path, `${JSON.stringify(item)}\n`);
+  });
 }
 
 /** Close every open item a reply answers: same channel, recorded before the
@@ -110,6 +114,14 @@ export function recordInboxItem(path: string, item: InboxItem): void {
  *  cries wolf is one I stop reading. The looser direction costs a missed nag; the
  *  tighter one costs the whole mechanism. */
 export function closeInboxItems(path: string, channel: string, replyId: string, thread?: string): number {
+  return withFileLock(path, () => closeInsideLock(path, channel, replyId, thread));
+}
+
+/** MEASURED: eight processes each closing one item left TWO still open, because
+ *  every close read the whole ledger, changed what it read, and wrote it back.
+ *  A lost close nags an agent about a question it has answered, which is how an
+ *  agent learns to stop reading its own list (2026-08-25). */
+function closeInsideLock(path: string, channel: string, replyId: string, thread?: string): number {
   const rows = readInbox(path);
   if (rows.length === 0) return 0;
   let closed = 0;
@@ -142,6 +154,10 @@ export function closeInboxItems(path: string, channel: string, replyId: string, 
 export function closeAnsweredBefore(path: string, channel: string, ownTs: string): number {
   const cutoff = Number(ownTs);
   if (!Number.isFinite(cutoff)) return 0;
+  return withFileLock(path, () => closeBeforeInsideLock(path, channel, ownTs, cutoff));
+}
+
+function closeBeforeInsideLock(path: string, channel: string, ownTs: string, cutoff: number): number {
   const rows = readInbox(path);
   let closed = 0;
   for (const r of rows) {
@@ -178,6 +194,14 @@ export function closeAnsweredBefore(path: string, channel: string, ownTs: string
  *  removing. A reaction closing the item needs `reactions:read` and the
  *  `reaction_added` event, which no agent subscribes to yet. */
 export function closeItemById(
+  path: string,
+  id: string,
+  reason: string,
+): { ok: true } | { ok: false; why: "unknown" | "answered"; answeredBy?: string } {
+  return withFileLock(path, () => closeByIdInsideLock(path, id, reason));
+}
+
+function closeByIdInsideLock(
   path: string,
   id: string,
   reason: string,

@@ -575,6 +575,18 @@ describe("a channel the config map does not hold", () => {
   });
 });
 
+describe("a wedged lock", () => {
+  test("is broken, and the break is REPORTED on the status channel", async () => {
+    // A process killed while holding the lock must not freeze every status in
+    // the workspace, and breaking one silently would hide a wedged process.
+    const h = makeSlack();
+    mkdirSync(`${statusPath(h.dir)}.lock`, { recursive: true });
+    await h.mgr.setOn("general", "dev", "root.1");
+    expect(h.errs.join(" ")).toContain("breaking it");
+    expect(recorded(h.dir).map((r) => r.channel)).toEqual(["general"]);
+  }, 15_000);
+});
+
 describe("an expiry sweep touches only the sweeping agent's own rows", () => {
   test("another agent's expired row is left where it is", async () => {
     // One manager holds ONE token, so taking down another agent's status means

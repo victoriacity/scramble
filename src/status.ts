@@ -22,8 +22,8 @@
 // A second status set on one channel updates the living message instead of
 // posting again: one living message per channel, never a second. Slack calls go
 // through an injected `fetch` seam so tests need no token and no network.
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { withFileLock } from "./filelock";
 
 /** The fixed, short text a status carries. Agent-authored progress prose is a
  *  message pretending to be a status, so the text is scramble's, not the
@@ -134,66 +134,21 @@ export class StatusManager {
     writeStatus(this.cfg.file, records);
   }
 
-  /** READ, CHANGE AND WRITE THE LEDGER AS ONE STEP, across processes.
-   *
-   *  Every mutation used to read the file, change what it read, and write the
-   *  whole thing back, while a listener, a send and an expiry sweep all did the
-   *  same in separate processes. The last writer won and the others' entries
-   *  were gone. MEASURED: eight processes each adding one channel left TWO
-   *  entries of eight (2026-08-25). The live smoke caught it as a status that
-   *  existed a moment earlier and had disappeared.
-   *
-   *  A directory is the lock, because creating one is atomic on every filesystem
-   *  this runs on and needs no library. The read happens INSIDE it, which is the
-   *  point: a mutation that read before the lock would still be deciding from a
-   *  stale copy.
-   *
-   *  The Slack call stays OUTSIDE. Holding a lock across a network request would
-   *  stall every other process for as long as Slack takes.
-   *
-   *  Bounded: a hundred tries at ten milliseconds, then it breaks the lock and
-   *  says so. A process killed while holding it must not freeze every status in
-   *  the workspace forever, and the wait is synchronous so callers that are not
-   *  async keep working. */
+  /** Read, change and write the ledger as one step, across processes, through
+   *  the shared file lock. The Slack call stays OUTSIDE it: holding a lock
+   *  across a network request would stall every other process for as long as
+   *  Slack takes. */
   private locked<T>(change: (records: StatusRecord[]) => T): T {
-    const lock = `${this.cfg.file}.lock`;
-    // The ledger's directory may not exist on the first status of a fresh
-    // workspace, and mkdir of the lock inside a missing directory fails every
-    // try, so the whole second of retries burns before a write that would have
-    // worked. Caught by two tests taking 1015ms each.
-    mkdirSync(dirname(this.cfg.file), { recursive: true });
-    const pause = new Int32Array(new SharedArrayBuffer(4));
-    let held = false;
-    for (let i = 0; i < 100; i += 1) {
-      try {
-        mkdirSync(lock);
-        held = true;
-        break;
-      } catch {
-        Atomics.wait(pause, 0, 0, 10);
-      }
-    }
-    if (!held) {
-      this.report(`status lock at ${lock} was held for a second, breaking it`);
-      try {
-        rmSync(lock, { recursive: true, force: true });
-        mkdirSync(lock);
-      } catch {
-        /* another process broke it first; proceed without holding it */
-      }
-    }
-    try {
-      const records = this.load();
-      const out = change(records);
-      this.save(records);
-      return out;
-    } finally {
-      try {
-        rmSync(lock, { recursive: true, force: true });
-      } catch {
-        /* already gone */
-      }
-    }
+    return withFileLock(
+      this.cfg.file,
+      () => {
+        const records = this.load();
+        const out = change(records);
+        this.save(records);
+        return out;
+      },
+      (note) => this.report(note),
+    );
   }
 
   private async channelId(channel: string): Promise<string | undefined> {
