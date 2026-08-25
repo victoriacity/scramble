@@ -3127,6 +3127,46 @@ describe("doctor, and the warning an agent gets without asking", () => {
     expect(said).not.toContain("Fix: bun scripts/onboard-agent.ts");
   });
 
+  test("an EXPIRED cli token is a token problem, and says nothing about ownership", async () => {
+    // Run against my own app, which I own, this answered "This app was created by
+    // another login" from a `token_expired` error and told me to ask the owner or
+    // drop the entry. A cause the evidence never established, printed as fact, on
+    // the surface an agent trusts to tell it what is wrong (2026-08-25).
+    const home = scratchDir("doc-expired-home");
+    mkdirSync(join(home, ".slack"), { recursive: true });
+    writeFileSync(join(home, ".slack", "credentials.json"), JSON.stringify({ E1: { token: "xoxe-cli" } }));
+    const cwd = scratchDir("doc-expired");
+    writeSlackConfig(cwd, {
+      token: "xoxb-d",
+      channels: {},
+      agents: { dev: { token: "T", handle: "dev_bot", appId: "A_MINE" } },
+    });
+    const errs: string[] = [];
+    const io: Io = {
+      write: () => {},
+      writeErr: (l) => errs.push(l),
+      fetch: async (input) =>
+        String(input).includes("auth.test")
+          ? new Response(JSON.stringify({ ok: true, user: "dev_bot" }), { status: 200, headers: { "x-oauth-scopes": ALL } })
+          : new Response(JSON.stringify({ ok: false, error: "token_expired" }), { status: 200 }),
+      env: (n) =>
+        n === "HOME" ? home
+        : n === "SCRAMBLE_SLACK_CONFIG" ? join(cwd, ".scramble", "slack.json")
+        : n === "SCRAMBLE_PROC" ? EMPTY_PROC
+        : undefined,
+      cwd: () => cwd,
+      sleep: async () => {},
+      serve: async () => 0,
+      createSocket: () => ({ send: () => {}, close: () => {}, onopen: null, onmessage: null, onclose: null, onerror: null }),
+    };
+    expect(await main(["doctor", "--as", "dev", "--backend", "slack"], io)).toBe(1);
+    const said = errs.join(" ");
+    expect(said).toContain("token_expired");
+    expect(said).toContain("says nothing about who owns the app");
+    expect(said).not.toContain("ask its owner");
+    expect(said).not.toContain("drop this agent's entry");
+  });
+
   test("doctor --wake REFUSES to run while a listener holds the socket", async () => {
     // Measured 2026-08-22: with the inbox armed, `doctor --wake` reported "The
     // wake path is DEAD" and told me to re-onboard, which rotates the bot token

@@ -2009,13 +2009,25 @@ async function cmdDoctor(argv: string[], io: Io): Promise<number> {
   // AN APP THIS LOGIN CANNOT READ cannot be repaired by this login either, so
   // naming the repair command would send the agent at something that dies on its
   // first call. Say who has to act instead.
-  const foreign = declared !== undefined && declared.unreadable !== undefined;
-  const repair = foreign
-    ? `This app was created by another login, so nothing here can change it: ask its owner to ` +
-      `add them, or drop this agent's entry from the config and let onboard-agent.ts create an ` +
-      `app the agent owns.`
-    : `Fix: bun scripts/onboard-agent.ts ${name}`;
-  if (foreign) {
+  const unreadable = declared !== undefined && declared.unreadable !== undefined;
+  // WHY IT COULD NOT BE READ DECIDES WHO HAS TO ACT, and this used to answer
+  // "another login owns this app" for EVERY failure. Run against my own app,
+  // which I own, it read `token_expired` and told me to ask the owner or throw
+  // the entry away: a cause the evidence never established, printed as fact, on
+  // the surface an agent trusts to tell it what is wrong (2026-08-25).
+  //
+  // A stale CLI token is the ordinary case and its repair is a token. Ownership
+  // is what `not_authed` and the access errors mean.
+  const staleToken = unreadable && /token_expired|invalid_auth|token_revoked/.test(String(declared.unreadable));
+  const repair = !unreadable
+    ? `Fix: bun scripts/onboard-agent.ts ${name}`
+    : staleToken
+      ? `The CLI token in this config has expired, which says nothing about who owns the app. ` +
+        `Refresh it and run doctor again; until then the scopes and events are simply unchecked.`
+      : `This app may have been created by another login, and this login cannot change it: ask ` +
+        `its owner to add them, or drop this agent's entry from the config and let ` +
+        `onboard-agent.ts create an app the agent owns.`;
+  if (unreadable) {
     problems.push(
       `this app's manifest cannot be read by this login (apps.manifest.export answered ` +
         `${declared.unreadable}), so its scopes and events cannot be checked or repaired from ` +
