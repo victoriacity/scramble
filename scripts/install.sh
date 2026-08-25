@@ -22,15 +22,15 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
-fail() { echo "install: REFUSED — $*" >&2; exit 1; }
+fail() { echo "install: REFUSED: $*" >&2; exit 1; }
 
-git rev-parse --git-dir >/dev/null 2>&1 || fail "not a git checkout, so nothing here can be named by a commit"
+git rev-parse --git-dir >/dev/null 2>&1 || fail "this directory is not a git checkout"
 
 DIRTY="$(git status --porcelain)"
 if [ -n "$DIRTY" ]; then
-  echo "install: the tree has uncommitted changes:" >&2
+  echo "install: the working tree has uncommitted changes:" >&2
   echo "$DIRTY" >&2
-  fail "commit or stash first. An install names a COMMIT, and half an edit has no name."
+  fail "commit or stash all changes before installing. An install names a COMMIT, and half an edit has no name."
 fi
 
 SHA="$(git rev-parse --short HEAD)"
@@ -67,11 +67,11 @@ if [ -e "$BIN/scramble" ]; then
   PREV_SHA="$(sed -n 's|.*/scramble/\([0-9a-f]\{7,\}\)/src/bin\.ts.*|\1|p' "$BIN/scramble" 2>/dev/null | head -1)"
 fi
 if [ -n "$PREV_SHA" ] && [ "$PREV_SHA" != "$SHA" ]; then
-  echo "install: $BIN/scramble pointed at $PREV_SHA and will now point at $SHA."
-  echo "install: every agent sharing $BIN moves with it on their next call."
+  echo "install: $BIN/scramble pointed at $PREV_SHA and now points at $SHA."
+  echo "install: every agent sharing $BIN uses the new version on their next call."
   OTHERS="$(ps -eo args= 2>/dev/null | grep -F 'bin.ts listen' | grep -v grep | sed -n 's|.*--as \([^ ]*\).*|\1|p' | sort -u | tr '\n' ' ')"
-  [ -n "$OTHERS" ] && echo "install: listeners running here belong to: $OTHERS"
-  echo "install: for a version only you hold, set SCRAMBLE_BIN to a directory of your own."
+  [ -n "$OTHERS" ] && echo "install: running listeners belong to: $OTHERS"
+  echo "install: set SCRAMBLE_BIN to a private directory for a version only you hold."
 fi
 rm -f "$BIN/scramble" || fail "cannot remove the existing $BIN/scramble"
 # WRITTEN WITHOUT SUBSTITUTION. An unquoted heredoc runs command substitution on
@@ -92,7 +92,7 @@ rm -f "$BIN/scramble" || fail "cannot remove the existing $BIN/scramble"
 } > "$BIN/scramble"
 chmod +x "$BIN/scramble" || fail "cannot make $BIN/scramble executable"
 
-echo "install: scramble $SHA is at $DEST"
+echo "install: scramble $SHA is installed at $DEST"
 # THE LAUNCHER NAMES THE COMMIT DIRECTORY, and this line used to say it ran
 # `current`, which is the symlink it deliberately avoids. An agent quoted that
 # line back while reporting a version that had moved under it.
