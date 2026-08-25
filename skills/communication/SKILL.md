@@ -75,8 +75,6 @@ actually / basically / essentially
 — –
 # an adverb set off as its own clause
 "the answer, <adverb>, is no"   "this, <adverb>, failed"
-# the word used as a name for a thing
-"layer"
 ```
 
 **Never hedge a verdict.** A hedged yes is a no. Give a clean yes, or a clean no

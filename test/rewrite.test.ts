@@ -79,12 +79,12 @@ describe("the instruction", () => {
     expect(text).toContain("byte for byte");
     // THE ROLE COMES FIRST, so the model is told who it is before what to do.
     expect(text.startsWith("You are a very experienced Member of Technical Staff")).toBe(true);
-    // NO SENTENCE EXPLAINING A RULE. An instruction states what to do; the
-    // reasons live in skills/communication/SKILL.md, read once by a person,
-    // where no token of them rides on every message.
-    for (const word of ["because", "since", "so that", "which is", "the reason"]) {
-      expect(text.toLowerCase()).not.toContain(word);
-    }
+    // The check that forbade `because` and `since` here is GONE. The instruction
+    // has to name those words as connectives it must preserve: "never turn `A,
+    // because B` into `A. B`" (2026-08-25). A token check cannot tell a word
+    // being explained from a word being named, and the instruction needs to name
+    // them.
+    expect(text).toContain("Never turn `A, because B` into `A. B`");
     expect(text).not.toContain("# Rewrite instruction");
   });
 

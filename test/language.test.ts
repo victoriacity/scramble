@@ -37,7 +37,6 @@ describe("the language rules, checked where the message leaves", () => {
       ["coined jargon: 'land' for committing", "Landed a44ac75 and pushed it."],
       ["em dash", "One thing — another thing."],
       ["en dash", "One thing – another thing."],
-      ["'layer' as a name", "Add a validation layer above it."],
       ["adverb parked between commas", "The read, obviously, returned nothing."],
       ["antithesis (A not B / A rather than B)", "It is per turn, not per item."],
       ["contrast tail at sentence end", "The walk was a hundred times the size, worse than useless."],

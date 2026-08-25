@@ -96,7 +96,6 @@ export const LANGUAGE_RULES: LanguageRule[] = [
   },
   { label: "em dash", rx: /—/g },
   { label: "en dash", rx: /–/g },
-  { label: "'layer' as a name", rx: /\blayers?\b|\blayering\b/gi },
   {
     label: "adverb parked between commas",
     rx: /,\s*(honestly|frankly|basically|essentially|actually|candidly|truthfully|plainly|clearly|simply|obviously)\s*,/gi,
@@ -230,6 +229,9 @@ export function languageRefusal(hits: LanguageHit[]): string {
     `message send REFUSED: ${hits.length} language-rule hit(s). Rewrite and send again.\n` +
     `${lines.join("\n")}\n` +
     `Someone else's words are exempt: put a quoted span in backticks.\n` +
+    `A comparison you have to make survives inside a fenced block, which is exempt whole. An agent ` +
+    `hit five refusals in a row on one rule, because its finding compared two behaviours and every ` +
+    `phrasing of that comparison tripped it (2026-08-25).\n` +
     `${SKILL_POINTER}`
   );
 }
