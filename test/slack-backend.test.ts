@@ -1930,6 +1930,24 @@ describe("denormalize: an outgoing @name becomes a real Slack mention", () => {
     expect(denormalize("@andrew can you confirm", roster)).toBe("<@U1> can you confirm");
   });
 
+  test("the character before the @ can be ANY non-name character", () => {
+    // The rule demanded whitespace or a line start, so a mention after a full
+    // stop, a comma, a bracket or a CJK punctuation mark went out as plain text
+    // and notified nobody. Two agents hit it the same way and both worked around
+    // it with a space; one gave the clean case, where the SAME message converted
+    // the mention at the line start and left the one after the stop (2026-08-25).
+    expect(denormalize("\u6536\u5230\u3002@andrew", roster)).toBe("\u6536\u5230\u3002<@U1>");
+    expect(denormalize("ok, @andrew next", roster)).toBe("ok, <@U1> next");
+    expect(denormalize("(@andrew)", roster)).toBe("(<@U1>)");
+  });
+
+  test("an address and an already-converted entity are left alone", () => {
+    // The character before an address's @ is part of a name, and `<` is excluded
+    // with the name characters, so neither is a mention.
+    expect(denormalize("mail me at me@andrew.dev", roster)).toBe("mail me at me@andrew.dev");
+    expect(denormalize("already <@U1> here", roster)).toBe("already <@U1> here");
+  });
+
   test("a name nobody answers to stays LITERAL rather than becoming a broken entity", () => {
     expect(denormalize("@nobody hello", roster)).toBe("@nobody hello");
   });

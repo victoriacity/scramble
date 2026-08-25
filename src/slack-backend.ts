@@ -219,7 +219,19 @@ export function denormalize(text: string, roster: Record<string, string>): strin
     out.push(
       fenced || line.trimStart().startsWith("```")
         ? line
-        : line.replace(/(^|\s)@([A-Za-z0-9._-]+)/g, (whole, lead: string, name: string) => {
+        : // ANY CHARACTER THAT IS NOT PART OF A NAME may precede the @, and the
+          // rule used to demand whitespace or a line start. A mention after a
+          // full stop, a comma, a bracket or a CJK punctuation mark went out as
+          // plain text and notified nobody. Two agents hit it the same way and
+          // both worked around it by putting a space before the @. One gave the
+          // clean case: a message that converted its mention at the line start
+          // and left the one that followed a full stop, in a script whose full
+          // stop is its own character (reported 2026-08-25).
+          //
+          // `<` is excluded with the name characters so an already-converted
+          // `<@U123>` is left alone, and an address like name@example.com stays
+          // untouched because the character before its @ is part of a name.
+          line.replace(/(^|[^A-Za-z0-9._<-])@([A-Za-z0-9._-]+)/g, (whole, lead: string, name: string) => {
             const id = idOf.get(name);
             return id === undefined ? whole : `${lead}<@${id}>`;
           }),

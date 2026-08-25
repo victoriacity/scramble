@@ -22,7 +22,8 @@
 // A second status set on one channel updates the living message instead of
 // posting again: one living message per channel, never a second. Slack calls go
 // through an injected `fetch` seam so tests need no token and no network.
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 
 /** The fixed, short text a status carries. Agent-authored progress prose is a
  *  message pretending to be a status, so the text is scramble's, not the
@@ -127,6 +128,68 @@ export class StatusManager {
     writeStatus(this.cfg.file, records);
   }
 
+  /** READ, CHANGE AND WRITE THE LEDGER AS ONE STEP, across processes.
+   *
+   *  Every mutation used to read the file, change what it read, and write the
+   *  whole thing back, while a listener, a send and an expiry sweep all did the
+   *  same in separate processes. The last writer won and the others' entries
+   *  were gone. MEASURED: eight processes each adding one channel left TWO
+   *  entries of eight (2026-08-25). The live smoke caught it as a status that
+   *  existed a moment earlier and had disappeared.
+   *
+   *  A directory is the lock, because creating one is atomic on every filesystem
+   *  this runs on and needs no library. The read happens INSIDE it, which is the
+   *  point: a mutation that read before the lock would still be deciding from a
+   *  stale copy.
+   *
+   *  The Slack call stays OUTSIDE. Holding a lock across a network request would
+   *  stall every other process for as long as Slack takes.
+   *
+   *  Bounded: a hundred tries at ten milliseconds, then it breaks the lock and
+   *  says so. A process killed while holding it must not freeze every status in
+   *  the workspace forever, and the wait is synchronous so callers that are not
+   *  async keep working. */
+  private locked<T>(change: (records: StatusRecord[]) => T): T {
+    const lock = `${this.cfg.file}.lock`;
+    // The ledger's directory may not exist on the first status of a fresh
+    // workspace, and mkdir of the lock inside a missing directory fails every
+    // try, so the whole second of retries burns before a write that would have
+    // worked. Caught by two tests taking 1015ms each.
+    mkdirSync(dirname(this.cfg.file), { recursive: true });
+    const pause = new Int32Array(new SharedArrayBuffer(4));
+    let held = false;
+    for (let i = 0; i < 100; i += 1) {
+      try {
+        mkdirSync(lock);
+        held = true;
+        break;
+      } catch {
+        Atomics.wait(pause, 0, 0, 10);
+      }
+    }
+    if (!held) {
+      this.report(`status lock at ${lock} was held for a second, breaking it`);
+      try {
+        rmSync(lock, { recursive: true, force: true });
+        mkdirSync(lock);
+      } catch {
+        /* another process broke it first; proceed without holding it */
+      }
+    }
+    try {
+      const records = this.load();
+      const out = change(records);
+      this.save(records);
+      return out;
+    } finally {
+      try {
+        rmSync(lock, { recursive: true, force: true });
+      } catch {
+        /* already gone */
+      }
+    }
+  }
+
   private async channelId(channel: string): Promise<string | undefined> {
     const mapped = this.cfg.channels?.[channel];
     if (mapped !== undefined) return mapped;
@@ -211,51 +274,44 @@ export class StatusManager {
    *  With no thread there is no native status, and the answer there is silence
    *  rather than a message pretending to be one. */
   async setOn(channel: string, agent: string, threadTs?: string): Promise<void> {
-    const records = this.load();
-    const idx = records.findIndex((r) => r.channel === channel);
-    if (idx >= 0) {
-      const rec = records[idx]!;
-      rec.agent = agent;
-      rec.expiresAt = this.cfg.now() + this.cfg.ttlMs;
-      // Re-assert Slack's own status rather than editing a message: setting it
-      // again on the same thread is how it stays up while the agent works.
-      if (this.cfg.backend === "slack" && rec.thread !== undefined) {
-        const cid = await this.channelId(channel);
-        if (cid !== undefined) await this.setThreadStatus(cid, rec.thread, STATUS_TEXT, channel);
-      }
-      this.save(records);
-      return;
-    }
-    const rec: StatusRecord = {
-      channel,
-      agent,
-      expiresAt: this.cfg.now() + this.cfg.ttlMs,
-    };
-    if (this.cfg.backend === "slack") {
+    // The thread this status hangs off: the one already recorded for the
+    // channel, else the one this delivery names. Read before the lock only to
+    // decide what to ASK SLACK; what gets written is decided inside it.
+    const existing = this.load().find((r) => r.channel === channel);
+    const thread = existing?.thread ?? threadTs;
+    let took = existing?.thread !== undefined;
+    if (this.cfg.backend === "slack" && thread !== undefined) {
       const cid = await this.channelId(channel);
-      if (cid !== undefined && threadTs !== undefined) {
-        rec.thread = (await this.setThreadStatus(cid, threadTs, STATUS_TEXT, channel)) ? threadTs : undefined;
-      }
+      took = cid !== undefined && (await this.setThreadStatus(cid, thread, STATUS_TEXT, channel));
     }
-    records.push(rec);
-    this.save(records);
+    this.locked((records) => {
+      const idx = records.findIndex((r) => r.channel === channel);
+      const expiresAt = this.cfg.now() + this.cfg.ttlMs;
+      if (idx >= 0) {
+        const rec = records[idx]!;
+        rec.agent = agent;
+        rec.expiresAt = expiresAt;
+        return;
+      }
+      records.push({ channel, agent, expiresAt, ...(took && thread !== undefined ? { thread } : {}) });
+    });
   }
 
   /** Clear the status OFF for a channel by deleting (or replacing the text of)
    *  the living message, then dropping the record. Nothing when no active
    *  status exists. */
   async clearOn(channel: string, _agent: string): Promise<void> {
-    const records = this.load();
-    const idx = records.findIndex((r) => r.channel === channel);
-    if (idx < 0) return;
-    const rec = records[idx]!;
+    const rec = this.load().find((r) => r.channel === channel);
+    if (rec === undefined) return;
     if (this.cfg.backend === "slack") {
       const cid = await this.channelId(channel);
       // An EMPTY status is how Slack is told the agent stopped working.
       if (cid !== undefined && rec.thread !== undefined) await this.setThreadStatus(cid, rec.thread, "", channel);
     }
-    records.splice(idx, 1);
-    this.save(records);
+    this.locked((records) => {
+      const idx = records.findIndex((r) => r.channel === channel);
+      if (idx >= 0) records.splice(idx, 1);
+    });
   }
 
   // livingTs and livingTts are GONE with the living message. They existed so a
@@ -276,18 +332,29 @@ export class StatusManager {
   async clearExpired(): Promise<number> {
     const records = this.load();
     const now = this.cfg.now();
-    const kept = records.filter((r) => r.expiresAt > now);
-    if (kept.length === records.length) return 0;
-    for (const rec of records) {
-      if (rec.expiresAt > now) continue;
+    const stale = records.filter((r) => r.expiresAt <= now);
+    if (stale.length === 0) return 0;
+    for (const rec of stale) {
       if (this.cfg.backend === "slack") {
         const cid = await this.channelId(rec.channel);
         // Slack's own status is what an expiry takes down.
         if (cid !== undefined && rec.thread !== undefined) await this.setThreadStatus(cid, rec.thread, "", rec.channel);
-        }
+      }
     }
-    this.save(kept);
-    return records.length - kept.length;
+    // DROPS ONLY WHAT IS STILL EXPIRED when the lock is held. Writing the `kept`
+    // list computed before the Slack calls would delete every entry another
+    // process added while they were in flight.
+    return this.locked((current) => {
+      const cutoff = this.cfg.now();
+      let dropped = 0;
+      for (let i = current.length - 1; i >= 0; i -= 1) {
+        if (current[i]!.expiresAt <= cutoff) {
+          current.splice(i, 1);
+          dropped += 1;
+        }
+      }
+      return dropped;
+    });
   }
 
   /** Long-lived listeners clear on expiry while they run: a ticker that calls

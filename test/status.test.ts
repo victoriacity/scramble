@@ -560,3 +560,38 @@ describe("a channel the config map does not hold", () => {
     expect(h.errs.join(" ")).toContain("status in general: channel_not_found (channel_id C1, thread root.1)");
   });
 });
+
+describe("the ledger survives several processes writing at once", () => {
+  // MEASURED before the fix: eight processes each adding one channel left TWO
+  // entries of eight. Every mutation read the file, changed what it read and
+  // wrote the whole thing back, while a listener, a send and an expiry sweep did
+  // the same in separate processes. The last writer won.
+  //
+  // The live smoke caught it as a status that existed a moment earlier and had
+  // disappeared, which is the shape a lost update takes when you are looking at
+  // it.
+  test("eight concurrent writers all survive", async () => {
+    const dir = scratch("concurrent");
+    const file = statusPath(dir);
+    const probe = join(dir, "probe.ts");
+    writeFileSync(
+      probe,
+      [
+        `import { StatusManager } from "${join(import.meta.dir, "..", "src", "status")}";`,
+        `const mgr = new StatusManager({`,
+        `  file: ${JSON.stringify(file)}, backend: "local", now: () => 1_000_000, ttlMs: 60_000,`,
+        `  writeErr: () => {}, fetch: async () => new Response("{}", { status: 200 }),`,
+        `});`,
+        `await mgr.setOn(process.argv[2]!, "dev", "t1");`,
+      ].join("\n"),
+    );
+    await Promise.all(
+      Array.from({ length: 8 }, (_, i) =>
+        Bun.spawn(["bun", probe, `ch${i}`], { stdout: "ignore", stderr: "ignore" }).exited,
+      ),
+    );
+    expect(readRecords(file).map((r) => r.channel).sort()).toEqual(
+      Array.from({ length: 8 }, (_, i) => `ch${i}`).sort(),
+    );
+  }, 30_000);
+});
