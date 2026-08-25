@@ -575,6 +575,62 @@ describe("a channel the config map does not hold", () => {
   });
 });
 
+describe("an expiry sweep touches only the sweeping agent's own rows", () => {
+  test("another agent's expired row is left where it is", async () => {
+    // One manager holds ONE token, so taking down another agent's status means
+    // calling Slack under the wrong credential, in a channel this agent may not
+    // be in. Measured as `status in team: channel_not_found (channel_id
+    // C0EXAMPLE006)` for a row belonging to a different agent (2026-08-25).
+    const dir = scratch("sweep-own");
+    const file = statusPath(dir);
+    mkdirSync(join(dir, ".scramble"), { recursive: true });
+    writeStatus(file, [
+      { channel: "team", agent: "someone-else", expiresAt: 10 },
+      { channel: "team", agent: "me", expiresAt: 10 },
+    ]);
+    const calls: string[] = [];
+    const mgr = new StatusManager({
+      file,
+      backend: "slack",
+      now: () => 1_000_000,
+      ttlMs: 10_000,
+      channels: { team: "C1" },
+      token: "xoxb",
+      agent: "me",
+      writeErr: () => {},
+      fetch: async (url) => {
+        calls.push(String(url));
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      },
+    });
+    expect(await mgr.clearExpired()).toBe(1);
+    expect(recorded(dir).map((r) => r.agent)).toEqual(["someone-else"]);
+    // And no Slack call was made about the other agent's row.
+    expect(calls).toEqual([]);
+  });
+
+  test("with no agent named, the sweep clears everything", async () => {
+    // The local backend and a one-agent workspace want the old behaviour.
+    const dir = scratch("sweep-all");
+    const file = statusPath(dir);
+    mkdirSync(join(dir, ".scramble"), { recursive: true });
+    writeStatus(file, [
+      { channel: "a", agent: "x", expiresAt: 10 },
+      { channel: "b", agent: "y", expiresAt: 10 },
+    ]);
+    const mgr = new StatusManager({
+      file,
+      backend: "local",
+      now: () => 1_000_000,
+      ttlMs: 10_000,
+      writeErr: () => {},
+      fetch: async () => new Response("{}", { status: 200 }),
+    });
+    expect(await mgr.clearExpired()).toBe(2);
+    expect(recorded(dir)).toEqual([]);
+  });
+});
+
 describe("the ledger survives several processes writing at once", () => {
   // MEASURED before the fix: eight processes each adding one channel left TWO
   // entries of eight. Every mutation read the file, changed what it read and

@@ -79,6 +79,12 @@ export interface StatusConfig {
   resolve?: (channel: string) => Promise<string | undefined>;
   /** the Slack bot token. */
   token?: string;
+  /** WHICH AGENT is acting. An expiry sweep can only take down a status through
+   *  the credential that set it, and this manager holds one token, so it sweeps
+   *  its own rows and leaves other agents' rows to the processes that own them.
+   *  Absent means sweep everything, which is right for the local backend and for
+   *  a workspace with one agent. */
+  agent?: string;
 }
 
 /** One Slack REST answer, morally the same triangle as the backend: `ok:true`
@@ -337,7 +343,14 @@ export class StatusManager {
   async clearExpired(): Promise<number> {
     const records = this.load();
     const now = this.cfg.now();
-    const stale = records.filter((r) => r.expiresAt <= now);
+    const mine = (r: StatusRecord): boolean => this.cfg.agent === undefined || r.agent === this.cfg.agent;
+    // ONLY THIS AGENT'S OWN. Sweeping every row meant calling Slack about
+    // another agent's status under this agent's token, in a channel this agent
+    // may not even be in: measured as `status in team: channel_not_found
+    // (channel_id C0EXAMPLE006)` for a row belonging to a different agent
+    // (2026-08-25). A row whose owner never runs again sits expired and inert,
+    // which `isActive` already ignores.
+    const stale = records.filter((r) => r.expiresAt <= now && mine(r));
     if (stale.length === 0) return 0;
     for (const rec of stale) {
       if (this.cfg.backend === "slack") {
@@ -353,7 +366,7 @@ export class StatusManager {
       const cutoff = this.cfg.now();
       let dropped = 0;
       for (let i = current.length - 1; i >= 0; i -= 1) {
-        if (current[i]!.expiresAt <= cutoff) {
+        if (current[i]!.expiresAt <= cutoff && mine(current[i]!)) {
           current.splice(i, 1);
           dropped += 1;
         }

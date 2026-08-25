@@ -871,6 +871,7 @@ function statusTracker(io: Io, backend: "local" | "slack", agent?: string): Stat
       : undefined;
   return new StatusManager({
     ...(resolve === undefined ? {} : { resolve }),
+    ...(agent === undefined ? {} : { agent }),
     file: join(io.cwd(), ".scramble", "status.json"),
     backend: mode,
     now: statusNow,
