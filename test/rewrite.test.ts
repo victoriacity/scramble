@@ -63,14 +63,17 @@ describe("the instruction", () => {
   // other document this repo ships.
   const here = join(import.meta.dir, "..", "src");
 
-  test("the shipped file names what must not change, because that is the whole risk", () => {
+  test("the shipped file protects the claim, and stays short", () => {
     const t = readPromptTemplate(here);
     expect(t.ok).toBe(true);
     const text = t.ok ? t.text : "";
     expect(text).toContain("Keep every claim exactly as strong as it is");
-    expect(text).toContain("Never turn a measurement into an impression");
     expect(text).toContain("byte for byte");
-    // The human preamble above the first --- line is NOT sent.
+    // BRIEF, and it carries the key of the communication skill. Every token in
+    // an instruction is sent with every message, so length here is a running
+    // cost and a longer instruction is a weaker one.
+    expect(text.split(/\s+/).length).toBeLessThan(230);
+    // The note above the first --- line is NOT sent.
     expect(text).not.toContain("# Rewrite instruction");
   });
 

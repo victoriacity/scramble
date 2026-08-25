@@ -128,6 +128,29 @@ if others:
 sys.exit(0)
 PYEOF
 
+# THE COMMIT MESSAGE GOES THROUGH THE SAME RULES A SENT MESSAGE DOES. Four of the
+# last eight failed them when this was first run: the antithesis form twice, a
+# closer restating the message twice. A commit message is read by everyone who
+# reads the history, and it was the one piece of writing here that nothing
+# checked (2026-08-25).
+# STDIN IS READ ONCE, INTO A FILE. `-F -` and a lint that also reads stdin do not
+# share: the lint drained it and git saw an empty message. Caught on the first
+# real commit after this check was added.
+# THE MESSAGE IS COPIED ONCE, AND BOTH STEPS READ THE COPY. `-F -` becomes
+# /dev/stdin above, so the lint drained it and git found an empty message. It
+# took two attempts to see, because the first fix still left git pointed at the
+# drained stream.
+LINT_INPUT="$(mktemp)"
+if [ -n "$MSG_FILE" ]; then
+  cat "$MSG_FILE" > "$LINT_INPUT"
+  MSG_FILE="$LINT_INPUT"
+else
+  printf '%s\n' "$MSG" > "$LINT_INPUT"
+fi
+if ! "${SCRAMBLE_BUN:-bun}" "$(git rev-parse --show-toplevel)/src/bin.ts" lint "$LINT_INPUT"; then
+  fail "the commit message breaks the language rules above. Rewrite it and run again."
+fi
+
 if [ -n "$MSG_FILE" ]; then
   git -c user.email=victoriacity74@gmail.com -c user.name="Andrew Sun" commit -q -F "$MSG_FILE" -- "${PATHS[@]}" || fail "git commit failed"
 else
