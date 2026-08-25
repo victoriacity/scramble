@@ -31,6 +31,7 @@ import {
 import { StatusManager } from "./status";
 import { SCOPE_NAMES, BOT_EVENT_NAMES } from "./app-manifest";
 import { languageRefusal, lengthRefusal, lineOf, lintLanguage } from "./language";
+import { chooseText, rewriteConfig, rewriteWith } from "./rewrite";
 import {
   originOf,
   peersPath,
@@ -384,6 +385,24 @@ async function postText(
     io.writeErr(postRefusal);
     return 1;
   }
+  // A MODEL REWRITES WHAT GOES OUT, when one is configured. Asked for directly:
+  // "For every sentence gone through scramble message, using Gemini 3.7 flash to
+  // rewrite it to professional product and technical communication standards."
+  //
+  // My objection was that a rewriter can change what a claim SAYS. The answer
+  // that settled it: an agent that already publishes wrong claims gets no new
+  // failure mode from this, so the argument reduces to "rewriting does not fix
+  // that".
+  //
+  // The message ALWAYS goes: a missing key, a timeout or a bad answer costs the
+  // rewrite. Nothing changes silently: when a rewrite is sent, the sender's own
+  // words are printed beside it. And the rewrite passes the same rules the
+  // sender's words did, or it is dropped in favour of the words that passed.
+  const cfg = rewriteConfig(io.env);
+  const chosen =
+    cfg.key === undefined ? { text, note: "" } : chooseText(text, await rewriteWith(io.fetch, cfg, text));
+  if (chosen.note !== "") io.writeErr(`rewrite: ${chosen.note}`);
+  text = chosen.text;
   const thread = flags.get("thread") ?? undefined;
   const status = statusTracker(io, backend, nameFor(flags, io));
   await settleStatus(status?.clearExpired(), io);

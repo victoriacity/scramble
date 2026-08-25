@@ -169,13 +169,35 @@ echo "== tsc --noEmit =="
 "$BUN" x tsc --noEmit
 tsc_rc=$?
 
+# EVERY SHIPPED SOURCE FILE IS IN THE COVERAGE REPORT. bun reports the files its
+# tests LOAD, so a source file nothing imports is absent from the table entirely
+# and the 100% threshold passes over it in silence. src/rewrite.ts shipped that
+# way for an hour: 189 lines, no test, and a green gate (2026-08-25).
+echo "== every src file reaches the coverage report =="
+COVERED=$("$BUN" test --coverage 2>&1 | grep -oE 'src/[a-z-]+\.ts' | sort -u)
+MISSING=""
+for f in $(git -C "$REPO" ls-files 'src/*.ts'); do
+  case "$f" in
+    src/types.ts|src/bin.ts) continue ;;  # types carry no code; bin.ts is the entrypoint no test imports
+  esac
+  echo "$COVERED" | grep -qx "$f" || MISSING="$MISSING $f"
+done
+if [ -n "$MISSING" ]; then
+  echo "GATE FAIL: shipped source absent from the coverage report:$MISSING"
+  echo "Nothing imports these, so the 100% threshold never looked at them. Write a test."
+  cover_rc=1
+else
+  echo "every src file is in the coverage report"
+  cover_rc=0
+fi
+
 echo "== bun test --coverage =="
 "$BUN" test --coverage
 test_rc=$?
 
 echo "== gate summary =="
-echo "self_test_rc=$self_rc (nonzero required) paths_rc=$paths_rc lang_rc=$lang_rc skill_rc=$skill_rc tsc_rc=$tsc_rc test_rc=$test_rc"
-if [ "$paths_rc" -ne 0 ] || [ "$lang_rc" -ne 0 ] || [ "$skill_rc" -ne 0 ] || [ "$tsc_rc" -ne 0 ] || [ "$test_rc" -ne 0 ]; then
+echo "self_test_rc=$self_rc (nonzero required) paths_rc=$paths_rc lang_rc=$lang_rc skill_rc=$skill_rc cover_rc=$cover_rc tsc_rc=$tsc_rc test_rc=$test_rc"
+if [ "$paths_rc" -ne 0 ] || [ "$lang_rc" -ne 0 ] || [ "$skill_rc" -ne 0 ] || [ "$cover_rc" -ne 0 ] || [ "$tsc_rc" -ne 0 ] || [ "$test_rc" -ne 0 ]; then
   echo "GATE RED"
   exit 1
 fi
