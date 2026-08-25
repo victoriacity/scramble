@@ -263,7 +263,15 @@ export function factsIn(text: string): string[] {
  *  Keeping mentions working is the point of the message, so this is checked in
  *  PROSE on both sides. */
 export function mentionsIn(text: string): string[] {
-  return [...new Set([...proseOf(text).matchAll(/@[A-Za-z0-9._-]+/g)].map((m) => m[0]))];
+  // TRAILING PUNCTUATION IS SENTENCE, never name. A Slack handle may contain a
+  // dot, so the match takes one and `@name.` at the end of a sentence read as a
+  // different person from `@name`: the added-mention guard called it a new
+  // mention and blocked two sends by the agent writing them (2026-08-25).
+  return [
+    ...new Set(
+      [...proseOf(text).matchAll(/@[A-Za-z0-9._-]+/g)].map((m) => m[0].replace(/[.,:;!?]+$/, "")).filter((m) => m !== "@"),
+    ),
+  ];
 }
 
 /** How much of the original's prose survived, as a fraction. Whole sentences

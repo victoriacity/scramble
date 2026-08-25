@@ -359,6 +359,23 @@ describe("choosing what to send", () => {
     expect(mentionsIn("hi @dev and `@notme` here")).toEqual(["@dev"]);
   });
 
+  test("trailing punctuation belongs to the sentence, never to the name", () => {
+    // A Slack handle may contain a dot, so the match takes one, and `@name.` at
+    // the end of a sentence read as a different person from `@name`. The
+    // added-mention guard called that a new mention and blocked two sends
+    // (2026-08-25).
+    expect(mentionsIn("thanks @model_failure_researc.")).toEqual(["@model_failure_researc"]);
+    expect(mentionsIn("@dev, @ana: @bo; @cy! @di?")).toEqual(["@dev", "@ana", "@bo", "@cy", "@di"]);
+    // A dot INSIDE a handle stays.
+    expect(mentionsIn("hi @first.last here")).toEqual(["@first.last"]);
+    // And the guard no longer fires on the sentence-final case.
+    const out = chooseText("@model_failure_researc your helper is already in the file", {
+      ok: true,
+      text: "Your helper is already in the file, @model_failure_researc.",
+    });
+    expect("send" in out).toBe(true);
+  });
+
   test("a rewrite that makes a claim STRONGER is refused", () => {
     // The worst case measured live: an author wrote about their exposure and the
     // rewrite published a guarantee (2026-08-25).
