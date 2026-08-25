@@ -173,6 +173,26 @@ tsc_rc=$?
 # tests LOAD, so a source file nothing imports is absent from the table entirely
 # and the 100% threshold passes over it in silence. src/rewrite.ts shipped that
 # way for an hour: 189 lines, no test, and a green gate (2026-08-25).
+# NO CREDENTIAL-SHAPED STRING IN A TRACKED FILE. This repo is PUBLIC and five
+# agents commit to it, and a key was about to be placed in the checkout by hand.
+# The cost of a leak is a rotation across every agent on two hosts, so this runs
+# on every gate rather than on anyone's memory.
+echo "== no credential-shaped string in a tracked file =="
+# A PLACEHOLDER IS NOT A LEAK. The setup document shows the shape of a config
+# with `xapp-1-A0EXAMPLE001-...` in it, and a scan that cannot tell that from a
+# key is one people learn to wave through. A run of zeros or an ellipsis inside
+# the match is a placeholder; a real credential has neither.
+LEAKS="$(git -C "$REPO" grep -InE 'xox[bpasre]-[A-Za-z0-9-]{12,}|sk-[A-Za-z0-9]{20,}|AIza[A-Za-z0-9_-]{30,}|xapp-[0-9]-[A-Za-z0-9-]{12,}' -- . ':(exclude)scripts/gate.sh' 2>/dev/null | grep -vE '\.\.\.|0{6,}|EXAMPLE|<[a-z-]+>' || true)"
+if [ -n "$LEAKS" ]; then
+  echo "GATE FAIL: a tracked file carries something shaped like a credential:"
+  echo "$LEAKS"
+  echo "Remove it, rotate the credential, and keep keys out of the checkout."
+  leak_rc=1
+else
+  echo "no credential-shaped strings in tracked files"
+  leak_rc=0
+fi
+
 echo "== every src file reaches the coverage report =="
 COVERED=$("$BUN" test --coverage 2>&1 | grep -oE 'src/[a-z-]+\.ts' | sort -u)
 MISSING=""
@@ -196,8 +216,8 @@ echo "== bun test --coverage =="
 test_rc=$?
 
 echo "== gate summary =="
-echo "self_test_rc=$self_rc (nonzero required) paths_rc=$paths_rc lang_rc=$lang_rc skill_rc=$skill_rc cover_rc=$cover_rc tsc_rc=$tsc_rc test_rc=$test_rc"
-if [ "$paths_rc" -ne 0 ] || [ "$lang_rc" -ne 0 ] || [ "$skill_rc" -ne 0 ] || [ "$cover_rc" -ne 0 ] || [ "$tsc_rc" -ne 0 ] || [ "$test_rc" -ne 0 ]; then
+echo "self_test_rc=$self_rc (nonzero required) paths_rc=$paths_rc lang_rc=$lang_rc skill_rc=$skill_rc leak_rc=$leak_rc cover_rc=$cover_rc tsc_rc=$tsc_rc test_rc=$test_rc"
+if [ "$paths_rc" -ne 0 ] || [ "$lang_rc" -ne 0 ] || [ "$skill_rc" -ne 0 ] || [ "$leak_rc" -ne 0 ] || [ "$cover_rc" -ne 0 ] || [ "$tsc_rc" -ne 0 ] || [ "$test_rc" -ne 0 ]; then
   echo "GATE RED"
   exit 1
 fi

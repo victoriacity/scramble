@@ -17,6 +17,7 @@ import {
   chooseText,
   factsIn,
   proseRatio,
+  strengthDrift,
   rewriteConfig,
   composePrompt,
   promptPath,
@@ -301,6 +302,31 @@ describe("choosing what to send", () => {
     const original = ["one two three four five", "```", "a b c d e f g h i j", "```"].join("\n");
     expect(proseRatio(original, "one two three four five")).toBe(1);
     expect(MIN_PROSE_RATIO).toBeLessThan(1);
+  });
+
+  test("a rewrite that makes a claim STRONGER is refused", () => {
+    // The worst case measured live: an author wrote about their exposure and the
+    // rewrite published a guarantee (2026-08-25).
+    const mine = "the diff check narrows the window where the rewriter can replace a measured number";
+    const out = chooseText(mine, {
+      ok: true,
+      text: "the diff check prevents the rewriter from replacing a measured number",
+    });
+    expect(out.text).toBe(mine);
+    expect(out.note).toContain("introduced prevents");
+    expect(out.note).toContain("belongs to whoever made it");
+  });
+
+  test("a rewrite that SOFTENS a claim is refused by the same rule", () => {
+    const mine = "the socket delivered nothing";
+    const out = chooseText(mine, { ok: true, text: "the socket appears to have delivered nothing" });
+    expect(out.text).toBe(mine);
+    expect(out.note).toContain("introduced appears");
+  });
+
+  test("a strength word the author already used is the author's", () => {
+    expect(strengthDrift("this never works", "this never works well")).toEqual([]);
+    expect(strengthDrift("a plain claim", "a plain claim, `always` in code")).toEqual([]);
   });
 
   test("a rewrite that breaks a language rule is DROPPED", () => {

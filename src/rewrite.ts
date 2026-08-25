@@ -191,6 +191,29 @@ function firstText(body: unknown): string | undefined {
   return typeof t === "string" ? t : undefined;
 }
 
+/** Words that change how strong a claim is. A rewrite may not introduce one the
+ *  original never used, in either direction.
+ *
+ *  Measured live, and the worst case in the set: an author wrote about their
+ *  exposure and the rewrite published a guarantee, "the diff check PREVENTS the
+ *  rewriter from silently replacing measured numbers" (2026-08-25). The reverse
+ *  is the failure the instruction already names, a fact softened into an
+ *  impression. Both are the same defect: the strength of a claim is the author's
+ *  to set. */
+const STRENGTH = /\b(prevents?|guarantees?|ensures?|eliminates?|always|never|cannot|impossible|entirely|fully|completely|may|might|appears?|seems?|likely|possibly|generally|typically|usually)\b/gi;
+
+/** Strength words the REWRITE introduced. Case-folded, and counted by presence
+ *  rather than by number, so a word the author already used is the author's. */
+export function strengthDrift(original: string, rewritten: string): string[] {
+  const had = new Set([...proseOf(original).matchAll(STRENGTH)].map((m) => m[0].toLowerCase()));
+  const added = new Set<string>();
+  for (const m of proseOf(rewritten).matchAll(STRENGTH)) {
+    const w = m[0].toLowerCase();
+    if (!had.has(w)) added.add(w);
+  }
+  return [...added];
+}
+
 /** What the send should post, and what it should say about it.
  *
  *  A rewrite that breaks a language rule is DROPPED: the sender's own words
@@ -244,6 +267,15 @@ export function chooseText(
     return {
       text: original,
       note: `sent your own words: the rewrite dropped ${lost.length} thing(s) yours carried: ${lost.slice(0, 5).join(", ")}`,
+    };
+  }
+  const stronger = strengthDrift(original, rewritten.text);
+  if (stronger.length > 0) {
+    return {
+      text: original,
+      note:
+        `sent your own words: the rewrite introduced ${stronger.join(", ")}, which yours did not use. ` +
+        `How strong a claim is belongs to whoever made it.`,
     };
   }
   const kept = proseRatio(original, rewritten.text);

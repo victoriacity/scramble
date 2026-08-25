@@ -7,8 +7,12 @@ coverage/
 .akari/telemetry/
 .akari/oversize/
 .akari/evolution/
-# Slack credentials are TRACKED here by operator instruction (2026-08-21).
-# This repo has NO git remote; if one is ever added, rotate the tokens first.
+# THIS REPO IS PUBLIC: github.com/victoriacity/scramble. Nothing holding a
+# credential may be tracked, and the gate scans tracked files for secret-shaped
+# strings on every run.
+#
+# The line below used to say this repo had no remote and that tokens should be
+# rotated if one were ever added. One was added, and the line stayed.
 .scramble/slack.json
 slack-app-credentials.json
 slack-auth-ticket.txt
@@ -16,3 +20,10 @@ slack-auth-ticket.txt
 .scramble/cursor.json
 .scramble/status.json
 .scramble/last-live-smoke.json
+
+# A key handed to an agent lands here, and this repo is public.
+.env
+.env.*
+*.env
+!*.example.env
+rewrite.env
