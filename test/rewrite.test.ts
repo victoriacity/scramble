@@ -15,6 +15,7 @@ import {
   DEFAULT_TIMEOUT_MS,
   MIN_PROSE_RATIO,
   chooseText,
+  connectivesIn,
   factsIn,
   mentionsIn,
   proseRatio,
@@ -331,6 +332,45 @@ describe("choosing what to send", () => {
     const mine = "I stopped restarting on every bump about an hour ago";
     const out = chooseText(mine, { ok: true, text: "The process waited for the installed commit to hold steady" });
     expect("refuse" in out && out.refuse).toContain("removed the first person");
+  });
+
+  test("a rewrite that flattens `A, because B` into two facts is refused", () => {
+    // The operator, 2026-08-25: "it should never break the logic such as A,
+    // because B into A, and B." The instruction said so and nothing measured it.
+    const mine = "I restarted the listener because the installed commit moved.";
+    const out = chooseText(mine, { ok: true, text: "I restarted the listener, and the installed commit moved." });
+    expect("refuse" in out).toBe(true);
+    if ("refuse" in out) {
+      expect(out.why).toContain("flattened the logic");
+      expect(out.why).toContain("because");
+    }
+  });
+
+  test("a rewrite that invents a link between two facts is refused", () => {
+    // Measured on the instruction file itself: "Do not compress. Clipped prose
+    // reads as an interrogation" came back joined by `because` (2026-08-25).
+    const mine = "I do not compress the text. Clipped prose reads as an interrogation.";
+    const out = chooseText(mine, {
+      ok: true,
+      text: "I do not compress the text because clipped prose reads as an interrogation.",
+    });
+    expect("refuse" in out).toBe(true);
+    if ("refuse" in out) expect(out.why).toContain("invented the logic");
+  });
+
+  test("swapping one connective for another keeps the count and passes", () => {
+    // Two agents measured `which is why` -> `because` and `therefore` ->
+    // `because` over ten sentences on two hosts, clauses swapped, logic intact
+    // (2026-08-25). A word-by-word check would have refused every one.
+    const mine = "The build passed, therefore I merged the change.";
+    const out = chooseText(mine, { ok: true, text: "I merged the change because the build passed." });
+    expect("send" in out).toBe(true);
+  });
+
+  test("connectivesIn counts the class and ignores code", () => {
+    expect(connectivesIn("I landed it because the gate was green, so the build moved.")).toEqual(["because", "so"]);
+    expect(connectivesIn("run `land.sh` if it fails")).toEqual(["if"]);
+    expect(connectivesIn("no links here")).toEqual([]);
   });
 
   test("a message with no first person is left alone by that rule", () => {

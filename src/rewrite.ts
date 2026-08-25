@@ -304,6 +304,31 @@ export function strengthDrift(original: string, rewritten: string): string[] {
   return [...added];
 }
 
+/** The words that say how two facts relate. A rewrite keeps as many as the
+ *  original had, no more and no fewer.
+ *
+ *  The operator, 2026-08-25: "rewrite should be explicitly insturcted to exactly
+ *  preserve the causal and logic structure. it should never break the logic such
+ *  as A, because B into A, and B." The instruction said so and nothing measured
+ *  it. Running the instruction file through the rewriter produced the opposite
+ *  fault in the same minute: "Do not compress. Clipped prose reads as an
+ *  interrogation" came back as "We do not compress the text BECAUSE clipped
+ *  prose reads like an interrogation", inventing a causal claim from two
+ *  adjacent statements.
+ *
+ *  COUNTED AS A CLASS, never word by word. Two agents measured `which is why` ->
+ *  `because` and `therefore` -> `because` across ten sentences on two hosts, with
+ *  the clauses swapped and the logic intact (2026-08-25). Swapping one connective
+ *  for another keeps the count and passes; flattening a link into `and` or a full
+ *  stop drops the count, and inventing one raises it. */
+const CONNECTIVES =
+  /\b(because|so|since|therefore|thus|hence|if|unless|when|whenever|although|though|but|however|otherwise|which means|as a result|that is why|which is why|in order to)\b/gi;
+
+/** How many connectives each text carries, and which ones, for the refusal. */
+export function connectivesIn(text: string): string[] {
+  return [...proseOf(text).matchAll(CONNECTIVES)].map((m) => m[0].toLowerCase());
+}
+
 /** What the send should post, and what it should say about it.
  *
  *  A rewrite that breaks a language rule is DROPPED: the sender's own words
@@ -459,6 +484,20 @@ export function chooseText(
   if (firstPerson.test(proseOf(original)) && !firstPerson.test(proseOf(rewritten.text))) {
     return refusal(
       `the rewrite removed the first person from a message that had it, so who did the thing is gone`,
+      rewritten.text,
+    );
+  }
+  // THE LOGIC IS THE AUTHOR'S. `A, because B` carries a claim about why, and two
+  // true facts with the connective gone leave a reader nothing to object to.
+  const myLinks = connectivesIn(original);
+  const keptLinks = connectivesIn(rewritten.text);
+  if (keptLinks.length !== myLinks.length) {
+    const dropped = keptLinks.length < myLinks.length;
+    return refusal(
+      `the rewrite ${dropped ? "flattened" : "invented"} the logic: yours has ${myLinks.length} ` +
+        `connective(s) (${[...new Set(myLinks)].slice(0, 6).join(", ") || "none"}) and the rewrite has ` +
+        `${keptLinks.length} (${[...new Set(keptLinks)].slice(0, 6).join(", ") || "none"}), so ` +
+        `${dropped ? "a stated link between two facts is gone" : "it claims a link you did not"}`,
       rewritten.text,
     );
   }

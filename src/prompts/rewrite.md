@@ -29,6 +29,9 @@ Preserve:
   turn `A, so B` into two adjacent statements. Two true facts with the connective
   gone read as terse and lose the claim the author was making, with nothing on
   the page for a reader to object to
+- The same NUMBER of connectives the input used. Swapping one for another is
+  fine, `therefore` for `because` with the clauses turned around; dropping one
+  or adding one is not, and the send refuses both
 - The original language
 
 Produce:
