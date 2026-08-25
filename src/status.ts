@@ -274,10 +274,12 @@ export class StatusManager {
    *  With no thread there is no native status, and the answer there is silence
    *  rather than a message pretending to be one. */
   async setOn(channel: string, agent: string, threadTs?: string): Promise<void> {
-    // The thread this status hangs off: the one already recorded for the
-    // channel, else the one this delivery names. Read before the lock only to
-    // decide what to ASK SLACK; what gets written is decided inside it.
-    const existing = this.load().find((r) => r.channel === channel);
+    // KEYED BY CHANNEL AND AGENT. Several agents work in one channel, and this
+    // ledger held one record per channel, so one agent's status overwrote
+    // another's and, worse, ANY agent's reply cleared it. The live smoke caught
+    // that: a peer's message in the channel took down the status the listener
+    // had set for itself (2026-08-25).
+    const existing = this.load().find((r) => r.channel === channel && r.agent === agent);
     const thread = existing?.thread ?? threadTs;
     let took = existing?.thread !== undefined;
     if (this.cfg.backend === "slack" && thread !== undefined) {
@@ -285,7 +287,7 @@ export class StatusManager {
       took = cid !== undefined && (await this.setThreadStatus(cid, thread, STATUS_TEXT, channel));
     }
     this.locked((records) => {
-      const idx = records.findIndex((r) => r.channel === channel);
+      const idx = records.findIndex((r) => r.channel === channel && r.agent === agent);
       const expiresAt = this.cfg.now() + this.cfg.ttlMs;
       if (idx >= 0) {
         const rec = records[idx]!;
@@ -300,8 +302,11 @@ export class StatusManager {
   /** Clear the status OFF for a channel by deleting (or replacing the text of)
    *  the living message, then dropping the record. Nothing when no active
    *  status exists. */
-  async clearOn(channel: string, _agent: string): Promise<void> {
-    const rec = this.load().find((r) => r.channel === channel);
+  async clearOn(channel: string, agent: string): Promise<void> {
+    // ONLY THIS AGENT'S OWN STATUS. The parameter was ignored, so a message from
+    // any agent cleared whatever status the channel held, including one another
+    // agent had set while it was still working.
+    const rec = this.load().find((r) => r.channel === channel && r.agent === agent);
     if (rec === undefined) return;
     if (this.cfg.backend === "slack") {
       const cid = await this.channelId(channel);
@@ -309,7 +314,7 @@ export class StatusManager {
       if (cid !== undefined && rec.thread !== undefined) await this.setThreadStatus(cid, rec.thread, "", channel);
     }
     this.locked((records) => {
-      const idx = records.findIndex((r) => r.channel === channel);
+      const idx = records.findIndex((r) => r.channel === channel && r.agent === agent);
       if (idx >= 0) records.splice(idx, 1);
     });
   }

@@ -199,7 +199,13 @@ async function stageWakeAndStatus(): Promise<void> {
       .split("\n")
       .filter((l) => l.startsWith("{"))
       .map((l) => JSON.parse(l) as { from?: string; mentioned?: boolean; text?: string });
-    const woke = lines.find((l) => l.text?.includes(`smoke ${stamp}`));
+    // THE LINE THIS STAGE POSTED, and no other. Selecting on the run stamp alone
+    // matched an EARLIER stage's message that the listener also carried, and the
+    // check then reported `mentioned=false` for a line that had been delivered
+    // with `mentioned:true`, four lines below it in the same file. A selector
+    // loose enough to match a neighbour is a failing check that proves nothing
+    // (2026-08-25).
+    const woke = lines.find((l) => l.text?.includes(`smoke ${stamp} @${SELF} wake check`));
     check("wake/delivered", woke !== undefined, `the peer's line reached the listener: ${woke !== undefined}`);
     check("wake/mentioned", woke?.mentioned === true, `mentioned=${String(woke?.mentioned)}`);
     check(
@@ -209,7 +215,7 @@ async function stageWakeAndStatus(): Promise<void> {
     );
     // The LIVE path stamps `thread` from the Socket Mode event, which is a
     // different code path from the history read, so it gets its own check here.
-    const root = (await history()).find((m) => m.text?.includes(`smoke ${stamp}`))?.ts;
+    const root = (await history()).find((m) => m.text?.includes(`smoke ${stamp} @${SELF} wake check`))?.ts;
     if (root !== undefined) {
       await scramble(
         ["message", "send", "--target", CHANNEL, "--as", PEER, "--thread", root],

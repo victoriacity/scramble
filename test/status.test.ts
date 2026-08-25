@@ -168,12 +168,26 @@ describe("status local backend", () => {
     expect(mgr.isActive("general")).toBe(false);
   });
 
-  test("a second set on one channel updates the same record, never a second", async () => {
+  test("the same agent setting twice updates its record, never adds a second", async () => {
+    const { mgr, dir } = makeLocal();
+    await mgr.setOn("general", "ana");
+    await mgr.setOn("general", "ana");
+    expect(recorded(dir)).toHaveLength(1);
+    expect(recorded(dir)[0]?.agent).toBe("ana");
+  });
+
+  test("two agents working one channel each keep their own status", async () => {
+    // The ledger held ONE record per channel, so one agent's status overwrote
+    // another's, and any agent's reply cleared whatever the channel held. The
+    // live smoke caught it: a peer's message took down the status the listener
+    // had set for itself (2026-08-25).
     const { mgr, dir } = makeLocal();
     await mgr.setOn("general", "ana");
     await mgr.setOn("general", "bob");
-    expect(recorded(dir)).toHaveLength(1);
-    expect(recorded(dir)[0]?.agent).toBe("bob");
+    expect(recorded(dir).map((r) => r.agent).sort()).toEqual(["ana", "bob"]);
+    // And bob finishing leaves ana working.
+    await mgr.clearOn("general", "bob");
+    expect(recorded(dir).map((r) => r.agent)).toEqual(["ana"]);
   });
 
   test("clearing a channel with no active status is a no-op", async () => {
