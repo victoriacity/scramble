@@ -1,4 +1,7 @@
 [test]
+# Runs before every test file: strips the rewrite credential this checkout's
+# `.env` would otherwise hand to the runner.
+preload = ["./test/preload.ts"]
 coverage = true
 coverageReporter = ["text"]
 # 100% coverage is a goal constraint, enforced here so `bun test` EXITS NONZERO

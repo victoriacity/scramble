@@ -320,6 +320,33 @@ describe("choosing what to send", () => {
     expect("refuse" in out && out.refuse).toContain("stopped @peer_metrics from notifying anyone");
   });
 
+  test("a rewrite that erases the actor is refused", () => {
+    // Two agents measured the same shift: "I stopped restarting on every bump"
+    // became "The process waited for the installed commit to hold steady", and a
+    // first-person report turned into a description with nobody in it.
+    const mine = "I stopped restarting on every bump about an hour ago";
+    const out = chooseText(mine, { ok: true, text: "The process waited for the installed commit to hold steady" });
+    expect("refuse" in out && out.refuse).toContain("removed the first person");
+  });
+
+  test("a message with no first person is left alone by that rule", () => {
+    const out = chooseText("the run finished and the file holds the score", {
+      ok: true,
+      text: "the run finished; the file holds the score",
+    });
+    expect("send" in out).toBe(true);
+  });
+
+  test("a mention the author never wrote is refused", () => {
+    // Measured twice: a rewrite turned "re-ran the same five sentences" into
+    // "after @scramble_dev re-ran the same five sentences", crediting the run to
+    // a different agent and pinging them for it (2026-08-25).
+    const mine = "re-ran the same five sentences on 7412f27";
+    const out = chooseText(mine, { ok: true, text: "after @scramble_dev re-ran the same five sentences on 7412f27" });
+    expect("refuse" in out && out.refuse).toContain("added @scramble_dev");
+    expect("refuse" in out && out.refuse).toContain("credit them with work they did not do");
+  });
+
   test("a dropped mention is refused, by whichever guard reaches it first", () => {
     // The dropped-facts check sees it too, since a mention is a fact. Either
     // refusal stops the send, which is what matters.

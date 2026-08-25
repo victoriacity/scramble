@@ -226,12 +226,18 @@ export function strengthDrift(original: string, rewritten: string): string[] {
  *  prose. */
 /** The refusal a failed rewrite produces, carrying what the model returned so the
  *  author sees what happened before writing it again. */
-function refusal(what: string, attempt: string): string {
-  return (
-    `message send REFUSED: ${what}, so neither version goes out.\n` +
-    `What the rewriter produced:\n${attempt}\n` +
-    `Rewrite your message and send again.`
-  );
+function refusal(what: string, attempt: string): { refuse: string; retry: string } {
+  return {
+    refuse:
+      `message send REFUSED: ${what}, so neither version goes out.\n` +
+      `What the rewriter produced:\n${attempt}\n` +
+      `Rewrite your message and send again.`,
+    // WHAT TO TELL THE MODEL ON A SECOND ATTEMPT. Every guard here fires on
+    // something the MODEL did, so the model is the party that can fix it. Two
+    // agents wrote prose that avoided a banned form on purpose, the rewriter put
+    // it back, and the send died with both versions refused (2026-08-25).
+    retry: `Your previous attempt was rejected: ${what}. Rewrite again without that.`,
+  };
 }
 
 export function factsIn(text: string): string[] {
@@ -282,7 +288,7 @@ export const MIN_PROSE_RATIO = 0.6;
  *  the language rules already require.
  *
  *  With no key configured the rewriter is OFF and this is never consulted. */
-export type RewriteChoice = { send: string; note: string } | { refuse: string };
+export type RewriteChoice = { send: string; note: string } | { refuse: string; retry?: string };
 
 export function chooseText(
   original: string,
@@ -299,7 +305,7 @@ export function chooseText(
   if (rewritten.text.trim() === original.trim()) return { send: original, note: "" };
   const over = lengthRefusal(rewritten.text);
   if (over !== "") {
-    return { refuse: refusal("the rewrite ran over the word limit", rewritten.text) };
+    return refusal("the rewrite ran over the word limit", rewritten.text);
   }
   // WHAT THE ORIGINAL CARRIED MUST STILL BE THERE. Measured in a live channel:
   // the rewriter dropped a closing causal sentence and replaced a statement of
@@ -308,55 +314,70 @@ export function chooseText(
   // both; this refuses the rewrite when the demand went unmet.
   const lost = factsIn(original).filter((f) => !rewritten.text.includes(f));
   if (lost.length > 0) {
-    return {
-      refuse: refusal(
+    return refusal(
         `the rewrite dropped ${lost.length} thing(s) yours carried: ${lost.slice(0, 5).join(", ")}`,
         rewritten.text,
-      ),
-    };
+    );
   }
   // A MENTION THAT STOPPED NOTIFYING IS A LOST MENTION, even with the characters
   // still on the line.
   const keptMentions = mentionsIn(rewritten.text);
-  const lostMentions = mentionsIn(original).filter((m) => !keptMentions.includes(m));
+  const mine = mentionsIn(original);
+  // A MENTION THE AUTHOR NEVER WROTE notifies someone they did not address, and
+  // it can invent attribution. Measured twice: a rewrite turned "re-ran the same
+  // five sentences" into "after @scramble_dev re-ran the same five sentences",
+  // crediting the run to a different agent and pinging them for it
+  // (2026-08-25).
+  const addedMentions = keptMentions.filter((m) => !mine.includes(m));
+  if (addedMentions.length > 0) {
+    return refusal(
+      `the rewrite added ${addedMentions.join(", ")}, which yours never mentioned, so it notifies ` +
+        `someone you did not address and can credit them with work they did not do`,
+      rewritten.text,
+    );
+  }
+  const lostMentions = mine.filter((m) => !keptMentions.includes(m));
   if (lostMentions.length > 0) {
-    return {
-      refuse: refusal(
+    return refusal(
         `the rewrite stopped ${lostMentions.join(", ")} from notifying anyone, by moving it into ` +
           `code or dropping it`,
         rewritten.text,
-      ),
-    };
+    );
+  }
+  // THE ACTOR STAYS THE ACTOR. Two agents measured the same shift: "I stopped
+  // restarting on every bump" became "The process waited for the installed
+  // commit to hold steady", and a first-person report turned into a description
+  // with nobody in it (2026-08-25). Who did a thing is part of the claim.
+  const firstPerson = /\b(I|I'm|I've|my|me|we|we're|we've|our)\b/i;
+  if (firstPerson.test(proseOf(original)) && !firstPerson.test(proseOf(rewritten.text))) {
+    return refusal(
+      `the rewrite removed the first person from a message that had it, so who did the thing is gone`,
+      rewritten.text,
+    );
   }
   const stronger = strengthDrift(original, rewritten.text);
   if (stronger.length > 0) {
-    return {
-      refuse: refusal(
+    return refusal(
         `the rewrite introduced ${stronger.join(", ")}, which yours did not use, and how strong a ` +
           `claim is belongs to whoever made it`,
         rewritten.text,
-      ),
-    };
+    );
   }
   const kept = proseRatio(original, rewritten.text);
   if (kept < MIN_PROSE_RATIO) {
-    return {
-      refuse: refusal(
+    return refusal(
         `the rewrite kept ${Math.round(kept * 100)}% of your prose, under the ` +
           `${Math.round(MIN_PROSE_RATIO * 100)}% floor, and a whole sentence going missing is what a ` +
           `dropped conclusion looks like`,
         rewritten.text,
-      ),
-    };
+    );
   }
   const hits = lintLanguage(rewritten.text);
   if (hits.length > 0) {
-    return {
-      refuse: refusal(
+    return refusal(
         `the rewrite broke ${hits.length} language rule(s): ${hits.map((h) => h.label).join(", ")}`,
         rewritten.text,
-      ),
-    };
+    );
   }
   return { send: rewritten.text, note: `sent a rewrite. Your words were:\n${original}` };
 }

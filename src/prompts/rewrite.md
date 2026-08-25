@@ -20,6 +20,9 @@ Preserve:
 - Every statement of fact exactly as stated; never substitute a different fact,
   and never turn a description of what IS into an instruction about what to do
 - Every sentence that states a consequence, a cause, or a conclusion
+- The causal structure as stated, in both directions: never ADD a link the input
+  left out. `A, and B` stays `A, and B`; turning it into `A, so B` invents a
+  claim about why
 - The causal and logical structure exactly: keep `because`, `so`, `since`,
   `therefore`, `which means`, `if`, `unless` and every other connective that
   states how two facts relate. Never turn `A, because B` into `A. B`, and never
@@ -31,7 +34,13 @@ Preserve:
 Produce:
 
 - The answer in the first sentence, evidence after
-- Sentences whose subject is the thing that acts: the agent, the file, the run, the number
+- A subject in every sentence. Never leave the actor out: `re-ran the five
+  sentences` hides who ran them, and a reader has to guess or a rewriter has to
+  invent one
+- A subject that is the thing that acts: the agent, the file, the run, the
+  measured number. Avoid a function word standing in as the subject, such as
+  `The gate is ...` or `The default is ...`; name what the gate checks and what
+  the default sets
 - One idea per sentence where the input merely chained colons; a causal or
   conditional link is one idea and keeps its two halves together
 - Plain words a teammate reads in seconds; replace invented nouns with the concrete referent: the file, the function, the measured number

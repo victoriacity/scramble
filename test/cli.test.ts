@@ -1051,7 +1051,9 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
         ? new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: "the professional line" }] } }] }), { status: 200 })
         : new Response(JSON.stringify({ crossings: [] }), { status: 200 }),
     );
-    io.readStdin = async () => "my own line";
+    // NO FIRST PERSON in the fixture: a rewrite that drops the actor is refused,
+    // and this test is about the clean path.
+    io.readStdin = async () => "the parser fix shipped";
     const withKey: Io = {
       ...io,
       env: (n) => (n === "SCRAMBLE_REWRITE_KEY" ? "k" : io.env(n)),
@@ -1059,7 +1061,7 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     };
     expect(await main(["message", "send", "--target", "general", "--as", "dev"], withKey)).toBe(0);
     expect(errs.join(" ")).toContain("rewrite: sent a rewrite");
-    expect(errs.join(" ")).toContain("my own line");
+    expect(errs.join(" ")).toContain("the parser fix shipped");
   });
 
   test("an unreadable instruction STOPS the send", async () => {
