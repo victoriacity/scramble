@@ -1137,7 +1137,11 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     );
     const one = stubIo(cwd, async () => new Response("{}", { status: 200 }));
     expect(await main(["rewrites"], one.io)).toBe(0);
-    expect(one.writes.join(" ")).toContain("1 send(s) met the rewriter");
+    expect(one.writes.join(" ")).toContain("1 send(s) from dev met the rewriter");
+    // `--as` names one agent's rows out of a file every agent on the host shares.
+    const scoped = stubIo(cwd, async () => new Response("{}", { status: 200 }));
+    expect(await main(["rewrites", "--as", "someone-else"], scoped.io)).toBe(0);
+    expect(scoped.writes.join(" ")).toContain("No sends from someone-else");
   });
 
   test("an unwritable rewrite record REPORTS itself and the message still goes", async () => {

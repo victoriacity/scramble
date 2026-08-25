@@ -105,14 +105,20 @@ export function recordInboxItem(path: string, item: InboxItem): void {
   });
 }
 
-/** Close every open item a reply answers: same channel, recorded before the
- *  reply. A threaded reply also closes the thread's items even when the ledger
- *  recorded them against the channel.
+/** Close every open item a reply answers, recorded before the reply.
  *
- *  CHANNEL-WIDE ON PURPOSE. A narrower rule (close only the exact thread) would
- *  leave an item open after it had been answered in the room, and a gate that
- *  cries wolf is one I stop reading. The looser direction costs a missed nag; the
- *  tighter one costs the whole mechanism. */
+ *  A CHANNEL-LEVEL reply closes channel items, because an answer given in the
+ *  room answers what the room asked. A THREADED reply closes that thread's
+ *  items, including one the ledger recorded against the channel whose own ts is
+ *  the thread root.
+ *
+ *  A threaded reply does NOT close the room. It used to, and it cost a real
+ *  question: xingyubot asked me something at channel level, I answered a
+ *  different agent inside a thread half a minute later, and the ledger marked
+ *  their question answered by that reply. They were left waiting with nothing on
+ *  my list (2026-08-25, ts 1787664642.769859 closed by 1787664661.695049). The
+ *  comment here used to call the looser direction a missed nag. The cost is a
+ *  dropped question, and the person who asked it never learns that. */
 export function closeInboxItems(path: string, channel: string, replyId: string, thread?: string): number {
   return withFileLock(path, () => closeInsideLock(path, channel, replyId, thread));
 }
@@ -127,8 +133,9 @@ function closeInsideLock(path: string, channel: string, replyId: string, thread?
   let closed = 0;
   for (const r of rows) {
     if (r.answeredBy !== undefined || !owesAnswer(r)) continue;
-    const sameChannel = r.channel === channel;
-    const sameThread = thread !== undefined && thread !== "" && (r.thread === thread || r.id === thread);
+    const inThread = thread !== undefined && thread !== "";
+    const sameChannel = r.channel === channel && !inThread;
+    const sameThread = inThread && (r.thread === thread || r.id === thread);
     if (sameChannel || sameThread) {
       r.answeredBy = replyId;
       closed += 1;

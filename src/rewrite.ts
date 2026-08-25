@@ -162,12 +162,19 @@ export function readRewrites(path: string): RewriteRecord[] {
 }
 
 /** What the rows say, in the shape a person asks it. */
-export function rewritesReport(rows: RewriteRecord[]): string {
+export function rewritesReport(rows: RewriteRecord[], agent?: string): string {
+  // ONE FILE PER HOST, AND THE AGENT IS ON EVERY ROW. `--as` named nothing here,
+  // so two agents sharing a host read each other's counts as their own and one
+  // of them reported a guard catch it had never had (xingyubot, 2026-08-25).
+  const all = rows;
+  if (agent !== undefined && agent !== "") rows = rows.filter((r) => r.agent === agent);
   if (rows.length === 0) {
-    return (
-      `No sends have met the rewriter on this host yet. A row is written per send ` +
-      `while a key is configured, so an empty file means the rewrite is off or nothing has been sent.`
-    );
+    const others = new Set(all.map((r) => r.agent));
+    return agent !== undefined && agent !== "" && all.length > 0
+      ? `No sends from ${agent} have met the rewriter on this host. ${all.length} row(s) here belong to ` +
+          `${[...others].sort().join(", ")}.`
+      : `No sends have met the rewriter on this host yet. A row is written per send ` +
+          `while a key is configured, so an empty file means the rewrite is off or nothing has been sent.`;
   }
   const by = new Map<string, number>();
   for (const r of rows) by.set(r.outcome, (by.get(r.outcome) ?? 0) + 1);
@@ -192,8 +199,16 @@ export function rewritesReport(rows: RewriteRecord[]): string {
           .map(([why, n]) => `  ${n}  ${why}`)
           .join("\n");
   const grew = rows.filter((r) => r.words[1] > r.words[0]).length;
+  // WHOSE ROWS THESE ARE, on the first line. The file is shared by every agent
+  // on the host, so a count with no name on it invites the reader to take it for
+  // their own.
+  const whose =
+    agent !== undefined && agent !== ""
+      ? ` from ${agent}`
+      : ` from ${[...new Set(all.map((r) => r.agent))].sort().join(", ")}`;
   return (
-    `${rows.length} send(s) met the rewriter, from ${new Date(rows[0]?.at ?? "").toISOString().slice(0, 10)}:\n` +
+    `${rows.length} send(s)${whose} met the rewriter, from ` +
+    `${new Date(rows[0]?.at ?? "").toISOString().slice(0, 10)}:\n` +
     `${counts}${guards}\n` +
     `${grew} of them came back longer than the draft.`
   );

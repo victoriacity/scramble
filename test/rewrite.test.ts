@@ -478,6 +478,22 @@ describe("the record of what the rewriter did", () => {
     expect(said).toContain("the rewrite is off or nothing has been sent");
   });
 
+  test("`--as` scopes the count to one agent, and names whose rows are here", () => {
+    // MEASURED: two agents on one host read the same 13 rows as their own, and
+    // one of them reported a guard catch it had never had (xingyubot,
+    // 2026-08-25). The file is per host and every row carries its agent.
+    const rows = [row({ agent: "alice" }), row({ agent: "alice" }), row({ agent: "bob" })];
+    expect(rewritesReport(rows, "alice")).toContain("2 send(s) from alice met the rewriter");
+    expect(rewritesReport(rows, "bob")).toContain("1 send(s) from bob met the rewriter");
+    // No flag: every agent, with the names on the line so nobody takes the
+    // total for their own.
+    expect(rewritesReport(rows)).toContain("3 send(s) from alice, bob met the rewriter");
+    // An agent with no rows on a host that has some is told whose they are.
+    const none = rewritesReport(rows, "carol");
+    expect(none).toContain("No sends from carol");
+    expect(none).toContain("alice, bob");
+  });
+
   test("rows are counted by outcome, and the guards are ranked", () => {
     const rows = [
       row(),
@@ -491,7 +507,7 @@ describe("the record of what the rewriter did", () => {
       row({ outcome: "skipped", words: [20, 0] }),
     ];
     const said = rewritesReport(rows);
-    expect(said).toContain("7 send(s) met the rewriter");
+    expect(said).toContain("7 send(s) from dev met the rewriter");
     expect(said).toContain("sent       2");
     expect(said).toContain("refused    2");
     expect(said).toContain("What the guards caught:");

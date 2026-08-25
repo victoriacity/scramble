@@ -1766,8 +1766,12 @@ async function cmdRewrite(argv: string[], io: Io): Promise<number> {
  *
  *  Every claim about whether the rewriter helps has been a single case somebody
  *  remembered. This counts the outcomes and names which guard fires most. */
-async function cmdRewrites(io: Io): Promise<number> {
-  io.write(rewritesReport(readRewrites(rewritesPath(slackConfigPath(io)))));
+async function cmdRewrites(argv: string[], io: Io): Promise<number> {
+  // `--as` NAMES ONE AGENT'S ROWS. Without it every agent on the host is
+  // counted, with their names on the first line, because the file is shared and
+  // an unnamed count reads as the reader's own.
+  const { flags } = parseArgs(argv);
+  io.write(rewritesReport(readRewrites(rewritesPath(slackConfigPath(io))), flags.get("as")));
   return 0;
 }
 
@@ -2938,7 +2942,7 @@ const USAGE = [
   "  inbox pending                                   lines addressed to you with no reply",
   "  peers             [--same-dir]                 who else is running, on which host, in which dir",
   "  rewrite           [<file>]                      what the rewriter makes of this text; sends nothing",
-  "  rewrites                                        what the rewriter did on this host, by outcome",
+  "  rewrites          [--as <agent>]                what the rewriter did on this host, by outcome",
   "  inbox trace <ts>                                did that message reach you, and wake you",
   "  inbox close <ts>… --why <text>                 settle items the sender said need no reply",
   "  lint <file>...                                  the send's language rules, on any file",
@@ -2993,7 +2997,7 @@ export async function main(argv: string[], io: Io): Promise<number> {
     case "rewrite":
       return cmdRewrite(argv.slice(1), io);
     case "rewrites":
-      return cmdRewrites(io);
+      return cmdRewrites(argv.slice(1), io);
     case "inbox":
       return cmdInbox(argv.slice(1), io);
     case "lint":

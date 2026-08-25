@@ -75,6 +75,21 @@ describe("the inbox ledger: one row per addressed line, one reply owed", () => {
     expect(pendingInbox(p)).toHaveLength(0);
   });
 
+  test("a threaded reply leaves a channel-level question open", () => {
+    // MEASURED: xingyubot asked me something at channel level, I answered a
+    // different agent inside a thread half a minute later, and the ledger marked
+    // their question answered by that reply (2026-08-25, ts 1787664642.769859
+    // closed by 1787664661.695049). They waited with nothing on my list.
+    const p = join(scratch(), "inbox", "dev.jsonl");
+    recordInboxItem(p, item({ id: "asked-in-the-room" }));
+    recordInboxItem(p, item({ id: "asked-in-the-thread", thread: "root-1" }));
+    expect(closeInboxItems(p, "scramble-dev", "reply", "root-1")).toBe(1);
+    expect(pendingInbox(p).map((r) => r.id)).toEqual(["asked-in-the-room"]);
+    // The room's own answer still closes the room.
+    expect(closeInboxItems(p, "scramble-dev", "reply-2")).toBe(1);
+    expect(pendingInbox(p)).toHaveLength(0);
+  });
+
   test("a message I already sent closes every OLDER question in that channel", () => {
     // Five questions answered hours before the ledger existed sat in `pending`
     // forever, and a list naming answered questions is one an agent scrolls
