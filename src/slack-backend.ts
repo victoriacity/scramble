@@ -168,7 +168,29 @@ async function readOk<T = Record<string, unknown>>(
     return { ok: false, error: `slack answered non-object to ${input}` };
   }
   const rec = body as Record<string, unknown>;
-  if (rec.ok !== true) return { ok: false, error: (rec.error as string) ?? "slack call failed" };
+  if (rec.ok !== true) {
+    const error = (rec.error as string) ?? "slack call failed";
+    // SLACK SAYS WHICH SCOPE, and this used to drop it. An agent named the shape
+    // of the next failure exactly: "the next scope you add will fail the same
+    // way and the failure will look like an unrelated one-word error from
+    // whatever call needs it" (2026-08-25). Slack returns `needed` and
+    // `provided` on missing_scope, which turns that one word into the answer.
+    if (error === "missing_scope") {
+      const needed = typeof rec.needed === "string" ? rec.needed : "";
+      const provided = typeof rec.provided === "string" ? rec.provided : "";
+      const detail = [needed === "" ? "" : `needs ${needed}`, provided === "" ? "" : `has ${provided}`]
+        .filter((x) => x !== "")
+        .join(", ");
+      return {
+        ok: false,
+        error:
+          detail === ""
+            ? `missing_scope on ${input}, and slack named no scope`
+            : `missing_scope on ${input}: ${detail}. A scope needs a reinstall: bun scripts/onboard-agent.ts <agent>`,
+      };
+    }
+    return { ok: false, error };
+  }
   return { ok: true, data: rec as unknown as T };
 }
 

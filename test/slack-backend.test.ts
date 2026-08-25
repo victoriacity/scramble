@@ -1920,6 +1920,38 @@ describe("a delivered line carries the sender's remit", () => {
   });
 });
 
+describe("a refused call names the scope Slack asked for", () => {
+  // An agent named the shape of the next failure: "the next scope you add will
+  // fail the same way and the failure will look like an unrelated one-word error
+  // from whatever call needs it." Slack returns `needed` and `provided` on
+  // missing_scope, and this used to drop both (2026-08-25).
+  const scoped = (body: Record<string, unknown>) =>
+    make({}, async () => new Response(JSON.stringify(body), { status: 200 }));
+
+  test("missing_scope carries what is needed and what the token has", async () => {
+    const h = scoped({ ok: false, error: "missing_scope", needed: "reactions:write", provided: "chat:write,users:read" });
+    const r = await h.backend.react("general", "9.9", "eyes", "bob");
+    expect(r.ok).toBe(false);
+    const said = r.ok ? "" : r.error;
+    expect(said).toContain("needs reactions:write");
+    expect(said).toContain("has chat:write,users:read");
+    expect(said).toContain("A scope needs a reinstall");
+  });
+
+  test("missing_scope with no detail says that too, rather than inventing one", async () => {
+    const h = scoped({ ok: false, error: "missing_scope" });
+    const r = await h.backend.react("general", "9.9", "eyes", "bob");
+    expect(r.ok).toBe(false);
+    expect(r.ok ? "" : r.error).toContain("slack named no scope");
+  });
+
+  test("every other error is passed through as Slack sent it", async () => {
+    const h = scoped({ ok: false, error: "channel_not_found" });
+    const r = await h.backend.react("general", "9.9", "eyes", "bob");
+    expect(r.ok ? "" : r.error).toContain("channel_not_found");
+  });
+});
+
 describe("denormalize: an outgoing @name becomes a real Slack mention", () => {
   // Without this a mention an agent writes is literal text: grey in Slack, no
   // notification for a human, while agents still wake because the receive path
