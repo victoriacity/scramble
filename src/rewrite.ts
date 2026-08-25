@@ -21,8 +21,8 @@
 //   The deterministic rules still decide. A rewrite is checked exactly as the
 //   sender's own words are, and one that breaks a rule is dropped in favour of
 //   the words that did pass.
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { lengthRefusal, lintLanguage, proseOf } from "./language";
 
 /** Which service answers. Gemini has its own request shape; Fireworks and
@@ -109,6 +109,96 @@ function request(cfg: RewriteConfig & { key: string }, prompt: string): { url: s
 /** WHERE THE INSTRUCTION LIVES: a markdown file beside the code, so it can be
  *  read and changed without touching TypeScript, and so the language gate lints
  *  it like every other document this repo ships. */
+/** ONE ROW PER SEND THAT MET THE REWRITER, so the question "does this help" has
+ *  a number instead of an anecdote.
+ *
+ *  The rewriter runs on every send from two hosts and five agents, and nobody can
+ *  say how often it improves a message, how often a guard refuses one, or which
+ *  guard fires most. Every claim about it today has been a single case somebody
+ *  remembered (2026-08-25).
+ *
+ *  `outcome` is one of: `sent` (a rewrite went out), `unchanged` (the model
+ *  returned what it was given), `retried` (the first attempt was refused and the
+ *  second went out), `refused` (both attempts failed a guard), `skipped` (the
+ *  call itself did not happen). `why` carries the guard's label for a refusal. */
+export interface RewriteRecord {
+  at: string;
+  agent: string;
+  channel: string;
+  outcome: "sent" | "unchanged" | "retried" | "refused" | "skipped";
+  why?: string;
+  /** Prose words before and after, so a reader sees what the rewrite did to
+   *  length without keeping either text. */
+  words: [number, number];
+}
+
+export function rewritesPath(configPath: string): string {
+  return join(dirname(configPath), "rewrites.jsonl");
+}
+
+export function recordRewrite(path: string, row: RewriteRecord): void {
+  mkdirSync(dirname(path), { recursive: true });
+  appendFileSync(path, `${JSON.stringify(row)}\n`);
+}
+
+export function readRewrites(path: string): RewriteRecord[] {
+  let raw: string;
+  try {
+    raw = readFileSync(path, "utf8");
+  } catch {
+    return [];
+  }
+  const out: RewriteRecord[] = [];
+  for (const line of raw.split("\n")) {
+    if (line.trim() === "") continue;
+    try {
+      const row = JSON.parse(line) as RewriteRecord;
+      if (typeof row.outcome === "string") out.push(row);
+    } catch {
+      continue;
+    }
+  }
+  return out;
+}
+
+/** What the rows say, in the shape a person asks it. */
+export function rewritesReport(rows: RewriteRecord[]): string {
+  if (rows.length === 0) {
+    return (
+      `No sends have met the rewriter on this host yet. A row is written per send ` +
+      `while a key is configured, so an empty file means the rewrite is off or nothing has been sent.`
+    );
+  }
+  const by = new Map<string, number>();
+  for (const r of rows) by.set(r.outcome, (by.get(r.outcome) ?? 0) + 1);
+  const refusals = new Map<string, number>();
+  for (const r of rows) {
+    if (r.outcome === "refused" || r.outcome === "retried") {
+      const why = r.why ?? "unnamed";
+      refusals.set(why, (refusals.get(why) ?? 0) + 1);
+    }
+  }
+  const order: RewriteRecord["outcome"][] = ["sent", "unchanged", "retried", "refused", "skipped"];
+  const counts = order
+    .filter((o) => (by.get(o) ?? 0) > 0)
+    .map((o) => `  ${o.padEnd(10)} ${by.get(o)}`)
+    .join("\n");
+  const guards =
+    refusals.size === 0
+      ? ""
+      : `\nWhat the guards caught:\n` +
+        [...refusals.entries()]
+          .sort((a, b) => b[1] - a[1])
+          .map(([why, n]) => `  ${n}  ${why}`)
+          .join("\n");
+  const grew = rows.filter((r) => r.words[1] > r.words[0]).length;
+  return (
+    `${rows.length} send(s) met the rewriter, from ${new Date(rows[0]?.at ?? "").toISOString().slice(0, 10)}:\n` +
+    `${counts}${guards}\n` +
+    `${grew} of them came back longer than the draft.`
+  );
+}
+
 export function promptPath(moduleDir: string): string {
   return join(moduleDir, "prompts", "rewrite.md");
 }

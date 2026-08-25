@@ -30,8 +30,20 @@ import {
 } from "./attachments";
 import { StatusManager } from "./status";
 import { SCOPE_NAMES, BOT_EVENT_NAMES } from "./app-manifest";
-import { languageRefusal, lengthRefusal, lineOf, lintLanguage } from "./language";
-import { chooseText, composePrompt, mentionsIn, readPromptTemplate, rewriteConfig, rewriteWith, type RewriteChoice } from "./rewrite";
+import { languageRefusal, lengthRefusal, lineOf, lintLanguage, wordCount } from "./language";
+import {
+  chooseText,
+  composePrompt,
+  mentionsIn,
+  readPromptTemplate,
+  readRewrites,
+  recordRewrite,
+  rewriteConfig,
+  rewriteWith,
+  rewritesPath,
+  rewritesReport,
+  type RewriteChoice,
+} from "./rewrite";
 import {
   originOf,
   peersPath,
@@ -411,7 +423,11 @@ async function postText(
   // holding a refusal for a mistake somebody else made. Two agents wrote prose
   // that avoided a banned form on purpose, watched the rewriter put it back, and
   // sent nothing (2026-08-25).
+  let retried = false;
+  let retriedWhy: string | undefined;
   if ("refuse" in chosen && chosen.retry !== undefined && template !== undefined && template.ok) {
+    retried = true;
+    retriedWhy = firstLineOf(chosen.refuse);
     io.writeErr(`rewrite: ${chosen.retry} Asking once more.`);
     chosen = chooseText(
       text,
@@ -421,10 +437,33 @@ async function postText(
   // A REWRITE THAT CANNOT BE USED STOPS THE SEND. The author's own words used to
   // go out here, which published exactly the prose the rewrite exists to
   // replace.
+  // ONE ROW PER SEND THAT MET THE REWRITER. Every claim about whether the
+  // rewriter helps has been a single case somebody remembered, on a feature now
+  // running on every send from two hosts.
+  const noteRewrite = (outcome: "sent" | "unchanged" | "retried" | "refused" | "skipped", why?: string): void => {
+    if (cfg.key === undefined) return;
+    try {
+      recordRewrite(rewritesPath(slackConfigPath(io)), {
+        at: new Date().toISOString(),
+        agent: nameFor(flags, io),
+        channel,
+        outcome,
+        ...(why === undefined ? {} : { why }),
+        words: [wordCount(text), "send" in chosen ? wordCount(chosen.send) : 0],
+      });
+    } catch (e) {
+      io.writeErr(`rewrite record not written: ${String(e)}`);
+    }
+  };
   if ("refuse" in chosen) {
+    noteRewrite("refused", firstLineOf(chosen.refuse));
     io.writeErr(chosen.refuse);
     return 1;
   }
+  noteRewrite(
+    template === undefined ? "skipped" : chosen.note === "" ? "unchanged" : retried ? "retried" : "sent",
+    retried ? retriedWhy : undefined,
+  );
   if (chosen.note !== "") io.writeErr(`rewrite: ${chosen.note}`);
   text = chosen.send;
   const thread = flags.get("thread") ?? undefined;
@@ -1642,6 +1681,15 @@ async function cmdLint(argv: string[], io: Io): Promise<number> {
  *  by different filesystems, and neither could see the other's files
  *  (2026-08-22). Grouping by path would have told them they shared a directory
  *  when they shared a string. */
+/** `scramble rewrites`: what the rewriter has done on this host.
+ *
+ *  Every claim about whether the rewriter helps has been a single case somebody
+ *  remembered. This counts the outcomes and names which guard fires most. */
+async function cmdRewrites(io: Io): Promise<number> {
+  io.write(rewritesReport(readRewrites(rewritesPath(slackConfigPath(io)))));
+  return 0;
+}
+
 async function cmdPeers(argv: string[], io: Io): Promise<number> {
   const { flags } = parseArgs(argv);
   const rows = readPeers(peersPath(slackConfigPath(io)));
@@ -1815,6 +1863,12 @@ async function settleSend(
   } catch (e) {
     io.writeErr(`inbox ledger not updated after posting to ${channel}: ${String(e)}`);
   }
+}
+
+/** The first line of a refusal, which names the guard that fired. The rest is the
+ *  model's attempt, which belongs on the screen and never in a counter. */
+function firstLineOf(refusal: string): string {
+  return (refusal.split("\n")[0] ?? "").replace(/^message send REFUSED: /, "").slice(0, 120);
 }
 
 /** Say what arrived in this channel between the last line this agent saw and the
@@ -2802,6 +2856,7 @@ const USAGE = [
   "  message react     --target <channel> --to <ts> --emoji <name>",
   "  inbox pending                                   lines addressed to you with no reply",
   "  peers             [--same-dir]                 who else is running, on which host, in which dir",
+  "  rewrites                                        what the rewriter did on this host, by outcome",
   "  inbox trace <ts>                                did that message reach you, and wake you",
   "  inbox close <ts>… --why <text>                 settle items the sender said need no reply",
   "  lint <file>...                                  the send's language rules, on any file",
@@ -2853,6 +2908,8 @@ export async function main(argv: string[], io: Io): Promise<number> {
       return cmdChannel(argv.slice(1), io);
     case "peers":
       return cmdPeers(argv.slice(1), io);
+    case "rewrites":
+      return cmdRewrites(io);
     case "inbox":
       return cmdInbox(argv.slice(1), io);
     case "lint":

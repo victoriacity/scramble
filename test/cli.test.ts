@@ -1123,6 +1123,52 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     expect(said).toContain("Every mention survived: @dev");
   });
 
+  test("`rewrites` reports what the rewriter did, and says why the file can be empty", async () => {
+    const cwd = scratchDir("rewrites-verb");
+    const empty = stubIo(cwd, async () => new Response("{}", { status: 200 }));
+    expect(await main(["rewrites"], empty.io)).toBe(0);
+    expect(empty.writes.join(" ")).toContain("No sends have met the rewriter");
+
+    // A send that met the rewriter writes a row, and the verb counts it.
+    mkdirSync(join(cwd, ".scramble"), { recursive: true });
+    writeFileSync(
+      join(cwd, ".scramble", "rewrites.jsonl"),
+      `${JSON.stringify({ at: "2026-08-25T12:00:00.000Z", agent: "dev", channel: "general", outcome: "sent", words: [10, 12] })}\n`,
+    );
+    const one = stubIo(cwd, async () => new Response("{}", { status: 200 }));
+    expect(await main(["rewrites"], one.io)).toBe(0);
+    expect(one.writes.join(" ")).toContain("1 send(s) met the rewriter");
+  });
+
+  test("an unwritable rewrite record REPORTS itself and the message still goes", async () => {
+    // The record is accounting; the message is the point.
+    const cwd = scratchDir("rewrites-locked");
+    const { io, errs } = stubIo(cwd, async (u) => {
+      const url = String(u);
+      if (url.includes("generativelanguage"))
+        return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: "the shipped line" }] } }] }), { status: 200 });
+      if (url.includes("chat.postMessage"))
+        return new Response(JSON.stringify({ ok: true, ts: "22.2", message: {} }), { status: 200 });
+      return new Response(JSON.stringify({ ok: true, messages: [{ ts: "22.2", text: "the shipped line" }] }), { status: 200 });
+    });
+    writeSlackConfig(cwd, {
+      appToken: "xapp-1",
+      token: "xoxb-1",
+      channels: { general: "C1" },
+      agents: { dev: { token: "T", handle: "dev" } },
+    });
+    // A DIRECTORY where the record belongs: the append throws.
+    mkdirSync(join(cwd, ".scramble", "rewrites.jsonl"), { recursive: true });
+    io.readStdin = async () => "the line as drafted";
+    const withKey: Io = {
+      ...io,
+      env: (n) => (n === "SCRAMBLE_REWRITE_KEY" ? "k" : io.env(n)),
+      moduleDir: () => join(import.meta.dir, "..", "src"),
+    };
+    expect(await main(["message", "send", "--target", "general", "--as", "dev", "--backend", "slack"], withKey)).toBe(0);
+    expect(errs.join(" ")).toContain("rewrite record not written");
+  });
+
   test("a rewritten send verifies WITHOUT the flag, and --no-verify skips it", async () => {
     // A rewritten send posts text the author never saw, so the question applies
     // to every one of them. Three agents wrote their own read-back wrapper for

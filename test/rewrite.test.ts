@@ -19,6 +19,10 @@ import {
   mentionsIn,
   proseRatio,
   strengthDrift,
+  readRewrites,
+  recordRewrite,
+  rewritesPath,
+  rewritesReport,
   rewriteConfig,
   composePrompt,
   promptPath,
@@ -412,5 +416,63 @@ describe("choosing what to send", () => {
     const long = Array.from({ length: 260 }, () => "word").join(" ");
     const out = chooseText("short", { ok: true, text: long });
     expect("refuse" in out && out.refuse).toContain("ran over the word limit");
+  });
+});
+
+describe("the record of what the rewriter did", () => {
+  // Every claim about whether the rewriter helps has been a single case somebody
+  // remembered, on a feature running on every send from two hosts and five
+  // agents (2026-08-25).
+  const row = (over: Partial<Parameters<typeof recordRewrite>[1]> = {}) => ({
+    at: "2026-08-25T12:00:00.000Z",
+    agent: "dev",
+    channel: "general",
+    outcome: "sent" as const,
+    words: [20, 22] as [number, number],
+    ...over,
+  });
+
+  test("an empty file says why it can be empty", () => {
+    const said = rewritesReport([]);
+    expect(said).toContain("No sends have met the rewriter");
+    expect(said).toContain("the rewrite is off or nothing has been sent");
+  });
+
+  test("rows are counted by outcome, and the guards are ranked", () => {
+    const rows = [
+      row(),
+      row(),
+      row({ outcome: "unchanged", words: [10, 10] }),
+      // A REFUSAL SENDS NOTHING, so its second count is zero, which is what the
+      // send path writes.
+      row({ outcome: "refused", why: "the rewrite introduced prevents", words: [20, 0] }),
+      row({ outcome: "refused", why: "the rewrite introduced prevents", words: [20, 0] }),
+      row({ outcome: "retried", why: "the rewrite broke 1 language rule(s)" }),
+      row({ outcome: "skipped", words: [20, 0] }),
+    ];
+    const said = rewritesReport(rows);
+    expect(said).toContain("7 send(s) met the rewriter");
+    expect(said).toContain("sent       2");
+    expect(said).toContain("refused    2");
+    expect(said).toContain("What the guards caught:");
+    // Ranked, so the one that fires most reads first.
+    expect(said.indexOf("2  the rewrite introduced prevents")).toBeLessThan(
+      said.indexOf("1  the rewrite broke"),
+    );
+    expect(said).toContain("3 of them came back longer than the draft");
+  });
+
+  test("rows survive a round trip, and a damaged line is skipped", () => {
+    const p = rewritesPath(join(scratch(), "slack.json"));
+    recordRewrite(p, row());
+    recordRewrite(p, row({ outcome: "refused", why: "a guard" }));
+    writeFileSync(p, `${readRewrites(p).map((r) => JSON.stringify(r)).join("\n")}\nnot json\n{"nope":1}\n`);
+    const back = readRewrites(p);
+    expect(back).toHaveLength(2);
+    expect(back[1]?.outcome).toBe("refused");
+  });
+
+  test("an unreadable file reads as no rows", () => {
+    expect(readRewrites(join(scratch(), "nothing.jsonl"))).toEqual([]);
   });
 });
