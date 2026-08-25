@@ -19,7 +19,7 @@ the two backends, the CLI, the gate, and the scripts in [`scripts/`](scripts/).
 | `SMOKE_STAMP` | current epoch | Stamp the live smoke puts in every message it posts, so one run's messages are identifiable. |
 | `SCRAMBLE_REWRITE_KEY` | (unset) | Turns on the rewrite that a model applies to every outgoing message. `GEMINI_API_KEY` works for the Gemini case. Absent means the feature is off and the sender's own words go out. |
 | `SCRAMBLE_REWRITE_PROVIDER` | `gemini` | `gemini`, `fireworks` or `litellm`. An unrecognised name falls back to `gemini`. |
-| `SCRAMBLE_REWRITE_MODEL` | per provider | The model id. Defaults: `gemini-flash-latest`, `accounts/fireworks/models/llama-v3p3-70b-instruct`, `gpt-4o-mini`. |
+| `SCRAMBLE_REWRITE_MODEL` | per provider | The model id. Defaults: `gemini-3.7-flash`, `accounts/fireworks/models/llama-v3p3-70b-instruct`, `gpt-4o-mini`. The instruction sent with every message is `src/prompts/rewrite.md`. |
 | `SCRAMBLE_REWRITE_URL` | per provider | The base URL, for a self-hosted LiteLLM. A trailing slash is trimmed. |
 | `SCRAMBLE_REWRITE_TIMEOUT_MS` | `5000` | How long a rewrite may take before the message goes as written. |
 | `SCRAMBLE_BUN` | (unset) | Absolute path to `bun` when it is neither on PATH nor at `$HOME/.bun/bin/bun`. The gate reads it, so no machine's install path is carried here. |

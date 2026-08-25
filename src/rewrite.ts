@@ -21,6 +21,8 @@
 //   The deterministic rules still decide. A rewrite is checked exactly as the
 //   sender's own words are, and one that breaks a rule is dropped in favour of
 //   the words that did pass.
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { lengthRefusal, lintLanguage } from "./language";
 
 /** Which service answers. Gemini has its own request shape; Fireworks and
@@ -46,7 +48,7 @@ export const DEFAULT_TIMEOUT_MS = 5000;
 const GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta";
 const FIREWORKS_BASE = "https://api.fireworks.ai/inference/v1";
 const DEFAULT_MODELS: Record<Provider, string> = {
-  gemini: "gemini-flash-latest",
+  gemini: "gemini-3.7-flash",
   fireworks: "accounts/fireworks/models/llama-v3p3-70b-instruct",
   litellm: "gpt-4o-mini",
 };
@@ -104,27 +106,34 @@ function request(cfg: RewriteConfig & { key: string }, prompt: string): { url: s
   };
 }
 
-/** The instruction the model gets. Kept here so it is reviewable as text.
- *
- *  It names what must NOT change, because that is the whole risk: a claim is
- *  evidence about what its author measured, and a softened verb makes it a
- *  different claim. */
-export function rewritePrompt(text: string): string {
-  return [
-    "Rewrite the message below to professional product and technical communication standards.",
-    "",
-    "Keep every claim exactly as strong as it is. Do not soften, hedge, or qualify.",
-    "Do not add words like may, might, appears, seems, or likely to a statement of fact.",
-    "Keep every number, identifier, file path, command and quoted span byte for byte.",
-    "Keep fenced code blocks and backtick spans unchanged.",
-    "Keep the message in the language it is written in.",
-    "Do not add a greeting, a sign-off, or a sentence about the message itself.",
-    "Do not use an em dash or an en dash. Do not write 'not X but Y' or 'rather than'.",
-    "Answer with the rewritten message and nothing else.",
-    "",
-    "---",
-    text,
-  ].join("\n");
+/** WHERE THE INSTRUCTION LIVES: a markdown file beside the code, so it can be
+ *  read and changed without touching TypeScript, and so the language gate lints
+ *  it like every other document this repo ships. */
+export function promptPath(moduleDir: string): string {
+  return join(moduleDir, "prompts", "rewrite.md");
+}
+
+/** Read the instruction. A missing or empty file is a REASON, never a default:
+ *  a rewrite driven by no instruction is worse than no rewrite, since the model
+ *  would be free to do anything to a claim. */
+export function readPromptTemplate(moduleDir: string): { ok: true; text: string } | { ok: false; why: string } {
+  const path = promptPath(moduleDir);
+  let raw: string;
+  try {
+    raw = readFileSync(path, "utf8");
+  } catch (e) {
+    return { ok: false, why: `the rewrite instruction at ${path} could not be read: ${e instanceof Error ? e.message : String(e)}` };
+  }
+  // Everything above the first `---` on its own line is the file explaining
+  // itself to a human. The model gets what follows.
+  const body = raw.split(/\n---\n/).slice(1).join("\n---\n").trim();
+  if (body === "") return { ok: false, why: `the rewrite instruction at ${path} carries no instruction below its first --- line` };
+  return { ok: true, text: body };
+}
+
+/** The instruction with the message appended, which is what the model receives. */
+export function composePrompt(template: string, text: string): string {
+  return `${template}\n\n---\n${text}`;
 }
 
 /** The Gemini REST call, returning the rewritten text or a reason it is absent.
@@ -134,10 +143,10 @@ export function rewritePrompt(text: string): string {
 export async function rewriteWith(
   fetch: (input: string, init?: RequestInit) => Promise<Response>,
   cfg: RewriteConfig,
-  text: string,
+  prompt: string,
 ): Promise<{ ok: true; text: string } | { ok: false; why: string }> {
   if (cfg.key === undefined) return { ok: false, why: "no rewrite key configured" };
-  const { url, init } = request({ ...cfg, key: cfg.key }, rewritePrompt(text));
+  const { url, init } = request({ ...cfg, key: cfg.key }, prompt);
   const control = new AbortController();
   const timer = setTimeout(() => control.abort(), cfg.timeoutMs);
   let res: Response;

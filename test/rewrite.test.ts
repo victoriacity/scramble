@@ -5,12 +5,19 @@
 // rewrite that is sent. And the rewrite passes the same rules the sender's words
 // did, or it is dropped in favour of the words that passed.
 import { describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+const scratch = (): string => mkdtempSync(join(tmpdir(), "scramble-prompt-"));
 import {
   DEFAULT_MODEL,
   DEFAULT_TIMEOUT_MS,
   chooseText,
   rewriteConfig,
-  rewritePrompt,
+  composePrompt,
+  promptPath,
+  readPromptTemplate,
   rewriteWith,
 } from "../src/rewrite";
 
@@ -51,12 +58,43 @@ describe("the configuration", () => {
 });
 
 describe("the instruction", () => {
-  test("it names what must not change, because that is the whole risk", () => {
-    const p = rewritePrompt("the socket delivered nothing");
-    expect(p).toContain("Keep every claim exactly as strong as it is");
-    expect(p).toContain("Do not add words like may, might, appears");
-    expect(p).toContain("byte for byte");
-    expect(p).toContain("the socket delivered nothing");
+  // It lives in a markdown file beside the code, so it can be read and changed
+  // without touching TypeScript, and so the language gate lints it like every
+  // other document this repo ships.
+  const here = join(import.meta.dir, "..", "src");
+
+  test("the shipped file names what must not change, because that is the whole risk", () => {
+    const t = readPromptTemplate(here);
+    expect(t.ok).toBe(true);
+    const text = t.ok ? t.text : "";
+    expect(text).toContain("Keep every claim exactly as strong as it is");
+    expect(text).toContain("Never turn a measurement into an impression");
+    expect(text).toContain("byte for byte");
+    // The human preamble above the first --- line is NOT sent.
+    expect(text).not.toContain("# Rewrite instruction");
+  });
+
+  test("a missing instruction is a REASON, never a default", () => {
+    // A rewrite driven by no instruction is worse than no rewrite: the model
+    // would be free to do anything to a claim.
+    const missing = readPromptTemplate(join(scratch(), "nowhere"));
+    expect(missing.ok).toBe(false);
+    expect(!missing.ok && missing.why).toContain("could not be read");
+  });
+
+  test("a file with no instruction below its marker is a REASON too", () => {
+    const dir = scratch();
+    mkdirSync(join(dir, "prompts"), { recursive: true });
+    writeFileSync(promptPath(dir), "# only a preamble\n\nnothing below a marker\n");
+    const empty = readPromptTemplate(dir);
+    expect(empty.ok).toBe(false);
+    expect(!empty.ok && empty.why).toContain("carries no instruction");
+  });
+
+  test("the message is appended after the marker", () => {
+    expect(composePrompt("INSTRUCTION", "the socket delivered nothing")).toBe(
+      "INSTRUCTION\n\n---\nthe socket delivered nothing",
+    );
   });
 });
 

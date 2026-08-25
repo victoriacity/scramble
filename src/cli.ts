@@ -31,7 +31,7 @@ import {
 import { StatusManager } from "./status";
 import { SCOPE_NAMES, BOT_EVENT_NAMES } from "./app-manifest";
 import { languageRefusal, lengthRefusal, lineOf, lintLanguage } from "./language";
-import { chooseText, rewriteConfig, rewriteWith } from "./rewrite";
+import { chooseText, composePrompt, readPromptTemplate, rewriteConfig, rewriteWith } from "./rewrite";
 import {
   originOf,
   peersPath,
@@ -399,8 +399,13 @@ async function postText(
   // words are printed beside it. And the rewrite passes the same rules the
   // sender's words did, or it is dropped in favour of the words that passed.
   const cfg = rewriteConfig(io.env);
+  const template = cfg.key === undefined ? undefined : readPromptTemplate(io.moduleDir ? io.moduleDir() : "src");
   const chosen =
-    cfg.key === undefined ? { text, note: "" } : chooseText(text, await rewriteWith(io.fetch, cfg, text));
+    template === undefined
+      ? { text, note: "" }
+      : template.ok
+        ? chooseText(text, await rewriteWith(io.fetch, cfg, composePrompt(template.text, text)))
+        : chooseText(text, { ok: false, why: template.why });
   if (chosen.note !== "") io.writeErr(`rewrite: ${chosen.note}`);
   text = chosen.text;
   const thread = flags.get("thread") ?? undefined;

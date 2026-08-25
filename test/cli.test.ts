@@ -1043,6 +1043,40 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     expect(f.errs.join(" ")).toContain("inbox trace 999.9");
   });
 
+  test("with a key set, the send rewrites and prints the sender's own words beside it", async () => {
+    // The message ALWAYS goes, and nothing changes silently.
+    const cwd = scratchDir("send-rewrite");
+    const { io, errs } = stubIo(cwd, async (u) =>
+      String(u).includes("generativelanguage")
+        ? new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: "the professional line" }] } }] }), { status: 200 })
+        : new Response(JSON.stringify({ crossings: [] }), { status: 200 }),
+    );
+    io.readStdin = async () => "my own line";
+    const withKey: Io = {
+      ...io,
+      env: (n) => (n === "SCRAMBLE_REWRITE_KEY" ? "k" : io.env(n)),
+      moduleDir: () => join(import.meta.dir, "..", "src"),
+    };
+    expect(await main(["message", "send", "--target", "general", "--as", "dev"], withKey)).toBe(0);
+    expect(errs.join(" ")).toContain("rewrite: sent a rewrite");
+    expect(errs.join(" ")).toContain("my own line");
+  });
+
+  test("an unreadable instruction costs the rewrite, and the message still goes", async () => {
+    // A rewrite driven by no instruction is worse than no rewrite, so a missing
+    // file sends the sender's words and says why.
+    const cwd = scratchDir("send-noprompt");
+    const { io, errs } = stubIo(cwd, async () => new Response(JSON.stringify({ crossings: [] }), { status: 200 }));
+    io.readStdin = async () => "my own line";
+    const withKey: Io = {
+      ...io,
+      env: (n) => (n === "SCRAMBLE_REWRITE_KEY" ? "k" : io.env(n)),
+      moduleDir: () => join(cwd, "nowhere"),
+    };
+    expect(await main(["message", "send", "--target", "general", "--as", "dev"], withKey)).toBe(0);
+    expect(errs.join(" ")).toContain("could not be read");
+  });
+
   test("a message over the word limit is REFUSED at the send", async () => {
     // Operator, 2026-08-22: "We need to impose a message length limit in words.
     // Maybe 200." A refusal and not a warning: the long version is meant to
