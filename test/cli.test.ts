@@ -1250,6 +1250,82 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     expect(errs.join(" ")).toContain("the reply as stored");
   });
 
+  test("`rewrite` prints the model's answer, reads a file, and sends nothing", async () => {
+    // The operator asked for the instruction file itself to go through the
+    // rewriter, and nothing here could do that without sending a message
+    // somewhere (2026-08-25).
+    const cwd = scratchDir("rewrite-preview");
+    const { io, writes, errs, urls } = stubIo(cwd, async () =>
+      new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: "I shipped the parser fix." }] } }] }), {
+        status: 200,
+      }),
+    );
+    const draft = join(cwd, "draft.md");
+    writeFileSync(draft, "I shipped the parser fix, basically.");
+    const withKey: Io = {
+      ...io,
+      env: (n) => (n === "SCRAMBLE_REWRITE_KEY" ? "k" : io.env(n)),
+      moduleDir: () => join(import.meta.dir, "..", "src"),
+    };
+    expect(await main(["rewrite", draft], withKey)).toBe(0);
+    expect(writes.join("")).toContain("I shipped the parser fix.");
+    expect(errs.join(" ")).toContain("rewrite:");
+    // One call, to the model. Nothing went to a channel.
+    expect(urls.length).toBe(1);
+    expect(urls.join(" ")).not.toContain("chat.postMessage");
+  });
+
+  test("`rewrite` reads stdin when no file is named, and says when nothing changed", async () => {
+    const cwd = scratchDir("rewrite-stdin");
+    const { io, errs } = stubIo(cwd, async () =>
+      new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: "I shipped the parser fix." }] } }] }), {
+        status: 200,
+      }),
+    );
+    io.readStdin = async () => "I shipped the parser fix.";
+    expect(
+      await main(["rewrite"], {
+        ...io,
+        env: (n) => (n === "SCRAMBLE_REWRITE_KEY" ? "k" : io.env(n)),
+        moduleDir: () => join(import.meta.dir, "..", "src"),
+      }),
+    ).toBe(0);
+    expect(errs.join(" ")).toContain("returned what you wrote, unchanged");
+  });
+
+  test("`rewrite` reports a missing file, an empty input, an absent key, and a refusal", async () => {
+    const cwd = scratchDir("rewrite-sad");
+    const { io, errs } = stubIo(cwd, async () =>
+      new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: "shipped the parser fix." }] } }] }), {
+        status: 200,
+      }),
+    );
+    const withKey: Io = {
+      ...io,
+      env: (n) => (n === "SCRAMBLE_REWRITE_KEY" ? "k" : io.env(n)),
+      moduleDir: () => join(import.meta.dir, "..", "src"),
+    };
+    expect(await main(["rewrite", join(cwd, "nope.md")], withKey)).toBe(1);
+    expect(errs.join(" ")).toContain("cannot read");
+
+    const empty = join(cwd, "empty.md");
+    writeFileSync(empty, "   \n");
+    expect(await main(["rewrite", empty], withKey)).toBe(1);
+    expect(errs.join(" ")).toContain("is empty");
+
+    // No key: the send path leaves the text alone, and a preview has nothing to
+    // show, so it says which variable turns the model on.
+    io.readStdin = async () => "I shipped the parser fix.";
+    expect(await main(["rewrite"], io)).toBe(1);
+    expect(errs.join(" ")).toContain("SCRAMBLE_REWRITE_KEY");
+
+    // A refusal comes out whole: the model dropped the first person here.
+    const drops = join(cwd, "drops.md");
+    writeFileSync(drops, "I shipped the parser fix.");
+    expect(await main(["rewrite", drops], withKey)).toBe(1);
+    expect(errs.join(" ")).toContain("rewrite");
+  });
+
   test("`--verify` counts ENTITIES, and names a mention that notified nobody", async () => {
     // Slack notifies on `<@U…>` and never on a name in text, so a count taken
     // from the text calls a failed conversion live. That is the defect that

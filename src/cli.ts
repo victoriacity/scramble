@@ -378,6 +378,52 @@ async function postLocalCore(
  *  store's message when `message send --attach` produced them; the slack
  *  backend attaches by its own upload flow (files are uploaded to the target
  *  before the text send). */
+/** The rewrite attempt, with its one retry: the model's answer put through the
+ *  guards, and asked again with what it broke.
+ *
+ *  `postText` calls this on the way to Slack and `scramble rewrite` calls it
+ *  with nowhere to send, so the preview an author reads is the same code path
+ *  their message takes. A preview built from a second copy of these steps would
+ *  drift away from the send and lie about it. */
+async function attemptRewrite(
+  text: string,
+  io: Io,
+): Promise<{ chosen: RewriteChoice; retried: boolean; retriedWhy?: string; configured: boolean }> {
+  const cfg = rewriteConfig(io.env);
+  const template = cfg.key === undefined ? undefined : readPromptTemplate(io.moduleDir ? io.moduleDir() : "src");
+  let chosen: RewriteChoice =
+    template === undefined
+      ? { send: text, note: "" }
+      : template.ok
+        ? chooseText(text, await rewriteWith(io.fetch, cfg, composePrompt(template.text, text)))
+        : chooseText(text, { ok: false, why: template.why });
+  // ONE MORE ATTEMPT, WITH WHAT IT BROKE. Every guard fires on something the
+  // MODEL did, so the model is the party that can fix it, and the author is left
+  // holding a refusal for a mistake somebody else made. Two agents wrote prose
+  // that avoided a banned form on purpose, watched the rewriter put it back, and
+  // sent nothing (2026-08-25).
+  if ("refuse" in chosen && chosen.retry !== undefined && template !== undefined && template.ok) {
+    const why = firstLineOf(chosen.refuse);
+    io.writeErr(`rewrite: ${chosen.retry} Asking once more.`);
+    return {
+      chosen: chooseText(
+        text,
+        await rewriteWith(io.fetch, cfg, `${composePrompt(template.text, text)}\n\n${chosen.retry}`),
+      ),
+      retried: true,
+      retriedWhy: why,
+      configured: true,
+    };
+  }
+  return { chosen, retried: false, configured: template !== undefined };
+}
+
+/** Post one message under whichever backend the run selects. The mirrored verb
+ *  (`message send`) and the alias (`post <channel> <text>`) share this path so
+ *  the backend switch sits below the verb parsing. `files` rides the local
+ *  store's message when `message send --attach` produced them; the slack
+ *  backend attaches by its own upload flow (files are uploaded to the target
+ *  before the text send). */
 async function postText(
   channel: string,
   text: string,
@@ -410,30 +456,7 @@ async function postText(
   // rewrite. Nothing changes silently: when a rewrite is sent, the sender's own
   // words are printed beside it. And the rewrite passes the same rules the
   // sender's words did, or it is dropped in favour of the words that passed.
-  const cfg = rewriteConfig(io.env);
-  const template = cfg.key === undefined ? undefined : readPromptTemplate(io.moduleDir ? io.moduleDir() : "src");
-  let chosen: RewriteChoice =
-    template === undefined
-      ? { send: text, note: "" }
-      : template.ok
-        ? chooseText(text, await rewriteWith(io.fetch, cfg, composePrompt(template.text, text)))
-        : chooseText(text, { ok: false, why: template.why });
-  // ONE MORE ATTEMPT, WITH WHAT IT BROKE. Every guard fires on something the
-  // MODEL did, so the model is the party that can fix it, and the author is left
-  // holding a refusal for a mistake somebody else made. Two agents wrote prose
-  // that avoided a banned form on purpose, watched the rewriter put it back, and
-  // sent nothing (2026-08-25).
-  let retried = false;
-  let retriedWhy: string | undefined;
-  if ("refuse" in chosen && chosen.retry !== undefined && template !== undefined && template.ok) {
-    retried = true;
-    retriedWhy = firstLineOf(chosen.refuse);
-    io.writeErr(`rewrite: ${chosen.retry} Asking once more.`);
-    chosen = chooseText(
-      text,
-      await rewriteWith(io.fetch, cfg, `${composePrompt(template.text, text)}\n\n${chosen.retry}`),
-    );
-  }
+  const { chosen, retried, retriedWhy, configured } = await attemptRewrite(text, io);
   // A REWRITE THAT CANNOT BE USED STOPS THE SEND. The author's own words used to
   // go out here, which published exactly the prose the rewrite exists to
   // replace.
@@ -441,7 +464,7 @@ async function postText(
   // rewriter helps has been a single case somebody remembered, on a feature now
   // running on every send from two hosts.
   const noteRewrite = (outcome: "sent" | "unchanged" | "retried" | "refused" | "skipped", why?: string): void => {
-    if (cfg.key === undefined) return;
+    if (rewriteConfig(io.env).key === undefined) return;
     try {
       recordRewrite(rewritesPath(slackConfigPath(io)), {
         at: new Date().toISOString(),
@@ -461,7 +484,7 @@ async function postText(
     return 1;
   }
   noteRewrite(
-    template === undefined ? "skipped" : chosen.note === "" ? "unchanged" : retried ? "retried" : "sent",
+    !configured ? "skipped" : chosen.note === "" ? "unchanged" : retried ? "retried" : "sent",
     retried ? retriedWhy : undefined,
   );
   if (chosen.note !== "") io.writeErr(`rewrite: ${chosen.note}`);
@@ -502,7 +525,9 @@ async function postText(
     //
     // `--no-verify` skips it, and `--verify` asks for it where the rewrite is
     // off.
-    const verifying = flags.has("no-verify") ? false : flags.has("verify") || cfg.key !== undefined;
+    const verifying = flags.has("no-verify")
+      ? false
+      : flags.has("verify") || rewriteConfig(io.env).key !== undefined;
     if (verifying) {
       if (r.ts === undefined) {
         io.writeErr(`verify: slack returned no ts for this message, so nothing can be read back.`);
@@ -1688,6 +1713,47 @@ async function cmdLint(argv: string[], io: Io): Promise<number> {
  *  by different filesystems, and neither could see the other's files
  *  (2026-08-22). Grouping by path would have told them they shared a directory
  *  when they shared a string. */
+/** `scramble rewrite [<file>]`: what the rewriter would make of this text.
+ *
+ *  Asked for by the operator about the instruction file itself: "Rewrite prompt
+ *  itself again should go through rewriter." Nothing here can send, so an author
+ *  can read the model's answer, and any file in the repo can be put through the
+ *  rules it asks other people to follow.
+ *
+ *  This writes no row to the ledger. That file counts sends that met the
+ *  rewriter, and a preview is not a send. */
+async function cmdRewrite(argv: string[], io: Io): Promise<number> {
+  const file = argv.find((a) => !a.startsWith("--"));
+  let text: string;
+  try {
+    text =
+      file === undefined ? await (io.readStdin ? io.readStdin() : Promise.resolve("")) : readFileSync(file, "utf8");
+  } catch (e) {
+    io.writeErr(`rewrite: cannot read ${file ?? "stdin"}: ${String(e)}`);
+    return 1;
+  }
+  if (text.trim() === "") {
+    io.writeErr(`rewrite: ${file ?? "stdin"} is empty, so there is nothing to rewrite.`);
+    return 1;
+  }
+  const { chosen, retried, configured } = await attemptRewrite(text, io);
+  if (!configured) {
+    io.writeErr(`rewrite: no model is configured; set SCRAMBLE_REWRITE_KEY to turn it on.`);
+    return 1;
+  }
+  if ("refuse" in chosen) {
+    io.writeErr(chosen.refuse);
+    return 1;
+  }
+  io.write(chosen.send.endsWith("\n") ? chosen.send : `${chosen.send}\n`);
+  io.writeErr(
+    chosen.note === ""
+      ? `rewrite: the model returned what you wrote, unchanged.`
+      : `rewrite: ${chosen.note}${retried ? " (on the second attempt)" : ""}`,
+  );
+  return 0;
+}
+
 /** `scramble rewrites`: what the rewriter has done on this host.
  *
  *  Every claim about whether the rewriter helps has been a single case somebody
@@ -2863,6 +2929,7 @@ const USAGE = [
   "  message react     --target <channel> --to <ts> --emoji <name>",
   "  inbox pending                                   lines addressed to you with no reply",
   "  peers             [--same-dir]                 who else is running, on which host, in which dir",
+  "  rewrite           [<file>]                      what the rewriter makes of this text; sends nothing",
   "  rewrites                                        what the rewriter did on this host, by outcome",
   "  inbox trace <ts>                                did that message reach you, and wake you",
   "  inbox close <ts>… --why <text>                 settle items the sender said need no reply",
@@ -2915,6 +2982,8 @@ export async function main(argv: string[], io: Io): Promise<number> {
       return cmdChannel(argv.slice(1), io);
     case "peers":
       return cmdPeers(argv.slice(1), io);
+    case "rewrite":
+      return cmdRewrite(argv.slice(1), io);
     case "rewrites":
       return cmdRewrites(io);
     case "inbox":

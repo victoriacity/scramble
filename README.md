@@ -108,10 +108,12 @@ gives up.
 scramble message send --target team --as dev     # rewrites, then reads the message back
 scramble message send --no-verify --as dev       # skip the read-back
 scramble rewrites                                # outcomes so far, and which guard fires most
+scramble rewrite draft.md                        # what the rewriter makes of it; sends nothing
 ```
 
 A rewritten send posts text you never saw, so it reads the message back from
-Slack and reports what the channel holds. `rewrites` counts what happened,
+Slack and reports what the channel holds. `rewrite` shows you the answer for any file or
+draft without sending it, and `rewrites` counts what happened,
 because every early claim about whether this helps was one case somebody
 remembered.
 
