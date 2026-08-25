@@ -23,7 +23,7 @@
 //   the words that did pass.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { lengthRefusal, lintLanguage } from "./language";
+import { lengthRefusal, lintLanguage, proseOf } from "./language";
 
 /** Which service answers. Gemini has its own request shape; Fireworks and
  *  LiteLLM both speak the OpenAI chat-completions shape, so they are one code
@@ -196,6 +196,34 @@ function firstText(body: unknown): string | undefined {
  *  A rewrite that breaks a language rule is DROPPED: the sender's own words
  *  already passed, and posting prose the repo refuses because a model wrote it
  *  would make the rules mean nothing. */
+/** Things the rewrite must still carry, taken out of the ORIGINAL.
+ *
+ *  Backticked spans and fenced blocks, numbers, @mentions, URLs and file paths.
+ *  A rewrite missing any of them changed the evidence, whatever it did to the
+ *  prose. */
+export function factsIn(text: string): string[] {
+  const out = new Set<string>();
+  for (const m of text.matchAll(/```[\s\S]*?```|`[^`\n]+`/g)) out.add(m[0]);
+  const prose = proseOf(text);
+  for (const m of prose.matchAll(/\b\d[\d.,:_-]*\b/g)) out.add(m[0]);
+  for (const m of prose.matchAll(/@[A-Za-z0-9._-]+/g)) out.add(m[0]);
+  for (const m of prose.matchAll(/https?:\/\/\S+/g)) out.add(m[0]);
+  for (const m of prose.matchAll(/(?:^|\s)(\/[A-Za-z0-9._\/-]{3,})/g)) out.add(m[1] ?? "");
+  out.delete("");
+  return [...out];
+}
+
+/** How much of the original's prose survived, as a fraction. Whole sentences
+ *  disappearing is what a dropped conclusion looks like from outside. */
+export function proseRatio(original: string, rewritten: string): number {
+  const words = (t: string): number => proseOf(t).split(/\s+/).filter((w) => w !== "").length;
+  const before = words(original);
+  return before === 0 ? 1 : words(rewritten) / before;
+}
+
+/** The share of the original's prose a rewrite may drop before it is refused. */
+export const MIN_PROSE_RATIO = 0.6;
+
 export function chooseText(
   original: string,
   rewritten: { ok: true; text: string } | { ok: false; why: string },
@@ -205,6 +233,27 @@ export function chooseText(
   const over = lengthRefusal(rewritten.text);
   if (over !== "") {
     return { text: original, note: `sent your own words: the rewrite ran over the word limit, and yours did not.` };
+  }
+  // WHAT THE ORIGINAL CARRIED MUST STILL BE THERE. Measured in a live channel:
+  // the rewriter dropped a closing causal sentence and replaced a statement of
+  // fact with a different one, and the receiving agent then inferred the missing
+  // conclusion from the numbers (2026-08-25). The instruction already demands
+  // both; this refuses the rewrite when the demand went unmet.
+  const lost = factsIn(original).filter((f) => !rewritten.text.includes(f));
+  if (lost.length > 0) {
+    return {
+      text: original,
+      note: `sent your own words: the rewrite dropped ${lost.length} thing(s) yours carried: ${lost.slice(0, 5).join(", ")}`,
+    };
+  }
+  const kept = proseRatio(original, rewritten.text);
+  if (kept < MIN_PROSE_RATIO) {
+    return {
+      text: original,
+      note:
+        `sent your own words: the rewrite kept ${Math.round(kept * 100)}% of your prose, under the ` +
+        `${Math.round(MIN_PROSE_RATIO * 100)}% floor. A whole sentence going missing is what a dropped conclusion looks like.`,
+    };
   }
   const hits = lintLanguage(rewritten.text);
   if (hits.length > 0) {

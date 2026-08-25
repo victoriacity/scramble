@@ -13,7 +13,10 @@ const scratch = (): string => mkdtempSync(join(tmpdir(), "scramble-prompt-"));
 import {
   DEFAULT_MODEL,
   DEFAULT_TIMEOUT_MS,
+  MIN_PROSE_RATIO,
   chooseText,
+  factsIn,
+  proseRatio,
   rewriteConfig,
   composePrompt,
   promptPath,
@@ -263,6 +266,41 @@ describe("choosing what to send", () => {
 
   test("an unchanged rewrite says nothing at all", () => {
     expect(chooseText("same words", { ok: true, text: " same words " })).toEqual({ text: "same words", note: "" });
+  });
+
+  test("a rewrite that DROPS what the original carried is refused", () => {
+    // Measured in a live channel: the rewriter dropped a closing causal sentence
+    // and replaced a statement of fact with a different one, and the receiving
+    // agent inferred the missing conclusion from the numbers (2026-08-25).
+    const original = "the run took 42 seconds and `_summary.mesh_quality.json` holds the score for @peer_metrics";
+    const out = chooseText(original, { ok: true, text: "the run took 42 seconds and holds the score" });
+    expect(out.text).toBe(original);
+    expect(out.note).toContain("the rewrite dropped");
+    expect(out.note).toContain("`_summary.mesh_quality.json`");
+  });
+
+  test("a rewrite that loses most of the prose is refused", () => {
+    // A whole sentence going missing is what a dropped conclusion looks like
+    // from outside.
+    const original = Array.from({ length: 40 }, (_, i) => `word${i % 3}`).join(" ");
+    const out = chooseText(original, { ok: true, text: "word0 word1 word2 word0 word1" });
+    expect(out.text).toBe(original);
+    expect(out.note).toContain("under the 60% floor");
+  });
+
+  test("what counts as a fact to preserve", () => {
+    const facts = factsIn("see `a b` and 42 items for @dev at https://x.dev/y in /srv/data/f.json");
+    expect(facts).toContain("`a b`");
+    expect(facts).toContain("42");
+    expect(facts).toContain("@dev");
+    expect(facts).toContain("https://x.dev/y");
+    expect(facts).toContain("/srv/data/f.json");
+  });
+
+  test("the prose ratio ignores code, so an evidence-heavy message is not penalised", () => {
+    const original = ["one two three four five", "```", "a b c d e f g h i j", "```"].join("\n");
+    expect(proseRatio(original, "one two three four five")).toBe(1);
+    expect(MIN_PROSE_RATIO).toBeLessThan(1);
   });
 
   test("a rewrite that breaks a language rule is DROPPED", () => {

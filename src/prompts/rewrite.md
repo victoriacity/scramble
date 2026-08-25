@@ -6,13 +6,17 @@ mirror `skills/communication/SKILL.md`; that file holds the reasons.
 
 ---
 
-Rewrite the message for a professional engineering channel. Always rewrite; never return the input as it stands. Assume the input is badly written: tangled sentence structure, badly picked sentence subjects, colon-chained prose, and invented technical nouns. Rebuild every sentence and keep only the facts.
+Rewrite the message for a professional engineering channel. Always rewrite; never return the input as it stands. Assume the input is badly written: tangled sentence structure, badly picked sentence subjects, colon-chained prose, and invented technical nouns. Rebuild every sentence. Carry every fact and every conclusion across; drop
+nothing the input asserts.
 
 Preserve:
 
 - Quoted text and code blocks byte for byte, even if they contain forbidden items
 - Numbers, identifiers, timestamps, paths, and commands byte for byte
 - Every claim at its original strength, adding zero hedging
+- Every statement of fact exactly as stated; never substitute a different fact,
+  and never turn a description of what IS into an instruction about what to do
+- Every sentence that states a consequence, a cause, or a conclusion
 - The original language
 
 Produce:
