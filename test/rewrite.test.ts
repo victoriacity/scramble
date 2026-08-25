@@ -67,12 +67,12 @@ describe("the instruction", () => {
     const t = readPromptTemplate(here);
     expect(t.ok).toBe(true);
     const text = t.ok ? t.text : "";
-    expect(text).toContain("Keep every claim exactly as strong as it is");
+    expect(text).toContain("every claim at its original strength");
     expect(text).toContain("byte for byte");
-    // BRIEF, and it carries the key of the communication skill. Every token in
-    // an instruction is sent with every message, so length here is a running
-    // cost and a longer instruction is a weaker one.
-    expect(text.split(/\s+/).length).toBeLessThan(230);
+    // BRIEF, and written as instructions. An earlier version explained each rule
+    // in prose and read like the output it exists to fix. Every token in it is
+    // sent with every message, so its length is a running cost.
+    expect(text.split(/\s+/).length).toBeLessThan(140);
     // The note above the first --- line is NOT sent.
     expect(text).not.toContain("# Rewrite instruction");
   });
