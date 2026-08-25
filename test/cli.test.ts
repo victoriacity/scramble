@@ -1123,6 +1123,50 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     expect(said).toContain("Every mention survived: @dev");
   });
 
+  test("a rewritten send verifies WITHOUT the flag, and --no-verify skips it", async () => {
+    // A rewritten send posts text the author never saw, so the question applies
+    // to every one of them. Three agents wrote their own read-back wrapper for
+    // exactly that (2026-08-25).
+    const cwd = scratchDir("send-verify-default");
+    const seen: string[] = [];
+    const responder = async (u: string): Promise<Response> => {
+      seen.push(String(u));
+      if (String(u).includes("generativelanguage"))
+        return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: "the shipped line" }] } }] }), { status: 200 });
+      if (String(u).includes("chat.postMessage"))
+        return new Response(JSON.stringify({ ok: true, ts: "33.3", message: {} }), { status: 200 });
+      if (String(u).includes("conversations.history"))
+        return new Response(JSON.stringify({ ok: true, messages: [{ ts: "33.3", text: "the shipped line" }] }), { status: 200 });
+      return new Response(JSON.stringify({ ok: true, messages: [] }), { status: 200 });
+    };
+    const { io, errs } = stubIo(cwd, async (u) => responder(String(u)));
+    writeSlackConfig(cwd, {
+      appToken: "xapp-1",
+      token: "xoxb-1",
+      channels: { general: "C1" },
+      agents: { dev: { token: "T", handle: "dev" } },
+    });
+    io.readStdin = async () => "the line as drafted";
+    const withKey: Io = {
+      ...io,
+      env: (n) => (n === "SCRAMBLE_REWRITE_KEY" ? "k" : io.env(n)),
+      moduleDir: () => join(import.meta.dir, "..", "src"),
+    };
+    expect(await main(["message", "send", "--target", "general", "--as", "dev", "--backend", "slack"], withKey)).toBe(0);
+    expect(errs.join(" ")).toContain("holds exactly what was sent");
+
+    // And --no-verify skips the read-back entirely.
+    const b = stubIo(cwd, async (u) => responder(String(u)));
+    b.io.readStdin = async () => "the line as drafted";
+    const skipping: Io = {
+      ...b.io,
+      env: (n) => (n === "SCRAMBLE_REWRITE_KEY" ? "k" : b.io.env(n)),
+      moduleDir: () => join(import.meta.dir, "..", "src"),
+    };
+    expect(await main(["message", "send", "--target", "general", "--as", "dev", "--no-verify", "--backend", "slack"], skipping)).toBe(0);
+    expect(b.errs.join(" ")).not.toContain("holds exactly what was sent");
+  });
+
   test("`--verify` reads a THREAD REPLY, which history never returns", async () => {
     // Measured by the agent it happened to: verify answered "slack has no
     // message at <ts>" for its own threaded reply, while `message read` found

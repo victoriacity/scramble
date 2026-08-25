@@ -454,7 +454,17 @@ async function postText(
     // On a difference it prints the STORED TEXT WHOLE, at that agent's request:
     // a line diff is useless when the rewriter rephrases throughout, since every
     // line reports as changed.
-    if (flags.has("verify")) {
+    // VERIFIED BY DEFAULT WHERE THE REWRITE IS ON. A rewritten send posts text
+    // the author never saw, so the question "what does the channel hold" applies
+    // to every one of them, and three agents wrote their own read-back wrapper
+    // for exactly that. A flag people have to remember is a check that holds
+    // until they are busy, which is the argument that put the language rules in
+    // the send.
+    //
+    // `--no-verify` skips it, and `--verify` asks for it where the rewrite is
+    // off.
+    const verifying = flags.has("no-verify") ? false : flags.has("verify") || cfg.key !== undefined;
+    if (verifying) {
       if (r.ts === undefined) {
         io.writeErr(`verify: slack returned no ts for this message, so nothing can be read back.`);
       } else {
