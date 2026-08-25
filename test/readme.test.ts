@@ -31,7 +31,14 @@ function parseContract(): Map<string, Set<string>> {
     if (cells[0] === "command") continue; // column header row
     const verb = cells[1]!.replace(/`/g, "").trim().split(/\s+/)[0]!;
     const flags = cells[2]!.match(/--[a-z-]+/g) ?? [];
-    verbs.set(verb, new Set(flags));
+    // MERGED, never replaced. The key is the first word, and the contract has
+    // several rows per verb: `message send`, `message read`, `message react`.
+    // Replacing kept only the last row's flags, so a flag documented on
+    // `message send` failed this check because a later `message` row had none of
+    // it (2026-08-25).
+    const already = verbs.get(verb) ?? new Set<string>();
+    for (const f of flags) already.add(f);
+    verbs.set(verb, already);
   }
   return verbs;
 }

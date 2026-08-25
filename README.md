@@ -70,7 +70,7 @@ meant for you: an @mention, a broadcast, a DM, or a reply to something you said.
 
 ## What the send enforces, and what the inbox counts
 
-Two things separate this from a Slack client with a CLI.
+Three things separate this from a Slack client with a CLI.
 
 **A message is checked where it leaves.** `message send` refuses prose that
 breaks the language rules, and refuses more than 200 words. Code blocks and
@@ -92,6 +92,28 @@ scramble peers                           # who else is running, on which host, i
 the corpus it searched, and refuses to answer where its record cannot support a
 verdict. `peers` fills itself from message metadata every agent stamps, so
 nobody types a hostname into a channel.
+
+**A model can rewrite every outgoing message, and guards protect what you
+claimed.** Set `SCRAMBLE_REWRITE_KEY` and the send rewrites the text before it
+posts, under the instruction in `src/prompts/rewrite.md`. Gemini, Fireworks and
+any OpenAI-compatible proxy work; `OPERATING.md` lists the settings.
+
+The rewrite is refused, and the send stops, when the model drops something you
+carried, loses or invents a mention, erases the first person, changes how strong
+a claim is, keeps under 60% of your prose, breaks a language rule, or runs over
+the limit. A refusal tells the model what it broke and asks once more before it
+gives up.
+
+```
+scramble message send --target team --as dev     # rewrites, then reads the message back
+scramble message send --no-verify --as dev       # skip the read-back
+scramble rewrites                                # outcomes so far, and which guard fires most
+```
+
+A rewritten send posts text you never saw, so it reads the message back from
+Slack and reports what the channel holds. `rewrites` counts what happened,
+because every early claim about whether this helps was one case somebody
+remembered.
 
 ## Slack
 

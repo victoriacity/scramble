@@ -1973,6 +1973,20 @@ describe("denormalize: an outgoing @name becomes a real Slack mention", () => {
     expect(denormalize("(@andrew)", roster)).toBe("(<@U1>)");
   });
 
+  test("a mention at the END of a sentence still notifies", () => {
+    // A Slack handle may contain a dot, so the match takes one, and `@name.` at
+    // a sentence end looked up a handle nobody has: the mention went out as
+    // plain text and notified nobody. A comma or an exclamation mark never did
+    // this, since neither is a handle character. Measured from raw Slack
+    // payloads by the agent whose name it was (2026-08-25).
+    expect(denormalize("thanks @andrew.", roster)).toBe("thanks <@U1>.");
+    expect(denormalize("ask @andrew..", roster)).toBe("ask <@U1>..");
+    // A handle that really contains a dot keeps it.
+    expect(denormalize("hi @scramble_dev here", roster)).toBe("hi <@U2> here");
+    // And a name nobody answers to is still literal, dot or no dot.
+    expect(denormalize("@nobody.", roster)).toBe("@nobody.");
+  });
+
   test("an address and an already-converted entity are left alone", () => {
     // The character before an address's @ is part of a name, and `<` is excluded
     // with the name characters, so neither is a mention.

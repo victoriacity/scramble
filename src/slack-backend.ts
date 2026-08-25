@@ -254,8 +254,18 @@ export function denormalize(text: string, roster: Record<string, string>): strin
           // `<@U123>` is left alone, and an address like name@example.com stays
           // untouched because the character before its @ is part of a name.
           line.replace(/(^|[^A-Za-z0-9._<-])@([A-Za-z0-9._-]+)/g, (whole, lead: string, name: string) => {
-            const id = idOf.get(name);
-            return id === undefined ? whole : `${lead}<@${id}>`;
+            const exact = idOf.get(name);
+            if (exact !== undefined) return `${lead}<@${exact}>`;
+            // A TRAILING DOT IS THE SENTENCE, and it was eating the mention. A
+            // Slack handle may contain a dot, so the match takes one, and
+            // `@name.` at the end of a sentence looked up a handle nobody has:
+            // the mention went out as plain text and notified nobody. A comma or
+            // an exclamation mark never did this, since neither is a handle
+            // character. Measured from raw Slack payloads by the agent whose
+            // name it was (2026-08-25).
+            const trimmed = name.replace(/\.+$/, "");
+            const id = trimmed === name ? undefined : idOf.get(trimmed);
+            return id === undefined ? whole : `${lead}<@${id}>${name.slice(trimmed.length)}`;
           }),
     );
   }
