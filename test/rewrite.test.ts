@@ -27,7 +27,13 @@ describe("the configuration", () => {
 
   test("either key turns it on, and the model and timeout have defaults", () => {
     const a = rewriteConfig((n) => (n === "SCRAMBLE_REWRITE_KEY" ? "k1" : undefined));
-    expect(a).toEqual({ key: "k1", model: DEFAULT_MODEL, timeoutMs: DEFAULT_TIMEOUT_MS });
+    expect(a).toEqual({
+      key: "k1",
+      provider: "gemini",
+      model: DEFAULT_MODEL,
+      url: "https://generativelanguage.googleapis.com/v1beta",
+      timeoutMs: DEFAULT_TIMEOUT_MS,
+    });
     const b = rewriteConfig((n) => (n === "GEMINI_API_KEY" ? "k2" : undefined));
     expect(b.key).toBe("k2");
   });
@@ -56,7 +62,7 @@ describe("the instruction", () => {
 
 describe("the call", () => {
   test("a good answer comes back trimmed", async () => {
-    const cfg = { key: "k", model: "m", timeoutMs: 1000 };
+    const cfg = { key: "k", provider: "gemini" as const, model: "m", url: "https://g", timeoutMs: 1000 };
     const r = await rewriteWith(async () => reply("  the rewritten line  "), cfg, "x");
     expect(r).toEqual({ ok: true, text: "the rewritten line" });
   });
@@ -70,7 +76,7 @@ describe("the call", () => {
         body = String(init?.body);
         return reply("out");
       },
-      { key: "k1", model: "gemini-9", timeoutMs: 1000 },
+      { key: "k1", provider: "gemini" as const, model: "gemini-9", url: "https://generativelanguage.googleapis.com/v1beta", timeoutMs: 1000 },
       "the words",
     );
     expect(seen).toContain("models/gemini-9:generateContent");
@@ -79,8 +85,8 @@ describe("the call", () => {
   });
 
   test("every failure is a REASON, never a throw", async () => {
-    const cfg = { key: "k", model: "m", timeoutMs: 1000 };
-    expect(await rewriteWith(async () => reply("x"), { model: "m", timeoutMs: 1 }, "x")).toEqual({
+    const cfg = { key: "k", provider: "gemini" as const, model: "m", url: "https://g", timeoutMs: 1000 };
+    expect(await rewriteWith(async () => reply("x"), { provider: "gemini" as const, model: "m", url: "https://g", timeoutMs: 1 }, "x")).toEqual({
       ok: false,
       why: "no rewrite key configured",
     });
@@ -115,11 +121,84 @@ describe("the call", () => {
         new Promise<Response>((_resolve, reject) => {
           init?.signal?.addEventListener("abort", () => reject(new Error("the operation was aborted")));
         }),
-      { key: "k", model: "m", timeoutMs: 20 },
+      { key: "k", provider: "gemini" as const, model: "m", url: "https://g", timeoutMs: 20 },
       "x",
     );
     expect(r.ok).toBe(false);
     expect(!r.ok && r.why).toContain("the rewrite call failed");
+  });
+});
+
+describe("three providers", () => {
+  // Gemini has its own request shape; Fireworks and LiteLLM both speak the
+  // OpenAI chat-completions shape, so they are one code path with different
+  // addresses.
+  const chat = (content: string): Response =>
+    new Response(JSON.stringify({ choices: [{ message: { role: "assistant", content } }] }), { status: 200 });
+
+  test("fireworks goes to its own address with bearer auth", async () => {
+    let url = "";
+    let auth = "";
+    let body = "";
+    const cfg = rewriteConfig((n) =>
+      n === "SCRAMBLE_REWRITE_KEY" ? "fw-key" : n === "SCRAMBLE_REWRITE_PROVIDER" ? "fireworks" : undefined,
+    );
+    const r = await rewriteWith(
+      async (u, init) => {
+        url = String(u);
+        auth = String((init?.headers as Record<string, string>)?.authorization ?? "");
+        body = String(init?.body);
+        return chat("the fireworks rewrite");
+      },
+      cfg,
+      "words",
+    );
+    expect(url).toBe("https://api.fireworks.ai/inference/v1/chat/completions");
+    expect(auth).toBe("Bearer fw-key");
+    expect(body).toContain("accounts/fireworks/models/");
+    expect(r).toEqual({ ok: true, text: "the fireworks rewrite" });
+  });
+
+  test("litellm is a proxy anyone hosts, so its address is configuration", async () => {
+    let url = "";
+    const cfg = rewriteConfig((n) =>
+      n === "SCRAMBLE_REWRITE_KEY" ? "k" :
+      n === "SCRAMBLE_REWRITE_PROVIDER" ? "litellm" :
+      n === "SCRAMBLE_REWRITE_URL" ? "http://127.0.0.1:4000/v1/" : undefined,
+    );
+    // The trailing slash is trimmed, so a copied URL works.
+    expect(cfg.url).toBe("http://127.0.0.1:4000/v1");
+    const r = await rewriteWith(
+      async (u) => {
+        url = String(u);
+        return chat("the litellm rewrite");
+      },
+      cfg,
+      "words",
+    );
+    expect(url).toBe("http://127.0.0.1:4000/v1/chat/completions");
+    expect(r).toEqual({ ok: true, text: "the litellm rewrite" });
+  });
+
+  test("a chat answer of a shape we did not expect costs the rewrite, never the message", async () => {
+    const cfg = rewriteConfig((n) =>
+      n === "SCRAMBLE_REWRITE_KEY" ? "k" : n === "SCRAMBLE_REWRITE_PROVIDER" ? "fireworks" : undefined,
+    );
+    for (const shape of [{}, { choices: [] }, { choices: [{}] }, { choices: [{ message: {} }] },
+      { choices: [{ message: { content: 7 } }] }]) {
+      const r = await rewriteWith(async () => new Response(JSON.stringify(shape), { status: 200 }), cfg, "x");
+      expect(r).toEqual({ ok: false, why: "the rewrite answer carried no text" });
+    }
+  });
+
+  test("an unknown provider name falls back to gemini", async () => {
+    // A typo that reached a real request would fail per message with a network
+    // error; this fails once, visibly, at the first send.
+    const cfg = rewriteConfig((n) =>
+      n === "SCRAMBLE_REWRITE_KEY" ? "k" : n === "SCRAMBLE_REWRITE_PROVIDER" ? "gemeni" : undefined,
+    );
+    expect(cfg.provider).toBe("gemini");
+    expect(cfg.url).toContain("generativelanguage");
   });
 });
 

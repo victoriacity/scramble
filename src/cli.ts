@@ -1256,7 +1256,12 @@ async function messageCheckSlack(flags: Map<string, string>, io: Io): Promise<nu
     io.writeErr(
       `slack: skipped ${notMine.length} channel(s) ${name} is not a member of: ${notMine.join(", ")}. ` +
         `The config is shared by the agents on this host, so these belong to another one. ` +
-        `If one of them is yours, ask a member to run /invite.`,
+        // THE LINE A HUMAN PASTES, already filled in. An agent read this list,
+        // learned a channel existed that it wanted, and had to ask which command
+        // to ask for; an app cannot add itself to a Slack conversation, so the
+        // only way in is a person typing this, and making them compose it is a
+        // round trip for nothing (2026-08-25).
+        `If one of them is yours, ask a member of it to run:  /invite @${ids[1] ?? ids[0] ?? name}`,
     );
   }
   // Every configured channel refused is a REPORT, never a silent exit 0: an

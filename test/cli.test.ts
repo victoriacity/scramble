@@ -1567,6 +1567,10 @@ describe("message check under the slack backend", () => {
     const said = errs.join("\n");
     expect(said).toContain("skipped 2 channel(s) dev is not a member of: alsotheirs, theirs");
     expect(said).toContain("shared by the agents on this host");
+    // THE LINE A HUMAN PASTES, already filled in with this agent's HANDLE. An
+    // agent read this list, wanted one of the channels, and had to ask which
+    // command to ask for.
+    expect(said).toContain("/invite @dev");
     // And NOT one line per channel, which is what read as a fault.
     expect(said).not.toContain("slack: theirs: channel_not_found");
   });
@@ -2572,6 +2576,27 @@ describe("message react", () => {
     const { io, errs } = reactIo(cwd, async () => new Response(JSON.stringify({ ok: false, error: "invalid_name" }), { status: 200 }));
     expect(await main(["message", "react", "--target", "room", "--to", "9.9", "--emoji", "nope", "--as", "dev", "--backend", "slack"], io)).toBe(1);
     expect(errs.join(" ")).toContain("invalid_name");
+    // WHAT IT ASKED FOR, with the answer. `react failed: channel_not_found` named
+    // the error and nothing else, and an agent that measured a direct
+    // reactions.add answering ok:true could take the report no further, because
+    // the line said neither which channel id went out nor under whose credential
+    // (2026-08-25).
+    expect(errs.join(" ")).toContain("channel room resolved to C1");
+    expect(errs.join(" ")).toContain("ts 9.9");
+    expect(errs.join(" ")).toContain("under dev's own token");
+  });
+
+  test("the failure names the CONFIG DEFAULT when the agent has no token of its own", () => {
+    // An agent's own token and the config default are different apps, and which
+    // one acted is the first thing to know when Slack says a channel does not
+    // exist.
+    const cwd = scratchDir("react-defaulttoken");
+    writeSlackConfig(cwd, { token: "xoxb-d", channels: { room: "C1" }, agents: { dev: {} } });
+    const { io, errs } = reactIo(cwd, async () => new Response(JSON.stringify({ ok: false, error: "channel_not_found" }), { status: 200 }));
+    return main(["message", "react", "--target", "room", "--to", "9.9", "--emoji", "x", "--as", "dev", "--backend", "slack"], io).then((code) => {
+      expect(code).toBe(1);
+      expect(errs.join(" ")).toContain("under the config default token");
+    });
   });
 
   test("a broken slack config is reported rather than crashing the verb", async () => {

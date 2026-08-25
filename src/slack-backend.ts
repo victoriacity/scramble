@@ -693,7 +693,21 @@ export class SlackBackend {
     });
     if (!r.ok) {
       if (r.error.includes("already_reacted")) return { ok: true };
-      return { ok: false, error: r.error };
+      // WHAT IT ASKED FOR, with the answer. `react failed: channel_not_found`
+      // named the error and nothing else, and an agent measured that a direct
+      // reactions.add with what it believed were the same inputs answered
+      // ok:true. Neither of us could tell from that line which channel id went
+      // out, or under whose credential, so the report could go no further
+      // (2026-08-25).
+      //
+      // The token is named by its SOURCE, never printed: an agent's own token
+      // and the config default are different apps, and which one acted is the
+      // first thing to know when Slack says a channel does not exist.
+      const via = this.agents[as]?.token !== undefined && this.agents[as]?.token !== "" ? `${as}'s own token` : "the config default token";
+      return {
+        ok: false,
+        error: `${r.error} (channel ${channel} resolved to ${slackChannel}, ts ${ts}, under ${via})`,
+      };
     }
     return { ok: true };
   }
