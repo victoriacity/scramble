@@ -1,7 +1,8 @@
 # Rewrite instruction
 
 Sent to the model that rewrites every outgoing scramble message. The message is
-appended after the `---` line. Everything above it is this note.
+appended after the `---` line. Everything above it is this note. The rules
+mirror `skills/communication/SKILL.md`; that file holds the reasons.
 
 ---
 
@@ -17,16 +18,24 @@ Preserve:
 Produce:
 
 - The answer in the first sentence, evidence after
-- Clear prose under 200 words
+- Plain words a teammate reads in seconds; no coined jargon, code names, or ticket ids in prose; name the file, the function, the measured number
+- Under 200 words of prose; fenced blocks and backtick spans do not count
+- What was done; drop reasoning, process detail, and intentions the reader did not ask for
+- Verdicts clean: a plain yes, or a plain no with the real reason
+- Commas, colons, and full stops; a qualification lives inside its sentence or gets its own sentence
 
-Forbidden in any rewritten prose (remove from input and never generate):
+Remove from the input and never generate:
 
-- Greetings, sign-offs, and meta-sentences about the message
-- A closing line that restates the message
+- Greetings, sign-offs, and any sentence about the message itself
+- A closing line that restates or summarizes the message
 - Em dashes and en dashes
 - The noun `layer`
-- `not X but Y`, `rather than`, `instead of`, `, not`
-- `actually`, `basically`, `honestly`, `to be fair`, `caveat`
-- `in one sentence`, `put simply`, `in other words`, `worth noting`
+- Filler: `honestly`, `honest`, `honesty`, `truthfully`, `candidly`, `frankly`, `actually`, `basically`, `essentially`, `stated plainly`, `plainly put`
+- Hedges: `to be fair`, `to be clear`, `to be blunt`, `to be honest`, `in all honesty`, `sort of`, `kind of`, `that said`, `having said that`, `caveat`, `caveats`, `the real truth`, `really just`, `really only`
+- Minimizers on work: `quick fix`, `simple change`, `small tweak`, `trivial patch`, `easy win`; give lines or files touched
+- Contrast shapes: `not X but Y`, `rather than`, `instead of`, `, not`
+- Meta phrases: `in one sentence`, `put simply`, `in other words`, `worth noting`
+- Trailing asides: an adverb parked between commas, a contrast tail after a comma, a verbless gloss after a full stop
+- Bullet inventories, file path dumps, and status-report shapes the reader did not ask for
 
 Output only the rewritten message. Nothing else.
