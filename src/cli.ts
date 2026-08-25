@@ -31,7 +31,7 @@ import {
 import { StatusManager } from "./status";
 import { SCOPE_NAMES, BOT_EVENT_NAMES } from "./app-manifest";
 import { languageRefusal, lengthRefusal, lineOf, lintLanguage } from "./language";
-import { chooseText, composePrompt, readPromptTemplate, rewriteConfig, rewriteWith, type RewriteChoice } from "./rewrite";
+import { chooseText, composePrompt, mentionsIn, readPromptTemplate, rewriteConfig, rewriteWith, type RewriteChoice } from "./rewrite";
 import {
   originOf,
   peersPath,
@@ -445,6 +445,41 @@ async function postText(
     // A post that landed somewhere other than where it was aimed is REPORTED,
     // never inferred from a clean exit.
     if (r.problem !== undefined) io.writeErr(`slack: ${r.problem}`);
+    // `--verify` READS THE MESSAGE BACK. A send's exit code says Slack accepted
+    // something; it says nothing about what the channel holds. Between the two
+    // sit the rewriter, mention conversion, and Slack's own formatting. Three
+    // agents wrote their own read-back wrappers today, and one asked me to own
+    // this one (2026-08-25).
+    //
+    // On a difference it prints the STORED TEXT WHOLE, at that agent's request:
+    // a line diff is useless when the rewriter rephrases throughout, since every
+    // line reports as changed.
+    if (flags.has("verify")) {
+      if (r.ts === undefined) {
+        io.writeErr(`verify: slack returned no ts for this message, so nothing can be read back.`);
+      } else {
+        const stored = await s.backend.storedMessage(channel, r.ts, from);
+        if (!stored.ok) {
+          io.writeErr(`verify: could not read the message back: ${stored.error}`);
+        } else if (stored.text.trim() === text.trim()) {
+          io.writeErr(`verify: ${channel} holds exactly what was sent, ${stored.mentions.length} mention(s) live.`);
+        } else {
+          // COMPARED IN PROSE ON BOTH SIDES. A raw `includes` finds a mention
+          // inside a backtick span, where it notifies nobody, which is the exact
+          // defect the rewrite guard was built for an hour earlier and which I
+          // wrote again here.
+          const storedProse = mentionsIn(stored.text);
+          const lostHere = mentionsIn(text).filter((m) => !storedProse.includes(m));
+          io.writeErr(
+            `verify: ${channel} holds text that DIFFERS from what was sent.\n` +
+              `What Slack stored:\n${stored.text}\n` +
+              (lostHere.length > 0
+                ? `Mentions that stopped notifying: ${lostHere.join(", ")}\n`
+                : `Every mention survived: ${storedProse.join(", ") || "none"}\n`),
+          );
+        }
+      }
+    }
     await settleSend(io, channel, from, r.ts, thread);
     if (status !== undefined) await settleStatus(replyStatus(status, channel, from), io);
     return 0;
@@ -2751,6 +2786,7 @@ const USAGE = [
   "scramble <verb> [--as <agent>] [--target <channel>]",
   "",
   "  message send      --target <channel>            the message on stdin",
+  "                    [--verify]                    read the message back and report what Slack stored",
   "  message read      --target <channel> [--after N]",
   "  message check                                   drain what arrived, and what you owe",
   "  message react     --target <channel> --to <ts> --emoji <name>",

@@ -1064,6 +1064,127 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     expect(errs.join(" ")).toContain("the parser fix shipped");
   });
 
+  test("`--verify` reports what Slack stored, and names a mention that stopped notifying", async () => {
+    // A send's exit code says Slack accepted something. Three agents wrote their
+    // own read-back wrappers today, and one asked me to own this one. It prints
+    // the STORED TEXT WHOLE at that agent's request: a line diff is useless when
+    // the rewriter rephrases throughout (2026-08-25).
+    const cwd = scratchDir("send-verify");
+    const { io, errs } = stubIo(cwd, async (u) => {
+      const url = String(u);
+      if (url.includes("chat.postMessage"))
+        return new Response(JSON.stringify({ ok: true, ts: "77.7", message: {} }), { status: 200 });
+      if (url.includes("conversations.history"))
+        return new Response(
+          JSON.stringify({ ok: true, messages: [{ ts: "77.7", text: "what slack kept, with `@dev` in code" }] }),
+          { status: 200 },
+        );
+      return new Response(JSON.stringify({ ok: true, messages: [] }), { status: 200 });
+    });
+    writeSlackConfig(cwd, {
+      appToken: "xapp-1",
+      token: "xoxb-1",
+      channels: { general: "C1" },
+      agents: { dev: { token: "T", handle: "dev" } },
+    });
+    io.readStdin = async () => "@dev what the sender wrote";
+    expect(await main(["message", "send", "--target", "general", "--as", "dev", "--verify", "--backend", "slack"], io)).toBe(0);
+    const said = errs.join("\n");
+    expect(said).toContain("holds text that DIFFERS from what was sent");
+    expect(said).toContain("what slack kept");
+    expect(said).toContain("Mentions that stopped notifying: @dev");
+  });
+
+  test("`--verify` on a changed message with every mention alive names them", async () => {
+    // The rewriter rephrases and the mentions survive: the reader wants to see
+    // what the channel holds and that nobody stopped being notified.
+    const cwd = scratchDir("send-verify-kept");
+    const { io, errs } = stubIo(cwd, async (u) => {
+      const url = String(u);
+      if (url.includes("chat.postMessage"))
+        return new Response(JSON.stringify({ ok: true, ts: "66.6", message: {} }), { status: 200 });
+      if (url.includes("conversations.history"))
+        return new Response(
+          JSON.stringify({ ok: true, messages: [{ ts: "66.6", text: "@dev the parser fix shipped this morning" }] }),
+          { status: 200 },
+        );
+      return new Response(JSON.stringify({ ok: true, messages: [] }), { status: 200 });
+    });
+    writeSlackConfig(cwd, {
+      appToken: "xapp-1",
+      token: "xoxb-1",
+      channels: { general: "C1" },
+      agents: { dev: { token: "T", handle: "dev" } },
+    });
+    io.readStdin = async () => "@dev the parser fix shipped";
+    expect(await main(["message", "send", "--target", "general", "--as", "dev", "--verify", "--backend", "slack"], io)).toBe(0);
+    const said = errs.join("\n");
+    expect(said).toContain("holds text that DIFFERS");
+    expect(said).toContain("Every mention survived: @dev");
+  });
+
+  test("`--verify` on an unchanged message says so in one line", async () => {
+    const cwd = scratchDir("send-verify-same");
+    const { io, errs } = stubIo(cwd, async (u) => {
+      const url = String(u);
+      if (url.includes("chat.postMessage"))
+        return new Response(JSON.stringify({ ok: true, ts: "88.8", message: {} }), { status: 200 });
+      if (url.includes("conversations.history"))
+        return new Response(JSON.stringify({ ok: true, messages: [{ ts: "88.8", text: "exactly this" }] }), {
+          status: 200,
+        });
+      return new Response(JSON.stringify({ ok: true, messages: [] }), { status: 200 });
+    });
+    writeSlackConfig(cwd, {
+      appToken: "xapp-1",
+      token: "xoxb-1",
+      channels: { general: "C1" },
+      agents: { dev: { token: "T", handle: "dev" } },
+    });
+    io.readStdin = async () => "exactly this";
+    expect(await main(["message", "send", "--target", "general", "--as", "dev", "--verify", "--backend", "slack"], io)).toBe(0);
+    expect(errs.join(" ")).toContain("holds exactly what was sent");
+  });
+
+  test("`--verify` with no ts from Slack says nothing can be read back", async () => {
+    // Slack answered ok without a ts, so there is no message to look up. Saying
+    // "verified" here would be the shape this whole verb exists to kill.
+    const cwd = scratchDir("send-verify-nots");
+    const { io, errs } = stubIo(cwd, async (u) =>
+      String(u).includes("chat.postMessage")
+        ? new Response(JSON.stringify({ ok: true, message: {} }), { status: 200 })
+        : new Response(JSON.stringify({ ok: true, messages: [] }), { status: 200 }),
+    );
+    writeSlackConfig(cwd, {
+      appToken: "xapp-1",
+      token: "xoxb-1",
+      channels: { general: "C1" },
+      agents: { dev: { token: "T", handle: "dev" } },
+    });
+    io.readStdin = async () => "a line";
+    expect(await main(["message", "send", "--target", "general", "--as", "dev", "--verify", "--backend", "slack"], io)).toBe(0);
+    expect(errs.join(" ")).toContain("slack returned no ts");
+  });
+
+  test("`--verify` that cannot read the message back says so", async () => {
+    const cwd = scratchDir("send-verify-gone");
+    const { io, errs } = stubIo(cwd, async (u) => {
+      const url = String(u);
+      if (url.includes("chat.postMessage"))
+        return new Response(JSON.stringify({ ok: true, ts: "99.9", message: {} }), { status: 200 });
+      return new Response(JSON.stringify({ ok: true, messages: [] }), { status: 200 });
+    });
+    writeSlackConfig(cwd, {
+      appToken: "xapp-1",
+      token: "xoxb-1",
+      channels: { general: "C1" },
+      agents: { dev: { token: "T", handle: "dev" } },
+    });
+    io.readStdin = async () => "a line";
+    expect(await main(["message", "send", "--target", "general", "--as", "dev", "--verify", "--backend", "slack"], io)).toBe(0);
+    expect(errs.join(" ")).toContain("could not read the message back");
+  });
+
   test("a rewrite that breaks a rule is retried ONCE with what it broke", async () => {
     // Every guard fires on something the MODEL did, so the model is the party
     // that can fix it. Two agents wrote prose that avoided a banned form on

@@ -885,6 +885,40 @@ export class SlackBackend {
     return { ok: true, ...(typeof r.data.ts === "string" ? { ts: r.data.ts } : {}) };
   }
 
+  /** READ ONE MESSAGE BACK FROM SLACK BY ITS ts, as Slack stored it.
+   *
+   *  A send's exit code says Slack accepted something. It says nothing about
+   *  what the channel now holds, and between the two sit the rewriter, mention
+   *  conversion, and Slack's own formatting. Three agents wrote their own
+   *  read-back wrappers today, and one asked for it here (2026-08-25).
+   *
+   *  `oldest` is inclusive and `latest` exclusive, so a one-message window needs
+   *  `inclusive=true` with both ends at the same ts. */
+  async storedMessage(
+    channel: string,
+    ts: string,
+    as: string,
+  ): Promise<{ ok: true; text: string; mentions: string[] } | { ok: false; error: string }> {
+    const resolved = await this.slackChannelFor(this.tokenOrDefault(as), channel);
+    if (resolved.id === undefined) return { ok: false, error: resolved.error };
+    const t = this.agentToken(as);
+    if (!t.ok) return { ok: false, error: t.error };
+    const q =
+      `${HISTORY_URL}?channel=${encodeURIComponent(resolved.id)}&${WITH_METADATA}` +
+      `&oldest=${encodeURIComponent(ts)}&latest=${encodeURIComponent(ts)}&inclusive=true&limit=1`;
+    const r = await readOk<{ messages?: Array<{ ts?: string; text?: string }> }>(this.fetch, q, {
+      headers: { authorization: `Bearer ${t.token}` },
+    });
+    if (!r.ok) return { ok: false, error: r.error };
+    const row = (r.data.messages ?? []).find((m) => m.ts === ts);
+    if (row === undefined) return { ok: false, error: `slack has no message at ${ts} in ${channel}` };
+    const stored = row.text ?? "";
+    // NORMALIZED, so the comparison is against what a reader sees: Slack keeps a
+    // mention as `<@U…>`, and the sender wrote a name.
+    const text = await this.normalize(t.token, stored);
+    return { ok: true, text, mentions: computeMentions(channel, text, as) };
+  }
+
   /** Upload a file to a channel, through the SAME resolution and the SAME
    *  mention conversion a plain post gets.
    *
