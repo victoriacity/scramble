@@ -2726,6 +2726,10 @@ describe("doctor, and the warning an agent gets without asking", () => {
     const off = docIo(cwd, { "x-oauth-scopes": ALL }, { ok: true, user: "dev_bot" });
     expect(await main(["doctor", "--as", "dev", "--backend", "slack"], off.io)).toBe(0);
     expect(JSON.parse(off.writes[0]!)).toMatchObject({ rewrite: { on: false } });
+    // AND ON EVERY RUN, whether or not anything else is wrong. It sat in the
+    // clean line only, so on a host where every other answer is a problem, the
+    // one question an operator asks while setting it up had no answer.
+    expect(off.errs.join(" ")).toContain("the outgoing rewrite is OFF");
 
     const on = docIo(cwd, { "x-oauth-scopes": ALL }, { ok: true, user: "dev_bot" });
     const withKey: Io = {
@@ -2742,6 +2746,8 @@ describe("doctor, and the warning an agent gets without asking", () => {
       rewrite: { on: true, provider: "litellm", url: "http://127.0.0.1:4000/v1" },
     });
     expect(line).not.toContain("secret-key-value");
+    expect(on.errs.join(" ")).toContain("the outgoing rewrite is ON: litellm");
+    expect(on.errs.join(" ")).not.toContain("secret-key-value");
   });
 
   test("ok NAMES the granted scopes, since a count cannot price a change", async () => {

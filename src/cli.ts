@@ -2176,6 +2176,19 @@ async function cmdDoctor(argv: string[], io: Io): Promise<number> {
 
   for (const f of fixed) io.write(JSON.stringify({ doctor: "fixed", agent: name, detail: f }));
   for (const p of problems) io.writeErr(`doctor: ${p}`);
+  // THE REWRITE STATE IS REPORTED WHETHER OR NOT ANYTHING ELSE IS WRONG. It sat
+  // in the clean line only, so on a host with an expired CLI token, where every
+  // other answer is a problem, the one question an operator is asking while
+  // setting it up had no answer at all. Measured here: two doctor runs printed
+  // nothing about it because this agent's manifest read fails (2026-08-25).
+  {
+    const rc = rewriteConfig(io.env);
+    io.writeErr(
+      rc.key === undefined
+        ? `doctor: the outgoing rewrite is OFF; set SCRAMBLE_REWRITE_KEY to turn it on.`
+        : `doctor: the outgoing rewrite is ON: ${rc.provider} ${rc.model} at ${rc.url}, ${rc.timeoutMs}ms.`,
+    );
+  }
   if (problems.length === 0) {
     // WHAT WAS INSPECTED, on the clean line. A remote agent read this and said
     // it best (2026-08-22): "What the clean line does NOT say is that it
