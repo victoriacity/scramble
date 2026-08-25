@@ -224,6 +224,16 @@ export function strengthDrift(original: string, rewritten: string): string[] {
  *  Backticked spans and fenced blocks, numbers, @mentions, URLs and file paths.
  *  A rewrite missing any of them changed the evidence, whatever it did to the
  *  prose. */
+/** The refusal a failed rewrite produces, carrying what the model returned so the
+ *  author sees what happened before writing it again. */
+function refusal(what: string, attempt: string): string {
+  return (
+    `message send REFUSED: ${what}, so neither version goes out.\n` +
+    `What the rewriter produced:\n${attempt}\n` +
+    `Rewrite your message and send again.`
+  );
+}
+
 export function factsIn(text: string): string[] {
   const out = new Set<string>();
   for (const m of text.matchAll(/```[\s\S]*?```|`[^`\n]+`/g)) out.add(m[0]);
@@ -234,6 +244,20 @@ export function factsIn(text: string): string[] {
   for (const m of prose.matchAll(/(?:^|\s)(\/[A-Za-z0-9._\/-]{3,})/g)) out.add(m[1] ?? "");
   out.delete("");
   return [...out];
+}
+
+/** The mentions that will NOTIFY someone: `@name` in prose.
+ *
+ *  A mention inside a backtick span notifies nobody, and Slack records the
+ *  message with an empty `mentions` list. Measured live: the rewriter moved an
+ *  `@name` into a code span and the addressee never heard about the message
+ *  (2026-08-25). The whole-text check misses this, since the characters are
+ *  still there.
+ *
+ *  Keeping mentions working is the point of the message, so this is checked in
+ *  PROSE on both sides. */
+export function mentionsIn(text: string): string[] {
+  return [...new Set([...proseOf(text).matchAll(/@[A-Za-z0-9._-]+/g)].map((m) => m[0]))];
 }
 
 /** How much of the original's prose survived, as a fraction. Whole sentences
@@ -247,15 +271,35 @@ export function proseRatio(original: string, rewritten: string): number {
 /** The share of the original's prose a rewrite may drop before it is refused. */
 export const MIN_PROSE_RATIO = 0.6;
 
+/** What the send does with a rewrite. `send` carries the text to post; `refuse`
+ *  carries the reason the send stops.
+ *
+ *  THE ORIGINAL NO LONGER GOES OUT WHERE THE REWRITE IS ON, 2026-08-25: "we
+ *  should not allow claude original message go out. The communication is too
+ *  bad." Falling back to the author's words on a failed rewrite published exactly
+ *  the prose the rewrite exists to replace. A rewrite that cannot be used stops
+ *  the send and says what happened, and the author writes it again, which is what
+ *  the language rules already require.
+ *
+ *  With no key configured the rewriter is OFF and this is never consulted. */
+export type RewriteChoice = { send: string; note: string } | { refuse: string };
+
 export function chooseText(
   original: string,
   rewritten: { ok: true; text: string } | { ok: false; why: string },
-): { text: string; note: string } {
-  if (!rewritten.ok) return { text: original, note: `sent your own words: ${rewritten.why}` };
-  if (rewritten.text.trim() === original.trim()) return { text: original, note: "" };
+): RewriteChoice {
+  if (!rewritten.ok) {
+    return {
+      refuse:
+        `message send REFUSED: the rewrite did not happen (${rewritten.why}), and your own words ` +
+        `do not go out while the rewrite is on. Fix the rewriter, or unset SCRAMBLE_REWRITE_KEY ` +
+        `for this send if the message has to go now.`,
+    };
+  }
+  if (rewritten.text.trim() === original.trim()) return { send: original, note: "" };
   const over = lengthRefusal(rewritten.text);
   if (over !== "") {
-    return { text: original, note: `sent your own words: the rewrite ran over the word limit, and yours did not.` };
+    return { refuse: refusal("the rewrite ran over the word limit", rewritten.text) };
   }
   // WHAT THE ORIGINAL CARRIED MUST STILL BE THERE. Measured in a live channel:
   // the rewriter dropped a closing causal sentence and replaced a statement of
@@ -265,39 +309,54 @@ export function chooseText(
   const lost = factsIn(original).filter((f) => !rewritten.text.includes(f));
   if (lost.length > 0) {
     return {
-      text: original,
-      note: `sent your own words: the rewrite dropped ${lost.length} thing(s) yours carried: ${lost.slice(0, 5).join(", ")}`,
+      refuse: refusal(
+        `the rewrite dropped ${lost.length} thing(s) yours carried: ${lost.slice(0, 5).join(", ")}`,
+        rewritten.text,
+      ),
+    };
+  }
+  // A MENTION THAT STOPPED NOTIFYING IS A LOST MENTION, even with the characters
+  // still on the line.
+  const keptMentions = mentionsIn(rewritten.text);
+  const lostMentions = mentionsIn(original).filter((m) => !keptMentions.includes(m));
+  if (lostMentions.length > 0) {
+    return {
+      refuse: refusal(
+        `the rewrite stopped ${lostMentions.join(", ")} from notifying anyone, by moving it into ` +
+          `code or dropping it`,
+        rewritten.text,
+      ),
     };
   }
   const stronger = strengthDrift(original, rewritten.text);
   if (stronger.length > 0) {
     return {
-      text: original,
-      note:
-        `sent your own words: the rewrite introduced ${stronger.join(", ")}, which yours did not use. ` +
-        `How strong a claim is belongs to whoever made it.`,
+      refuse: refusal(
+        `the rewrite introduced ${stronger.join(", ")}, which yours did not use, and how strong a ` +
+          `claim is belongs to whoever made it`,
+        rewritten.text,
+      ),
     };
   }
   const kept = proseRatio(original, rewritten.text);
   if (kept < MIN_PROSE_RATIO) {
     return {
-      text: original,
-      note:
-        `sent your own words: the rewrite kept ${Math.round(kept * 100)}% of your prose, under the ` +
-        `${Math.round(MIN_PROSE_RATIO * 100)}% floor. A whole sentence going missing is what a dropped conclusion looks like.`,
+      refuse: refusal(
+        `the rewrite kept ${Math.round(kept * 100)}% of your prose, under the ` +
+          `${Math.round(MIN_PROSE_RATIO * 100)}% floor, and a whole sentence going missing is what a ` +
+          `dropped conclusion looks like`,
+        rewritten.text,
+      ),
     };
   }
   const hits = lintLanguage(rewritten.text);
   if (hits.length > 0) {
     return {
-      text: original,
-      note:
-        `sent your own words: the rewrite broke ${hits.length} language rule(s) ` +
-        `(${hits.map((h) => h.label).join(", ")}), and yours did not.`,
+      refuse: refusal(
+        `the rewrite broke ${hits.length} language rule(s): ${hits.map((h) => h.label).join(", ")}`,
+        rewritten.text,
+      ),
     };
   }
-  return {
-    text: rewritten.text,
-    note: `sent a rewrite. Your words were:\n${original}`,
-  };
+  return { send: rewritten.text, note: `sent a rewrite. Your words were:\n${original}` };
 }

@@ -31,7 +31,7 @@ import {
 import { StatusManager } from "./status";
 import { SCOPE_NAMES, BOT_EVENT_NAMES } from "./app-manifest";
 import { languageRefusal, lengthRefusal, lineOf, lintLanguage } from "./language";
-import { chooseText, composePrompt, readPromptTemplate, rewriteConfig, rewriteWith } from "./rewrite";
+import { chooseText, composePrompt, readPromptTemplate, rewriteConfig, rewriteWith, type RewriteChoice } from "./rewrite";
 import {
   originOf,
   peersPath,
@@ -400,14 +400,21 @@ async function postText(
   // sender's words did, or it is dropped in favour of the words that passed.
   const cfg = rewriteConfig(io.env);
   const template = cfg.key === undefined ? undefined : readPromptTemplate(io.moduleDir ? io.moduleDir() : "src");
-  const chosen =
+  const chosen: RewriteChoice =
     template === undefined
-      ? { text, note: "" }
+      ? { send: text, note: "" }
       : template.ok
         ? chooseText(text, await rewriteWith(io.fetch, cfg, composePrompt(template.text, text)))
         : chooseText(text, { ok: false, why: template.why });
+  // A REWRITE THAT CANNOT BE USED STOPS THE SEND. The author's own words used to
+  // go out here, which published exactly the prose the rewrite exists to
+  // replace.
+  if ("refuse" in chosen) {
+    io.writeErr(chosen.refuse);
+    return 1;
+  }
   if (chosen.note !== "") io.writeErr(`rewrite: ${chosen.note}`);
-  text = chosen.text;
+  text = chosen.send;
   const thread = flags.get("thread") ?? undefined;
   const status = statusTracker(io, backend, nameFor(flags, io));
   await settleStatus(status?.clearExpired(), io);

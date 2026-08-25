@@ -1062,9 +1062,10 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     expect(errs.join(" ")).toContain("my own line");
   });
 
-  test("an unreadable instruction costs the rewrite, and the message still goes", async () => {
-    // A rewrite driven by no instruction is worse than no rewrite, so a missing
-    // file sends the sender's words and says why.
+  test("an unreadable instruction STOPS the send", async () => {
+    // A rewrite driven by no instruction is worse than no rewrite, and the
+    // author's own words no longer go out where the rewrite is on: "we should
+    // not allow claude original message go out" (2026-08-25).
     const cwd = scratchDir("send-noprompt");
     const { io, errs } = stubIo(cwd, async () => new Response(JSON.stringify({ crossings: [] }), { status: 200 }));
     io.readStdin = async () => "my own line";
@@ -1073,8 +1074,9 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
       env: (n) => (n === "SCRAMBLE_REWRITE_KEY" ? "k" : io.env(n)),
       moduleDir: () => join(cwd, "nowhere"),
     };
-    expect(await main(["message", "send", "--target", "general", "--as", "dev"], withKey)).toBe(0);
+    expect(await main(["message", "send", "--target", "general", "--as", "dev"], withKey)).toBe(1);
     expect(errs.join(" ")).toContain("could not be read");
+    expect(errs.join(" ")).toContain("do not go out while the rewrite is on");
   });
 
   test("a message over the word limit is REFUSED at the send", async () => {

@@ -16,6 +16,7 @@ import {
   MIN_PROSE_RATIO,
   chooseText,
   factsIn,
+  mentionsIn,
   proseRatio,
   strengthDrift,
   rewriteConfig,
@@ -76,6 +77,8 @@ describe("the instruction", () => {
     // cap had no measured basis. What must hold: byte-exact preservation is
     // still demanded, and the note above the first --- line is NOT sent.
     expect(text).toContain("byte for byte");
+    // THE ROLE COMES FIRST, so the model is told who it is before what to do.
+    expect(text.startsWith("You are a very experienced Member of Technical Staff")).toBe(true);
     // NO SENTENCE EXPLAINING A RULE. An instruction states what to do; the
     // reasons live in skills/communication/SKILL.md, read once by a person,
     // where no token of them rides on every message.
@@ -254,19 +257,23 @@ describe("three providers", () => {
 describe("choosing what to send", () => {
   test("a clean rewrite is sent, and the sender's own words are printed beside it", () => {
     const out = chooseText("the original words", { ok: true, text: "the professional words" });
-    expect(out.text).toBe("the professional words");
-    expect(out.note).toContain("sent a rewrite");
-    expect(out.note).toContain("the original words");
+    expect("send" in out && out.send).toBe("the professional words");
+    expect("note" in out && out.note).toContain("sent a rewrite");
+    expect("note" in out && out.note).toContain("the original words");
   });
 
-  test("a failed rewrite sends the sender's words, and says why", () => {
+  test("a failed rewrite STOPS the send, and says why", () => {
+    // "we should not allow claude original message go out. The communication is
+    // too bad" (2026-08-25). Falling back to the author's words published exactly
+    // the prose the rewrite exists to replace.
     const out = chooseText("mine", { ok: false, why: "the rewrite call answered 503" });
-    expect(out.text).toBe("mine");
-    expect(out.note).toContain("sent your own words: the rewrite call answered 503");
+    expect("refuse" in out && out.refuse).toContain("the rewrite did not happen");
+    expect("refuse" in out && out.refuse).toContain("503");
+    expect("refuse" in out && out.refuse).toContain("do not go out while the rewrite is on");
   });
 
   test("an unchanged rewrite says nothing at all", () => {
-    expect(chooseText("same words", { ok: true, text: " same words " })).toEqual({ text: "same words", note: "" });
+    expect(chooseText("same words", { ok: true, text: " same words " })).toEqual({ send: "same words", note: "" });
   });
 
   test("a rewrite that DROPS what the original carried is refused", () => {
@@ -275,9 +282,9 @@ describe("choosing what to send", () => {
     // agent inferred the missing conclusion from the numbers (2026-08-25).
     const original = "the run took 42 seconds and `_summary.mesh_quality.json` holds the score for @peer_metrics";
     const out = chooseText(original, { ok: true, text: "the run took 42 seconds and holds the score" });
-    expect(out.text).toBe(original);
-    expect(out.note).toContain("the rewrite dropped");
-    expect(out.note).toContain("`_summary.mesh_quality.json`");
+    expect("refuse" in out && out.refuse).toContain("the rewrite dropped");
+    expect("refuse" in out && out.refuse).toContain("`_summary.mesh_quality.json`");
+    expect("refuse" in out && out.refuse).toContain("neither version goes out");
   });
 
   test("a rewrite that loses most of the prose is refused", () => {
@@ -285,8 +292,7 @@ describe("choosing what to send", () => {
     // from outside.
     const original = Array.from({ length: 40 }, (_, i) => `word${i % 3}`).join(" ");
     const out = chooseText(original, { ok: true, text: "word0 word1 word2 word0 word1" });
-    expect(out.text).toBe(original);
-    expect(out.note).toContain("under the 60% floor");
+    expect("refuse" in out && out.refuse).toContain("under the 60% floor");
   });
 
   test("what counts as a fact to preserve", () => {
@@ -304,6 +310,28 @@ describe("choosing what to send", () => {
     expect(MIN_PROSE_RATIO).toBeLessThan(1);
   });
 
+  test("a mention moved into code stopped notifying, and is refused", () => {
+    // Measured live: the rewriter moved an `@name` into a code span, Slack
+    // recorded `mentions=[]`, and the addressee never heard about the message
+    // (2026-08-25). The characters are still on the line, so a whole-text check
+    // misses it.
+    const mine = "@peer_metrics the run finished";
+    const out = chooseText(mine, { ok: true, text: "The run finished, `@peer_metrics`" });
+    expect("refuse" in out && out.refuse).toContain("stopped @peer_metrics from notifying anyone");
+  });
+
+  test("a dropped mention is refused, by whichever guard reaches it first", () => {
+    // The dropped-facts check sees it too, since a mention is a fact. Either
+    // refusal stops the send, which is what matters.
+    const out = chooseText("@dev please look", { ok: true, text: "please look" });
+    expect("refuse" in out && out.refuse).toContain("@dev");
+    expect("refuse" in out && out.refuse).toContain("neither version goes out");
+  });
+
+  test("mentions are counted in prose only", () => {
+    expect(mentionsIn("hi @dev and `@notme` here")).toEqual(["@dev"]);
+  });
+
   test("a rewrite that makes a claim STRONGER is refused", () => {
     // The worst case measured live: an author wrote about their exposure and the
     // rewrite published a guarantee (2026-08-25).
@@ -312,16 +340,15 @@ describe("choosing what to send", () => {
       ok: true,
       text: "the diff check prevents the rewriter from replacing a measured number",
     });
-    expect(out.text).toBe(mine);
-    expect(out.note).toContain("introduced prevents");
-    expect(out.note).toContain("belongs to whoever made it");
+    expect("refuse" in out && out.refuse).toContain("introduced prevents");
+    expect("refuse" in out && out.refuse).toContain("belongs to whoever made it");
+    expect("refuse" in out && out.refuse).toContain("What the rewriter produced");
   });
 
   test("a rewrite that SOFTENS a claim is refused by the same rule", () => {
     const mine = "the socket delivered nothing";
     const out = chooseText(mine, { ok: true, text: "the socket appears to have delivered nothing" });
-    expect(out.text).toBe(mine);
-    expect(out.note).toContain("introduced appears");
+    expect("refuse" in out && out.refuse).toContain("introduced appears");
   });
 
   test("a strength word the author already used is the author's", () => {
@@ -333,15 +360,13 @@ describe("choosing what to send", () => {
     // Posting prose the repo refuses because a model wrote it would make the
     // rules mean nothing.
     const out = chooseText("plain words here", { ok: true, text: "a rewrite with an em dash — like this" });
-    expect(out.text).toBe("plain words here");
-    expect(out.note).toContain("the rewrite broke 1 language rule(s)");
-    expect(out.note).toContain("em dash");
+    expect("refuse" in out && out.refuse).toContain("the rewrite broke 1 language rule(s)");
+    expect("refuse" in out && out.refuse).toContain("em dash");
   });
 
   test("a rewrite over the word limit is DROPPED", () => {
     const long = Array.from({ length: 260 }, () => "word").join(" ");
     const out = chooseText("short", { ok: true, text: long });
-    expect(out.text).toBe("short");
-    expect(out.note).toContain("ran over the word limit");
+    expect("refuse" in out && out.refuse).toContain("ran over the word limit");
   });
 });

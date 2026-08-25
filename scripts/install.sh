@@ -96,6 +96,12 @@ rm -f "$BIN/scramble" || fail "cannot remove the existing $BIN/scramble"
   printf '%s\n' 'if [ -z "${SCRAMBLE_REWRITE_KEY:-}" ] && [ -f "$HOME/.config/scramble/rewrite.env" ]; then'
   printf '%s\n' '  . "$HOME/.config/scramble/rewrite.env"'
   printf '%s\n' 'fi'
+  printf '%s\n' '# AND THE CHECKOUT`S OWN .env, which is where a key handed to an agent lands.'
+  printf '%s\n' '# Two paths for one fact, so a key put in either place works; the config file'
+  printf '%s\n' '# wins, and .env is gitignored because this repo is public.'
+  printf 'if [ -z "${SCRAMBLE_REWRITE_KEY:-}" ] && [ -f "%s/.env" ]; then\n' "$PWD"
+  printf '  . "%s/.env"\n' "$PWD"
+  printf '%s\n' 'fi'
   printf 'exec bun "%s/src/bin.ts" "$@"\n' "$DEST"
 } > "$BIN/scramble"
 chmod +x "$BIN/scramble" || fail "cannot make $BIN/scramble executable"
