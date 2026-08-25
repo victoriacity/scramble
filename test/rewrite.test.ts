@@ -63,25 +63,21 @@ describe("the instruction", () => {
   // other document this repo ships.
   const here = join(import.meta.dir, "..", "src");
 
-  test("the shipped file protects the claim, and stays short", () => {
+  test("the shipped file protects the claim", () => {
     const t = readPromptTemplate(here);
     expect(t.ok).toBe(true);
     const text = t.ok ? t.text : "";
-    expect(text).toContain("every claim at its original strength");
+    // The operator removed the 140-token cap and the pinned claim-strength
+    // phrase (2026-08-25): the wording belongs to the prompt author, and the
+    // cap had no measured basis. What must hold: byte-exact preservation is
+    // still demanded, and the note above the first --- line is NOT sent.
     expect(text).toContain("byte for byte");
-    // BRIEF, and written as instructions. An earlier version explained each rule
-    // in prose and read like the output it exists to fix. Every token in it is
-    // sent with every message, so its length is a running cost.
-    expect(text.split(/\s+/).length).toBeLessThan(140);
-    // NO SENTENCE EXPLAINING A RULE. The version before this justified each one
-    // in prose, and the operator's verdict was that the instruction was itself
-    // the output it exists to correct. An instruction states what to do; the
+    // NO SENTENCE EXPLAINING A RULE. An instruction states what to do; the
     // reasons live in skills/communication/SKILL.md, read once by a person,
     // where no token of them rides on every message.
     for (const word of ["because", "since", "so that", "which is", "the reason"]) {
       expect(text.toLowerCase()).not.toContain(word);
     }
-    // The note above the first --- line is NOT sent.
     expect(text).not.toContain("# Rewrite instruction");
   });
 
