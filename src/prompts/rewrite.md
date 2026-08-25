@@ -1,10 +1,7 @@
 # Rewrite instruction
 
 Sent to the model that rewrites every outgoing scramble message. The message is
-appended after the `---` line. Everything above it is this note. Body written
-by gemini/gemini-3.7-flash (LiteLLM) from the previous hand-written version on
-the operator's instruction, 2026-08-25; shipped verbatim after the operator
-removed the token cap and the pinned-phrase test.
+appended after the `---` line. Everything above it is this note.
 
 ---
 
