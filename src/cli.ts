@@ -403,7 +403,7 @@ async function attemptRewrite(
   // that avoided a banned form on purpose, watched the rewriter put it back, and
   // sent nothing (2026-08-25).
   if ("refuse" in chosen && chosen.retry !== undefined && template !== undefined && template.ok) {
-    const why = firstLineOf(chosen.refuse);
+    const why = guardName(chosen.why);
     io.writeErr(`rewrite: ${chosen.retry} Asking once more.`);
     return {
       chosen: chooseText(
@@ -479,7 +479,7 @@ async function postText(
     }
   };
   if ("refuse" in chosen) {
-    noteRewrite("refused", firstLineOf(chosen.refuse));
+    noteRewrite("refused", guardName(chosen.why));
     io.writeErr(chosen.refuse);
     return 1;
   }
@@ -1741,8 +1741,13 @@ async function cmdRewrite(argv: string[], io: Io): Promise<number> {
     io.writeErr(`rewrite: no model is configured; set SCRAMBLE_REWRITE_KEY to turn it on.`);
     return 1;
   }
+  // NO SEND FRAMING HERE. `chosen.refuse` ends with "Rewrite your message and
+  // send again", which is a lie in a verb that never sends. The guard's name and
+  // the model's answer come out of the same refusal, so the two readings cannot
+  // disagree about what happened.
   if ("refuse" in chosen) {
-    io.writeErr(chosen.refuse);
+    if (chosen.attempt !== undefined) io.write(chosen.attempt);
+    io.writeErr(`rewrite: the guards would stop this from going out: ${chosen.why}. Nothing was sent.`);
     return 1;
   }
   io.write(chosen.send.endsWith("\n") ? chosen.send : `${chosen.send}\n`);
@@ -1938,10 +1943,10 @@ async function settleSend(
   }
 }
 
-/** The first line of a refusal, which names the guard that fired. The rest is the
- *  model's attempt, which belongs on the screen and never in a counter. */
-function firstLineOf(refusal: string): string {
-  return (refusal.split("\n")[0] ?? "").replace(/^message send REFUSED: /, "").slice(0, 120);
+/** The guard's name, short enough for a ledger row. The model's attempt belongs
+ *  on the screen and never in a counter. */
+function guardName(why: string): string {
+  return why.slice(0, 120);
 }
 
 /** Say what arrived in this channel between the last line this agent saw and the

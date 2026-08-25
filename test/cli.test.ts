@@ -1295,7 +1295,7 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
 
   test("`rewrite` reports a missing file, an empty input, an absent key, and a refusal", async () => {
     const cwd = scratchDir("rewrite-sad");
-    const { io, errs } = stubIo(cwd, async () =>
+    const { io, errs, writes } = stubIo(cwd, async () =>
       new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: "shipped the parser fix." }] } }] }), {
         status: 200,
       }),
@@ -1319,11 +1319,17 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     expect(await main(["rewrite"], io)).toBe(1);
     expect(errs.join(" ")).toContain("SCRAMBLE_REWRITE_KEY");
 
-    // A refusal comes out whole: the model dropped the first person here.
+    // A refused preview prints the model's answer and names the guard, with no
+    // sentence about sending: this verb never sends, and the send's refusal ends
+    // "Rewrite your message and send again."
     const drops = join(cwd, "drops.md");
     writeFileSync(drops, "I shipped the parser fix.");
+    const before = writes.length;
     expect(await main(["rewrite", drops], withKey)).toBe(1);
-    expect(errs.join(" ")).toContain("rewrite");
+    expect(writes.slice(before).join("")).toContain("shipped the parser fix.");
+    expect(errs.join(" ")).toContain("the guards would stop this from going out");
+    expect(errs.join(" ")).toContain("Nothing was sent.");
+    expect(errs.join(" ")).not.toContain("send again");
   });
 
   test("`--verify` counts ENTITIES, and names a mention that notified nobody", async () => {

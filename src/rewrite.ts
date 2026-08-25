@@ -316,12 +316,18 @@ export function strengthDrift(original: string, rewritten: string): string[] {
  *  prose. */
 /** The refusal a failed rewrite produces, carrying what the model returned so the
  *  author sees what happened before writing it again. */
-function refusal(what: string, attempt: string): { refuse: string; retry: string } {
+function refusal(what: string, attempt: string): { refuse: string; why: string; attempt: string; retry: string } {
   return {
     refuse:
       `message send REFUSED: ${what}, so neither version goes out.\n` +
       `What the rewriter produced:\n${attempt}\n` +
       `Rewrite your message and send again.`,
+    // THE SAME TWO FACTS, FOR A READER THAT IS NOT A SEND. The ledger wants the
+    // guard's name and `scramble rewrite` wants the model's answer with no
+    // sentence about sending, since it never sends. Both come from here, so the
+    // refusal a person reads and the row a counter reads cannot disagree.
+    why: what,
+    attempt,
     // WHAT TO TELL THE MODEL ON A SECOND ATTEMPT. Every guard here fires on
     // something the MODEL did, so the model is the party that can fix it. Two
     // agents wrote prose that avoided a banned form on purpose, the rewriter put
@@ -386,7 +392,9 @@ export const MIN_PROSE_RATIO = 0.6;
  *  the language rules already require.
  *
  *  With no key configured the rewriter is OFF and this is never consulted. */
-export type RewriteChoice = { send: string; note: string } | { refuse: string; retry?: string };
+export type RewriteChoice =
+  | { send: string; note: string }
+  | { refuse: string; why: string; attempt?: string; retry?: string };
 
 export function chooseText(
   original: string,
@@ -398,6 +406,7 @@ export function chooseText(
         `message send REFUSED: the rewrite did not happen (${rewritten.why}), and your own words ` +
         `do not go out while the rewrite is on. Fix the rewriter, or unset SCRAMBLE_REWRITE_KEY ` +
         `for this send if the message has to go now.`,
+      why: `the rewrite did not happen (${rewritten.why})`,
     };
   }
   if (rewritten.text.trim() === original.trim()) return { send: original, note: "" };
