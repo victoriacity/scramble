@@ -2196,6 +2196,17 @@ async function cmdDoctor(argv: string[], io: Io): Promise<number> {
         // fourteen, in this repo's own app-manifest.ts (their correction,
         // 2026-08-22). Same for the events: what is subscribed decides what
         // Slack will ever deliver.
+        // WHETHER THE REWRITE IS ON, and against what. Turning it on is four
+        // environment variables read by whichever process sends, so a way to ask
+        // without sending a message is the difference between configured and
+        // believed-configured. The key is reported as present or absent and
+        // never printed.
+        rewrite: (() => {
+          const rc = rewriteConfig(io.env);
+          return rc.key === undefined
+            ? { on: false }
+            : { on: true, provider: rc.provider, model: rc.model, url: rc.url, timeoutMs: rc.timeoutMs };
+        })(),
         scopes: [...granted].sort(),
         events: declared !== undefined && declared.unreadable === undefined ? [...declared.botEvents].sort() : null,
         listeners: seen.length,

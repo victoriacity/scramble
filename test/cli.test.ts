@@ -2717,6 +2717,33 @@ describe("doctor, and the warning an agent gets without asking", () => {
     expect(JSON.parse(writes[0]!)).toMatchObject({ doctor: "ok", agent: "dev", handle: "dev_bot" });
   });
 
+  test("ok says whether the REWRITE is on, and never prints the key", async () => {
+    // Turning it on is four environment variables read by whichever process
+    // sends, so a way to ask without sending a message is the difference between
+    // configured and believed-configured.
+    const cwd = scratchDir("doc-rewrite");
+    writeSlackConfig(cwd, { token: "xoxb-d", channels: {}, agents: { dev: { token: "T", handle: "dev_bot" } } });
+    const off = docIo(cwd, { "x-oauth-scopes": ALL }, { ok: true, user: "dev_bot" });
+    expect(await main(["doctor", "--as", "dev", "--backend", "slack"], off.io)).toBe(0);
+    expect(JSON.parse(off.writes[0]!)).toMatchObject({ rewrite: { on: false } });
+
+    const on = docIo(cwd, { "x-oauth-scopes": ALL }, { ok: true, user: "dev_bot" });
+    const withKey: Io = {
+      ...on.io,
+      env: (n) =>
+        n === "SCRAMBLE_REWRITE_KEY" ? "secret-key-value"
+        : n === "SCRAMBLE_REWRITE_PROVIDER" ? "litellm"
+        : n === "SCRAMBLE_REWRITE_URL" ? "http://127.0.0.1:4000/v1"
+        : on.io.env(n),
+    };
+    expect(await main(["doctor", "--as", "dev", "--backend", "slack"], withKey)).toBe(0);
+    const line = on.writes[0]!;
+    expect(JSON.parse(line)).toMatchObject({
+      rewrite: { on: true, provider: "litellm", url: "http://127.0.0.1:4000/v1" },
+    });
+    expect(line).not.toContain("secret-key-value");
+  });
+
   test("ok NAMES the granted scopes, since a count cannot price a change", async () => {
     // `scopes: 14` answers no question anyone asks. Pricing a change asks WHICH
     // are granted, and with only a count on this surface I told an agent that
