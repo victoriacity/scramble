@@ -2042,6 +2042,9 @@ async function cmdDoctor(argv: string[], io: Io): Promise<number> {
     return 1;
   }
   const problems: string[] = [];
+  // GRADED: an advisory is reported and does NOT fail the verb, because it names
+  // something that still works. A problem stops delivery.
+  const advisories: string[] = [];
   const fixed: string[] = [];
 
   // ONE call answers both questions: auth.test returns the handle in its body
@@ -2136,8 +2139,15 @@ async function cmdDoctor(argv: string[], io: Io): Promise<number> {
 
   // A LISTENER OLDER THAN THE CODE is running a build that no longer exists,
   // which looks exactly like a defect that was already fixed.
+  //
+  // AN ADVISORY, never a problem. A listener on an older commit still DELIVERS;
+  // zero listeners means nothing arrives at all, and this verb reported the two
+  // with the same weight. An agent stopped restarting on every bump and built
+  // its own grading on top: "advisory for a commit mismatch, alarm only for zero
+  // listeners" (2026-08-25). That grading belongs here, where every reader gets
+  // it.
   const staleProblem = staleListenerProblem(staleListeners(io, name), name);
-  if (staleProblem !== undefined) problems.push(staleProblem);
+  if (staleProblem !== undefined) advisories.push(staleProblem);
 
   // AND FOR AN INSTALLED AGENT, the commit is a fact rather than an inference.
   // The launcher execs the resolved commit directory, so a listener carries its
@@ -2187,7 +2197,7 @@ async function cmdDoctor(argv: string[], io: Io): Promise<number> {
   const installedNow = installedCommit(io);
   const behind = listenersBehind(readProcesses(io.env("SCRAMBLE_PROC") ?? "/proc"), name, installedNow);
   if (behind.length > 0) {
-    problems.push(
+    advisories.push(
       `${behind.length} listener(s) for ${name} run a different commit than the installed ${installedNow}: ` +
         `${behind.map((b) => `pid ${b.pid} on ${b.commit}`).join(", ")}. They hold the code they started ` +
         `with, so a fix you installed has not reached them. Stop them and arm the inbox again.`,
@@ -2231,6 +2241,7 @@ async function cmdDoctor(argv: string[], io: Io): Promise<number> {
 
   for (const f of fixed) io.write(JSON.stringify({ doctor: "fixed", agent: name, detail: f }));
   for (const p of problems) io.writeErr(`doctor: ${p}`);
+  for (const a of advisories) io.writeErr(`doctor advisory: ${a}`);
   // THE REWRITE STATE IS REPORTED WHETHER OR NOT ANYTHING ELSE IS WRONG. It sat
   // in the clean line only, so on a host with an expired CLI token, where every
   // other answer is a problem, the one question an operator is asking while

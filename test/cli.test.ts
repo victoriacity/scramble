@@ -3173,8 +3173,13 @@ describe("doctor, and the warning an agent gets without asking", () => {
       serve: async () => 0,
       createSocket: () => ({ send: () => {}, close: () => {}, onopen: null, onmessage: null, onclose: null, onerror: null }),
     };
-    expect(await main(["doctor", "--as", "dev", "--backend", "slack"], io)).toBe(1);
+    // AN ADVISORY, so the verb still answers ok. A listener on an older commit
+    // still DELIVERS; zero listeners means nothing arrives, and reporting the two
+    // with the same weight made an agent build its own grading on top: "advisory
+    // for a commit mismatch, alarm only for zero listeners" (2026-08-25).
+    expect(await main(["doctor", "--as", "dev", "--backend", "slack"], io)).toBe(0);
     const said = errs.join(" ");
+    expect(said).toContain("doctor advisory:");
     expect(said).toContain("pid 88 on 4f7b942");
     expect(said).toContain("installed 995edba");
   });
