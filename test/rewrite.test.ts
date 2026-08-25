@@ -73,6 +73,14 @@ describe("the instruction", () => {
     // in prose and read like the output it exists to fix. Every token in it is
     // sent with every message, so its length is a running cost.
     expect(text.split(/\s+/).length).toBeLessThan(140);
+    // NO SENTENCE EXPLAINING A RULE. The version before this justified each one
+    // in prose, and the operator's verdict was that the instruction was itself
+    // the output it exists to correct. An instruction states what to do; the
+    // reasons live in skills/communication/SKILL.md, read once by a person,
+    // where no token of them rides on every message.
+    for (const word of ["because", "since", "so that", "which is", "the reason"]) {
+      expect(text.toLowerCase()).not.toContain(word);
+    }
     // The note above the first --- line is NOT sent.
     expect(text).not.toContain("# Rewrite instruction");
   });
