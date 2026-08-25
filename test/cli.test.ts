@@ -1250,6 +1250,38 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     expect(errs.join(" ")).toContain("the reply as stored");
   });
 
+  test("`--verify` counts ENTITIES, and names a mention that notified nobody", async () => {
+    // Slack notifies on `<@U…>` and never on a name in text, so a count taken
+    // from the text calls a failed conversion live. That is the defect that
+    // shipped this evening: a mention at a sentence end went out as plain text
+    // and this check would have reported it as live (2026-08-25).
+    const cwd = scratchDir("verify-entities");
+    const { io, errs } = stubIo(cwd, async (u) => {
+      const url = String(u);
+      if (url.includes("chat.postMessage"))
+        return new Response(JSON.stringify({ ok: true, ts: "11.1", message: {} }), { status: 200 });
+      if (url.includes("conversations.history"))
+        // One converted, one left as plain text.
+        return new Response(
+          JSON.stringify({ ok: true, messages: [{ ts: "11.1", text: "ping <@U1> and @ana." }] }),
+          { status: 200 },
+        );
+      return new Response(JSON.stringify({ ok: true, messages: [] }), { status: 200 });
+    });
+    writeSlackConfig(cwd, {
+      appToken: "xapp-1",
+      token: "xoxb-1",
+      channels: { general: "C1" },
+      agents: { dev: { token: "T", handle: "dev" } },
+      roster: { U1: "bo" },
+    });
+    io.readStdin = async () => "ping @bo and @ana.";
+    expect(await main(["message", "send", "--target", "general", "--as", "dev", "--verify", "--backend", "slack"], io)).toBe(0);
+    const said = errs.join(" ");
+    expect(said).toContain("1 mention(s) live");
+    expect(said).toContain("@ana notified NOBODY");
+  });
+
   test("`--verify` on an unchanged message says so in one line", async () => {
     const cwd = scratchDir("send-verify-same");
     const { io, errs } = stubIo(cwd, async (u) => {

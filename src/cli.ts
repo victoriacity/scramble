@@ -511,7 +511,14 @@ async function postText(
         if (!stored.ok) {
           io.writeErr(`verify: could not read the message back: ${stored.error}`);
         } else if (stored.text.trim() === text.trim()) {
-          io.writeErr(`verify: ${channel} holds exactly what was sent, ${stored.mentions.length} mention(s) live.`);
+          // A MENTION IS LIVE WHEN SLACK MADE AN ENTITY OF IT. A name that
+          // failed to convert sits in the text and notifies nobody, so a count
+          // taken from the text would have called it live.
+          const silent = mentionsIn(text).filter((m) => !stored.mentions.includes(m.slice(1)));
+          io.writeErr(
+            `verify: ${channel} holds exactly what was sent, ${stored.mentions.length} mention(s) live` +
+              (silent.length > 0 ? `, and ${silent.join(", ")} notified NOBODY.` : `.`),
+          );
         } else {
           // COMPARED IN PROSE ON BOTH SIDES. A raw `includes` finds a mention
           // inside a backtick span, where it notifies nobody, which is the exact

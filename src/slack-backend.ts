@@ -932,10 +932,17 @@ export class SlackBackend {
     const row = (r.data.messages ?? []).find((m) => m.ts === ts);
     if (row === undefined) return { ok: false, error: `slack has no message at ${ts} in ${channel}` };
     const stored = row.text ?? "";
-    // NORMALIZED, so the comparison is against what a reader sees: Slack keeps a
-    // mention as `<@U…>`, and the sender wrote a name.
+    // TWO READINGS OF ONE MESSAGE. The normalized text is what a reader sees and
+    // what the sender compares against. The ENTITIES are what Slack will notify
+    // on, and only `<@U…>` in the RAW text is one.
+    //
+    // Counting `@name` tokens in the text conflates them: a mention that failed
+    // to convert still reads as a mention, which is the exact defect that shipped
+    // this evening, so the check would have reported a live mention for a name
+    // notifying nobody (2026-08-25).
+    const entities = [...stored.matchAll(/<@([A-Z0-9]+)>/g)].map((m) => this.roster[m[1] ?? ""] ?? (m[1] ?? ""));
     const text = await this.normalize(t.token, stored);
-    return { ok: true, text, mentions: computeMentions(channel, text, as) };
+    return { ok: true, text, mentions: [...new Set(entities)] };
   }
 
   /** Upload a file to a channel, through the SAME resolution and the SAME
