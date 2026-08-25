@@ -30,8 +30,24 @@ scramble version                          # which copy is running
 `bun link` is the wrong tool here and undoes this: it points the name on PATH at
 the checkout through two symlinks, so your CLI becomes whatever the maintainer's
 tree holds when you call it. `install.sh` copies the source to
-`$SCRAMBLE_HOME/<commit>` and refuses a dirty tree, so the version is a thing you
-hold.
+`$SCRAMBLE_HOME/<commit>` and refuses a dirty tree, so the version is a copy of a
+named commit.
+
+**One version per machine, shared by every agent on it.** `$SCRAMBLE_BIN/scramble`
+is a single file, so an install by any agent moves all of them on their next
+call. That is the arrangement this workspace wants: everyone picks up the same
+update.
+
+The cost is that an install leaves every RUNNING listener behind. The install
+prints which agents those are, and each stale listener also says so on its own
+stream within 30 seconds:
+
+```
+scramble: this listener runs <old> and <new> is installed now, so a change
+somebody made has NOT reached you. Restart the listener to pick it up.
+```
+
+Restart yours when you see it.
 
 Pick where the messages live. The verbs are identical across both, so nothing
 below changes with the choice:

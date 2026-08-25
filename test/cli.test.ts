@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import type { ChannelStore } from "../src/store";
 import { createStore } from "../src/store";
 import { createHandler } from "../src/server";
-import { main, parseBind, loadSlackConfig, slackConfigPath, slackCliToken, staleConfigWarning, staleListeners, pickStale, staleListenerProblem, readProcesses, liveListeners, stillAlive, listenerCommit, listenersBehind, processesReadable, type Io } from "../src/cli";
+import { main, parseBind, loadSlackConfig, slackConfigPath, slackCliToken, staleConfigWarning, staleListeners, pickStale, staleListenerProblem, readProcesses, liveListeners, stillAlive, watchForNewerInstall, listenerCommit, listenersBehind, processesReadable, type Io } from "../src/cli";
 import { SCOPE_NAMES, BOT_EVENT_NAMES } from "../src/app-manifest";
 
 function scratchDir(name: string): string {
@@ -2421,6 +2421,56 @@ describe("staleListeners", () => {
 
   test("another agent's listener is not this agent's problem", () => {
     expect(pickStale([proc("102", "bun src/bin.ts listen --as other", 1_000)], "dev", 5_000)).toEqual([]);
+  });
+
+  test("a running listener TELLS ITS OWN AGENT when a newer copy is installed", () => {
+    // One version per machine is what this workspace wants, so an install by any
+    // agent leaves every running listener behind. The install prints who is
+    // affected, and the INSTALLER reads that. This is the half the stale agent
+    // reads, on the stream it already watches. Two agents reported being left
+    // behind and learning it only from doctor (2026-08-25).
+    const home = scratchDir("drift-home");
+    const store = join(home, ".local", "share", "scramble");
+    mkdirSync(join(store, "current", "src"), { recursive: true });
+    mkdirSync(join(home, "mine"), { recursive: true });
+    writeFileSync(join(home, "mine", "COMMIT"), "aaaaaaa\n");
+    writeFileSync(join(store, "current", "src", "COMMIT"), "aaaaaaa\n");
+    const errs: string[] = [];
+    const io: Io = {
+      write: () => {},
+      writeErr: (l) => errs.push(l),
+      fetch: async () => new Response("{}", { status: 200 }),
+      env: (n) => (n === "HOME" ? home : undefined),
+      cwd: () => home,
+      sleep: async () => {},
+      serve: async () => 0,
+      createSocket: () => ({ send: () => {}, close: () => {}, onopen: null, onmessage: null, onclose: null, onerror: null }),
+      moduleDir: () => join(home, "mine"),
+    };
+    const drift = watchForNewerInstall(io);
+    try {
+      // Same commit: nothing to say.
+      drift.tick();
+      expect(errs).toEqual([]);
+      // Somebody installs.
+      writeFileSync(join(store, "current", "src", "COMMIT"), "bbbbbbb\n");
+      drift.tick();
+      expect(errs.join(" ")).toContain("this listener runs aaaaaaa and bbbbbbb is installed now");
+      // ONCE per change: a line every 30 seconds would teach the agent to skip it.
+      drift.tick();
+      expect(errs).toHaveLength(1);
+    } finally {
+      drift.stop();
+    }
+    // A copy with no COMMIT beside it falls back to the installed commit, so a
+    // checkout run through bun directly compares against itself and says nothing.
+    const bare: Io = { ...io, moduleDir: () => join(home, "no-commit-here") };
+    const second = watchForNewerInstall(bare);
+    try {
+      second.tick();
+    } finally {
+      second.stop();
+    }
   });
 
   test("a SHELL carrying the words is not a listener", () => {

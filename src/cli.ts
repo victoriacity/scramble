@@ -485,6 +485,7 @@ async function cmdListen(argv: string[], io: Io): Promise<number> {
   const status = statusTracker(io, "local");
   const stopTicker = status ? status.startExpiryTicker(2000, io.sleep) : undefined;
   const addressedOnly = flags.has("addressed");
+  const drift = watchForNewerInstall(io);
   let lastSeq = 0;
   let backoff = 100;
   let staying = true;
@@ -510,6 +511,7 @@ async function cmdListen(argv: string[], io: Io): Promise<number> {
     }
   } finally {
     stopTicker?.();
+    drift.stop();
   }
   return 0;
 }
@@ -814,6 +816,52 @@ export function slackCliToken(io: Io): string | undefined {
   return undefined;
 }
 
+/** TELL THE AGENT ITS OWN LISTENER HAS GONE STALE.
+ *
+ *  One launcher serves every agent sharing a HOME, which is the arrangement this
+ *  workspace wants: one version per machine, so everyone picks up the same
+ *  update. The cost is that an install by ANY agent leaves every running
+ *  listener behind, and the agent it happened to gets no signal. An agent was
+ *  left behind twice in one day and learned it only by running doctor.
+ *
+ *  The install prints the affected agents, which the INSTALLER reads. This is the
+ *  half the stale agent reads: its own listener says so, on the stream that
+ *  agent already watches, once per change.
+ *
+ *  Every 30 seconds, which is far below the cost of a message and far above the
+ *  rate anyone installs. */
+export function watchForNewerInstall(io: Io): { stop: () => void; tick: () => void } {
+  const mine = (io.moduleDir ? readCommitFile(io.moduleDir()) : "") || installedCommit(io);
+  let told = "";
+  // A REAL TIMER, never a sleep loop. `io.sleep` is stubbed instantaneous in
+  // tests, so a `while (!stopped) await io.sleep(...)` loop spins at full speed
+  // reading a file every iteration, and the suite stalled the first time this
+  // shipped that way. An interval fires on the clock and nothing else, and
+  // unref lets the process exit while it is pending.
+  const tick = (): void => {
+    const now = installedCommit(io);
+    if (now !== "" && mine !== "" && now !== mine && now !== told) {
+      told = now;
+      io.writeErr(
+        `scramble: this listener runs ${mine} and ${now} is installed now, so a change somebody ` +
+          `made has NOT reached you. Restart the listener to pick it up.`,
+      );
+    }
+  };
+  const timer = setInterval(tick, 30_000);
+  (timer as { unref?: () => void }).unref?.();
+  return { stop: () => clearInterval(timer), tick };
+}
+
+/** The commit written beside a copy's source, empty when there is none. */
+function readCommitFile(dir: string): string {
+  try {
+    return readFileSync(join(dir, "COMMIT"), "utf8").trim();
+  } catch {
+    return "";
+  }
+}
+
 /** Where THIS process runs, or undefined when the host cannot be read.
  *
  *  Undefined means this build publishes NO origin, which is the honest state for
@@ -1056,6 +1104,7 @@ async function slackCmdListen(argv: string[], io: Io): Promise<number> {
   }
   const status = statusTracker(io, "slack", name);
   const stopTicker = status ? status.startExpiryTicker(2000, io.sleep) : undefined;
+  const drift = watchForNewerInstall(io);
   try {
     return await s.backend.listen(
       positionals,
@@ -1068,6 +1117,7 @@ async function slackCmdListen(argv: string[], io: Io): Promise<number> {
     );
   } finally {
     stopTicker?.();
+    drift.stop();
   }
 }
 

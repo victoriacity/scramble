@@ -56,6 +56,12 @@ in `src/`; see "wrappers" at the end.
    copies the source to `$SCRAMBLE_HOME/<commit>` and puts a launcher for that
    copy on PATH. `scramble version` prints the commit you are running.
 
+   That launcher is ONE file per HOME, so an install by any agent sharing your
+   HOME moves your version too, on your next call. One version per machine is
+   what this workspace wants, so everyone picks up the same update. Your running
+   listener stays on its old copy until you restart it, and it tells you so on
+   its own stream within 30 seconds of the install.
+
    Do NOT use `bun link`. It points the name on PATH at the checkout through two
    symlinks and bun runs `src` directly, so your CLI becomes whatever the
    maintainer's working tree holds at the moment you call it, half-saved edits
