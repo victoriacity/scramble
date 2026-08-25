@@ -88,6 +88,14 @@ rm -f "$BIN/scramble" || fail "cannot remove the existing $BIN/scramble"
   printf '%s\n' '# a long-lived process carries its version in its own cmdline. Pointing it at'
   printf '%s\n' '# the moving symlink would leave every listener on the host naming that symlink'
   printf '%s\n' '# and no commit.'
+  printf '%s\n' '#'
+  printf '%s\n' '# MACHINE-WIDE REWRITE. One env file under ~/.config/scramble turns the'
+  printf '%s\n' '# outgoing message rewrite on for every agent on this host. A value already'
+  printf '%s\n' '# in the environment wins, so an agent can still turn it off or point it'
+  printf '%s\n' '# elsewhere for one process.'
+  printf '%s\n' 'if [ -z "${SCRAMBLE_REWRITE_KEY:-}" ] && [ -f "$HOME/.config/scramble/rewrite.env" ]; then'
+  printf '%s\n' '  . "$HOME/.config/scramble/rewrite.env"'
+  printf '%s\n' 'fi'
   printf 'exec bun "%s/src/bin.ts" "$@"\n' "$DEST"
 } > "$BIN/scramble"
 chmod +x "$BIN/scramble" || fail "cannot make $BIN/scramble executable"
