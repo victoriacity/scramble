@@ -400,12 +400,24 @@ async function postText(
   // sender's words did, or it is dropped in favour of the words that passed.
   const cfg = rewriteConfig(io.env);
   const template = cfg.key === undefined ? undefined : readPromptTemplate(io.moduleDir ? io.moduleDir() : "src");
-  const chosen: RewriteChoice =
+  let chosen: RewriteChoice =
     template === undefined
       ? { send: text, note: "" }
       : template.ok
         ? chooseText(text, await rewriteWith(io.fetch, cfg, composePrompt(template.text, text)))
         : chooseText(text, { ok: false, why: template.why });
+  // ONE MORE ATTEMPT, WITH WHAT IT BROKE. Every guard fires on something the
+  // MODEL did, so the model is the party that can fix it, and the author is left
+  // holding a refusal for a mistake somebody else made. Two agents wrote prose
+  // that avoided a banned form on purpose, watched the rewriter put it back, and
+  // sent nothing (2026-08-25).
+  if ("refuse" in chosen && chosen.retry !== undefined && template !== undefined && template.ok) {
+    io.writeErr(`rewrite: ${chosen.retry} Asking once more.`);
+    chosen = chooseText(
+      text,
+      await rewriteWith(io.fetch, cfg, `${composePrompt(template.text, text)}\n\n${chosen.retry}`),
+    );
+  }
   // A REWRITE THAT CANNOT BE USED STOPS THE SEND. The author's own words used to
   // go out here, which published exactly the prose the rewrite exists to
   // replace.

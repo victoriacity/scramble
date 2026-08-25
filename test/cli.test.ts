@@ -1064,6 +1064,61 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     expect(errs.join(" ")).toContain("the parser fix shipped");
   });
 
+  test("a rewrite that breaks a rule is retried ONCE with what it broke", async () => {
+    // Every guard fires on something the MODEL did, so the model is the party
+    // that can fix it. Two agents wrote prose that avoided a banned form on
+    // purpose, watched the rewriter put it back, and sent nothing (2026-08-25).
+    const cwd = scratchDir("send-retry");
+    const prompts: string[] = [];
+    let call = 0;
+    const { io, errs } = stubIo(cwd, async (u, init) => {
+      if (String(u).includes("generativelanguage")) {
+        call += 1;
+        prompts.push(String(init?.body));
+        const text = call === 1 ? "the fix shipped, not the workaround" : "the fix shipped and the workaround stayed out";
+        return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text }] } }] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ crossings: [] }), { status: 200 });
+    });
+    io.readStdin = async () => "the fix shipped and the workaround stayed out of it";
+    const withKey: Io = {
+      ...io,
+      env: (n) => (n === "SCRAMBLE_REWRITE_KEY" ? "k" : io.env(n)),
+      moduleDir: () => join(import.meta.dir, "..", "src"),
+    };
+    expect(await main(["message", "send", "--target", "general", "--as", "dev"], withKey)).toBe(0);
+    expect(call).toBe(2);
+    // The second prompt carries what the first attempt broke.
+    expect(prompts[1]).toContain("Your previous attempt was rejected");
+    expect(prompts[1]).toContain("language rule");
+    expect(errs.join(" ")).toContain("Asking once more");
+    expect(errs.join(" ")).toContain("rewrite: sent a rewrite");
+  });
+
+  test("a second failure REFUSES, and the author sees both", async () => {
+    const cwd = scratchDir("send-retry-fail");
+    let call = 0;
+    const { io, errs } = stubIo(cwd, async (u) => {
+      if (String(u).includes("generativelanguage")) {
+        call += 1;
+        return new Response(
+          JSON.stringify({ candidates: [{ content: { parts: [{ text: "the fix shipped, not the workaround" }] } }] }),
+          { status: 200 },
+        );
+      }
+      return new Response(JSON.stringify({ crossings: [] }), { status: 200 });
+    });
+    io.readStdin = async () => "the fix shipped and the workaround stayed out of it";
+    const withKey: Io = {
+      ...io,
+      env: (n) => (n === "SCRAMBLE_REWRITE_KEY" ? "k" : io.env(n)),
+      moduleDir: () => join(import.meta.dir, "..", "src"),
+    };
+    expect(await main(["message", "send", "--target", "general", "--as", "dev"], withKey)).toBe(1);
+    expect(call).toBe(2);
+    expect(errs.join(" ")).toContain("neither version goes out");
+  });
+
   test("an unreadable instruction STOPS the send", async () => {
     // A rewrite driven by no instruction is worse than no rewrite, and the
     // author's own words no longer go out where the rewrite is on: "we should
