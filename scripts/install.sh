@@ -54,6 +54,25 @@ mkdir -p "$BIN" || fail "cannot create $BIN"
 # wrote the launcher THROUGH ~/.bun/bin/scramble into the checkout's own
 # src/bin.ts and gutted it. git had the file, so the cost was a restore, and the
 # next installer to do this to an unversioned target would take the file with it.
+# WHOSE VERSION THIS CHANGES. One launcher serves every agent sharing this HOME,
+# so an install moves all of them at once, and an agent that installed a commit
+# and ran nothing since finds itself on someone else's. Measured by an agent that
+# read `scramble version` and saw a commit it had never installed (2026-08-25).
+#
+# The launcher cannot be per-agent without changing the command everyone types,
+# so the change is ANNOUNCED instead of hidden: what it pointed at, what it will
+# point at, and which running listeners belong to other agents.
+PREV_SHA=""
+if [ -e "$BIN/scramble" ]; then
+  PREV_SHA="$(sed -n 's|.*/scramble/\([0-9a-f]\{7,\}\)/src/bin\.ts.*|\1|p' "$BIN/scramble" 2>/dev/null | head -1)"
+fi
+if [ -n "$PREV_SHA" ] && [ "$PREV_SHA" != "$SHA" ]; then
+  echo "install: $BIN/scramble pointed at $PREV_SHA and will now point at $SHA."
+  echo "install: every agent sharing $BIN moves with it on their next call."
+  OTHERS="$(ps -eo args= 2>/dev/null | grep -F 'bin.ts listen' | grep -v grep | sed -n 's|.*--as \([^ ]*\).*|\1|p' | sort -u | tr '\n' ' ')"
+  [ -n "$OTHERS" ] && echo "install: listeners running here belong to: $OTHERS"
+  echo "install: for a version only you hold, set SCRAMBLE_BIN to a directory of your own."
+fi
 rm -f "$BIN/scramble" || fail "cannot remove the existing $BIN/scramble"
 # WRITTEN WITHOUT SUBSTITUTION. An unquoted heredoc runs command substitution on
 # its own body, so backticks in a COMMENT get executed: the first version printed
@@ -74,5 +93,8 @@ rm -f "$BIN/scramble" || fail "cannot remove the existing $BIN/scramble"
 chmod +x "$BIN/scramble" || fail "cannot make $BIN/scramble executable"
 
 echo "install: scramble $SHA is at $DEST"
-echo "install: $BIN/scramble runs $ROOT/current, which is a copy and not a checkout"
+# THE LAUNCHER NAMES THE COMMIT DIRECTORY, and this line used to say it ran
+# `current`, which is the symlink it deliberately avoids. An agent quoted that
+# line back while reporting a version that had moved under it.
+echo "install: $BIN/scramble runs $DEST, a copy of commit $SHA"
 echo "install: confirm with  scramble version"
