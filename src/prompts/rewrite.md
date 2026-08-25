@@ -34,10 +34,7 @@ Remove from the input and never generate:
 - The noun `layer`
 - Filler: `honestly`, `honest`, `honesty`, `truthfully`, `candidly`, `frankly`, `actually`, `basically`, `essentially`, `stated plainly`, `plainly put`
 - Hedges: `to be fair`, `to be clear`, `to be blunt`, `to be honest`, `in all honesty`, `sort of`, `kind of`, `that said`, `having said that`, `caveat`, `caveats`, `the real truth`, `really just`, `really only`
-- Minimizers on work: `quick fix`, `simple change`, `small tweak`, `trivial patch`, `easy win`; give lines or files touched
-- Contrast shapes: `not X but Y`, `rather than`, `instead of`, `, not`
 - Meta phrases: `in one sentence`, `put simply`, `in other words`, `worth noting`
 - Trailing asides: an adverb parked between commas, a contrast tail after a comma, a verbless gloss after a full stop
-- Bullet inventories, file path dumps, and status-report shapes the reader did not ask for
 
 Output only the rewritten message. Nothing else.
