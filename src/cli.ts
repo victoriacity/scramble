@@ -532,7 +532,10 @@ async function postText(
       if (r.ts === undefined) {
         io.writeErr(`verify: slack returned no ts for this message, so nothing can be read back.`);
       } else {
-        const stored = await s.backend.storedMessage(channel, r.ts, from, thread);
+        // THE ROOT SLACK CHOSE, not the one asked for: a thread_ts naming a reply
+        // is hoisted into that reply's root, and the read-back has to ask about
+        // the root that holds the message.
+        const stored = await s.backend.storedMessage(channel, r.ts, from, r.thread ?? thread);
         if (!stored.ok) {
           io.writeErr(`verify: could not read the message back: ${stored.error}`);
         } else if (stored.text.trim() === text.trim()) {

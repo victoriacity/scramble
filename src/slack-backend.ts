@@ -826,7 +826,7 @@ export class SlackBackend {
     text: string,
     as: string,
     thread?: string,
-  ): Promise<{ ok: true; ts?: string; problem?: string } | { ok: false; error: string }> {
+  ): Promise<{ ok: true; ts?: string; thread?: string; problem?: string } | { ok: false; error: string }> {
     const resolved = await this.slackChannelFor(this.tokenOrDefault(as), channel);
     if (resolved.id === undefined) return { ok: false, error: resolved.error };
     const slackChannel = resolved.id;
@@ -884,6 +884,12 @@ export class SlackBackend {
         return {
           ok: true,
           ...(typeof r.data.ts === "string" ? { ts: r.data.ts } : {}),
+          // WHERE THE MESSAGE ACTUALLY LANDED, for whoever reads it back. The
+          // read-back asks conversations.replies for the ROOT, and the root here
+          // is the one Slack picked, never the ts the caller passed. An agent
+          // threaded under a reply and the read-back answered "slack has no
+          // message at <ts>" for a message sitting in the channel (2026-08-25).
+          thread: landed,
           problem:
             `posted to ${channel} in thread ${landed}, and NOT in ${thread} as asked: Slack has no ` +
             `nested threads, so a thread_ts naming a REPLY is hoisted into that reply's root. ` +
@@ -892,7 +898,11 @@ export class SlackBackend {
         };
       }
     }
-    return { ok: true, ...(typeof r.data.ts === "string" ? { ts: r.data.ts } : {}) };
+    return {
+      ok: true,
+      ...(typeof r.data.ts === "string" ? { ts: r.data.ts } : {}),
+      ...(thread !== undefined && thread !== "" ? { thread } : {}),
+    };
   }
 
   /** READ ONE MESSAGE BACK FROM SLACK BY ITS ts, as Slack stored it.

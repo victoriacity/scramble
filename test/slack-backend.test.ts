@@ -377,8 +377,10 @@ describe("post", () => {
     const r = await h.backend.post("general", "hi", "bob", "root-1");
     // THE REPLY'S OWN ts COMES BACK, so the ledger can record which message
     // closed an item. It recorded a wall-clock string before, which named
-    // nothing anybody could look up, and `inbox trace` printed that.
-    expect(r).toEqual({ ok: true, ts: "9.9" });
+    // nothing anybody could look up, and `inbox trace` printed that. The ROOT
+    // comes back beside it, so a read-back asks about the thread that holds the
+    // message rather than the ts the caller passed.
+    expect(r).toEqual({ ok: true, ts: "9.9", thread: "root-1" });
     // And an unthreaded post is never asked about threading.
     expect(await h.backend.post("general", "hi", "bob")).toEqual({ ok: true, ts: "9.9" });
   });
@@ -509,7 +511,7 @@ describe("post", () => {
         : new Response(JSON.stringify({ ok: true }), { status: 200 }),
     );
     const r = await h.backend.post("general", "hi", "alice", "1.1");
-    expect(r).toEqual({ ok: true, ts: "9.9" });
+    expect(r).toEqual({ ok: true, ts: "9.9", thread: "1.1" });
     const call = h.fetches.find((f) => f.url.includes(POST))!;
     expect(JSON.parse(call.init?.body as string)).toEqual({ channel: "C1", text: "hi", thread_ts: "1.1" });
   });

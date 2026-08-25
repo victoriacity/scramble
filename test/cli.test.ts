@@ -1250,6 +1250,46 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     expect(errs.join(" ")).toContain("the reply as stored");
   });
 
+  test("`--verify` reads back from the ROOT Slack picked when a reply was threaded under", async () => {
+    // An agent passed --thread pointing at a reply. Slack hoisted the message
+    // into that reply's root and answered with the root's ts, and the read-back
+    // asked about the ts that was passed, so it reported "slack has no message
+    // at <ts>" for a message that was in the channel (2026-08-25).
+    const cwd = scratchDir("verify-hoisted");
+    const asked = "111.1";
+    const root = "100.1";
+    const { io, errs, urls } = stubIo(cwd, async (u) => {
+      const url = String(u);
+      if (url.includes("chat.postMessage"))
+        return new Response(JSON.stringify({ ok: true, ts: "222.2", message: { thread_ts: root } }), { status: 200 });
+      if (url.includes("conversations.replies"))
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            messages: url.includes(encodeURIComponent(root)) ? [{ ts: "222.2", text: "threaded under a reply" }] : [],
+          }),
+          { status: 200 },
+        );
+      return new Response(JSON.stringify({ ok: true, messages: [] }), { status: 200 });
+    });
+    writeSlackConfig(cwd, {
+      appToken: "xapp-1",
+      token: "xoxb-1",
+      channels: { general: "C1" },
+      agents: { dev: { token: "T", handle: "dev" } },
+    });
+    io.readStdin = async () => "threaded under a reply";
+    expect(
+      await main(
+        ["message", "send", "--target", "general", "--as", "dev", "--thread", asked, "--verify", "--backend", "slack"],
+        io,
+      ),
+    ).toBe(0);
+    expect(urls.join(" ")).toContain(`ts=${encodeURIComponent(root)}`);
+    expect(errs.join(" ")).toContain("holds exactly what was sent");
+    expect(errs.join(" ")).not.toContain("slack has no message");
+  });
+
   test("`rewrite` prints the model's answer, reads a file, and sends nothing", async () => {
     // The operator asked for the instruction file itself to go through the
     // rewriter, and nothing here could do that without sending a message
