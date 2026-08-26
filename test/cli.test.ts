@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import type { ChannelStore } from "../src/store";
 import { createStore } from "../src/store";
 import { createHandler } from "../src/server";
-import { main, parseBind, loadSlackConfig, slackConfigPath, slackCliToken, staleConfigWarning, staleListeners, pickStale, staleListenerProblem, readProcesses, liveListeners, stillAlive, watchForNewerInstall, listenerCommit, listenersBehind, processesReadable, type Io } from "../src/cli";
+import { main, parseBind, loadSlackConfig, slackConfigPath, staleConfigWarning, staleListeners, pickStale, staleListenerProblem, readProcesses, liveListeners, stillAlive, watchForNewerInstall, listenerCommit, listenersBehind, processesReadable, type Io } from "../src/cli";
 import { SCOPE_NAMES, BOT_EVENT_NAMES } from "../src/app-manifest";
 
 function scratchDir(name: string): string {
@@ -2975,43 +2975,6 @@ describe("message check across a config several agents share", () => {
   });
 });
 
-describe("slackCliToken", () => {
-  // The only credential that can read a peer's description. Every way it can be
-  // unavailable returns undefined, so a host without the Slack CLI gets no peer
-  // remits rather than a broken lookup or a crash.
-  function ioWithHome(home: string | undefined): Io {
-    return {
-      write: () => {},
-      writeErr: () => {},
-      fetch: async () => new Response("{}", { status: 200 }),
-      env: (n) => (n === "HOME" ? home : undefined),
-      cwd: () => "/tmp",
-      sleep: async () => {},
-      serve: async () => 0,
-    };
-  }
-
-  test("reads the first token in the CLI's credentials file", () => {
-    const home = scratchDir("cli-tok");
-    mkdirSync(join(home, ".slack"), { recursive: true });
-    writeFileSync(join(home, ".slack", "credentials.json"), JSON.stringify({ E1: { token: "xoxe-abc" } }));
-    expect(slackCliToken(ioWithHome(home))).toBe("xoxe-abc");
-  });
-
-  test("no HOME, no file, unreadable JSON, and a tokenless entry each give undefined", () => {
-    expect(slackCliToken(ioWithHome(undefined))).toBeUndefined();
-    expect(slackCliToken(ioWithHome(""))).toBeUndefined();
-    expect(slackCliToken(ioWithHome(scratchDir("cli-none")))).toBeUndefined();
-    const bad = scratchDir("cli-bad");
-    mkdirSync(join(bad, ".slack"), { recursive: true });
-    writeFileSync(join(bad, ".slack", "credentials.json"), "not json");
-    expect(slackCliToken(ioWithHome(bad))).toBeUndefined();
-    const empty = scratchDir("cli-empty");
-    mkdirSync(join(empty, ".slack"), { recursive: true });
-    writeFileSync(join(empty, ".slack", "credentials.json"), JSON.stringify({ E1: {}, E2: { token: "" } }));
-    expect(slackCliToken(ioWithHome(empty))).toBeUndefined();
-  });
-});
 
 describe("staleListeners", () => {
   // A landed fix does not reach a running process, and twice on 2026-08-21 that

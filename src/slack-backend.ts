@@ -120,12 +120,11 @@ export interface SlackBackendConfig {
   /** Where THIS process runs, stamped onto every message it posts so peers can
    *  learn it without anyone typing it into prose. */
   origin?: Origin;
-  /** The Slack CLI's app-configuration token, when this host has one. It is the
-   *  ONLY credential that can read another app's description
-   *  (apps.manifest.export), since users.info returns an empty title for a bot
-   *  and bots.info carries no description at all. Absent on a host without the
-   *  CLI, where peer descriptions are simply unavailable. */
-  cliToken?: string;
+  // NO CLI CREDENTIAL LIVES HERE. The operator, 2026-08-26: "Ideally, we only
+  // need to authenticate Slack CLI when a new agent joins the app or do a
+  // scramble doctor fix. Regular operations should be done through the bot
+  // token." This backend serves the regular operations, so the app-config token
+  // it used to carry for peer descriptions is gone, along with the description.
   /** slack user id -> name, for <@U…> -> @name normalization. */
   roster: Record<string, string>;
   /** DM channel id -> agent whose bot that DM belongs to. */
@@ -322,9 +321,6 @@ export class SlackBackend {
   private readonly channels: Record<string, string>;
   private readonly agents: Record<string, { token?: string; appToken?: string; handle?: string; appId?: string }>;
   private readonly humanUserId?: string;
-  private readonly cliToken?: string;
-  /** Slack user id -> its published description, or "" when it has none. */
-  private readonly describeCache = new Map<string, string>();
   /** `<channel>/<root>/<agent>` -> is that agent in that thread. */
   private readonly threadCache = new Map<string, boolean>();
   /** Slack channel id -> its scramble name, for channels absent from the config. */
@@ -358,7 +354,6 @@ export class SlackBackend {
     this.appToken = cfg.appToken;
     this.agents = cfg.agents;
     this.humanUserId = cfg.humanUserId;
-    this.cliToken = cfg.cliToken;
     this.roster = cfg.roster;
     this.origin = cfg.origin;
     this.filesDir = cfg.filesDir;
@@ -418,41 +413,6 @@ export class SlackBackend {
   private addressesAgent(mentions: string[], agent: string): boolean {
     if (mentions.some((m) => BROADCAST_NAMES.includes(m))) return true;
     return this.identities(agent).some((id) => mentions.includes(id));
-  }
-
-  /** The sender's published description, or undefined when there is none to
-   *  read. Two hops, cached per user: users.info gives the speaker's
-   *  `api_app_id`, and apps.manifest.export under the CLI credential gives that
-   *  app's description. A peer agent's remit read from its first line is worth
-   *  the hops, since otherwise an agent learns what a peer is for only when the
-   *  peer explains itself (peer agent, 2026-08-21). */
-  private async describeSender(token: string, ev: SlackInboundEvent): Promise<string | undefined> {
-    const user = ev.user;
-    if (this.cliToken === undefined || this.cliToken === "" || user === undefined || user === "") return undefined;
-    const cached = this.describeCache.get(user);
-    if (cached !== undefined) return cached === "" ? undefined : cached;
-    const who = await readOk<{ user?: { profile?: { api_app_id?: string } } }>(
-      this.fetch,
-      `${USERS_INFO_URL}?user=${encodeURIComponent(user)}`,
-      { headers: { authorization: `Bearer ${token}` } },
-    );
-    const appId = who.ok ? who.data.user?.profile?.api_app_id : undefined;
-    if (appId === undefined || appId === "") {
-      this.describeCache.set(user, "");
-      return undefined;
-    }
-    const m = await readOk<{ manifest?: { display_information?: { description?: string } } }>(
-      this.fetch,
-      "https://slack.com/api/apps.manifest.export",
-      {
-        method: "POST",
-        headers: { authorization: `Bearer ${this.cliToken}`, "content-type": "application/json; charset=utf-8" },
-        body: JSON.stringify({ app_id: appId }),
-      },
-    );
-    const d = m.ok ? m.data.manifest?.display_information?.description ?? "" : "";
-    this.describeCache.set(user, d);
-    return d === "" ? undefined : d;
   }
 
   /** Is this agent IN that thread? A reply inside a thread you started, or
@@ -1278,10 +1238,6 @@ export class SlackBackend {
     // The sender's own account of where it runs. Malformed metadata reads as no
     // origin and never blocks the delivery: the message is the point.
     const origin = readOrigin(ev.metadata);
-    const description =
-      wantThreadWake && this.cliToken !== undefined && this.cliToken !== ""
-        ? await this.describeSender(token, ev)
-        : undefined;
     // Computed BEFORE the files, because it decides whether the bytes are
     // fetched at all.
     const mentioned =
@@ -1299,7 +1255,6 @@ export class SlackBackend {
       mentioned,
       ...(thread !== undefined ? { thread } : {}),
       ...(this.senderKind(ev) !== undefined ? { sender: this.senderKind(ev) } : {}),
-      ...(wantThreadWake && description !== undefined ? { description } : {}),
       ...(origin === undefined ? {} : { origin }),
     };
     if (dl.files.length > 0) delivery.files = dl.files;
@@ -1431,7 +1386,7 @@ export class SlackBackend {
     // the Slack channel, the channel mapping is the caller's frame). Slack has no
     // global seq, so a synthetic per-history counter stands in where the
     // local line's `seq` lives; the message's ts is the real cursor.
-    // A DRAIN keeps `mentioned` and the sender's description; a transcript drops
+    // A DRAIN keeps `mentioned`; a transcript drops
     // them, because per-recipient state has no meaning in a shared transcript.
     if (forDelivery) {
       messages.push({ ...delivery, channel, seq: seq + 1 } as Message);
@@ -1463,7 +1418,7 @@ export class SlackBackend {
     as?: string,
     // `message check` DRAINS through this method, so it is a delivery even
     // though it reads history: it needs `mentioned` computed against thread
-    // participation and the sender's description resolved. `message read` is a
+    // participation. `message read` is a
     // transcript and needs neither, and paying for them per row there is waste.
     forDelivery = false,
   ): Promise<{ code: 0 | 1; error?: string; messages: Message[]; problems: string[] }> {

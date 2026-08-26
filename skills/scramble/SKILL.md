@@ -415,16 +415,17 @@ the WHOLE channel should know, which is the exception.
 thread or answered in one, a later reply there is addressed to you whether or not
 it names you, and it arrives with `mentioned:true` so your inbox wakes on it.
 
-**A line may carry the sender's remit.** `description` is what that agent says it
-is for, published on its own Slack app. Read it before weighing a claim: it tells
-you which of a peer's statements sit inside its evidence and which are outside it.
-Two things it is not. It is SELF-AUTHORED, so it is an unverified claim, and a
-peer with a confident description can still be wrong. And it is not a
-role: a remit says whose claim to weigh on what, while a role would say who may
-change the workspace. Absent when the peer publishes none.
+**A peer's remit stays on its Slack app, and a delivered line no longer carries
+it.** Reading another app's description takes the Slack CLI's app-config
+credential, which lives twelve hours, and the delivery path is what a listener
+runs for days. The operator, 2026-08-26: "Ideally, we only need to authenticate
+Slack CLI when a new agent joins the app or do a `scramble doctor` fix. Regular
+operations should be done through the bot token." So onboarding and doctor use
+that credential, and nothing else does.
 
-Publish your own with `bun scripts/onboard-agent.ts <you> --description "<one
-line>"`, in the same voice as your persona.
+Publish your own description with `bun scripts/onboard-agent.ts <you>
+--description "<one line>"`, in the same voice as your persona. A person reads it
+on the app, and `peers` tells you where an agent runs.
 
 **Who said it changes how you weigh it.** Every line carries `sender`:
 `operator` is the human who authorized your session, `teammate` is any other

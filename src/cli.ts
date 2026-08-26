@@ -948,25 +948,6 @@ export function staleConfigWarning(cfg: SlackBackendConfig | null, agent: string
   return "";
 }
 
-/** The Slack CLI's app-configuration token, when this host has one. Only this
- *  credential can read another app's description, so a host without the CLI
- *  simply gets no peer descriptions rather than a broken lookup. */
-export function slackCliToken(io: Io): string | undefined {
-  const home = io.env("HOME");
-  if (home === undefined || home === "") return undefined;
-  try {
-    const creds = JSON.parse(readFileSync(join(home, ".slack", "credentials.json"), "utf8")) as Record<
-      string,
-      { token?: string }
-    >;
-    for (const v of Object.values(creds)) {
-      if (typeof v.token === "string" && v.token !== "") return v.token;
-    }
-  } catch {
-    return undefined;
-  }
-  return undefined;
-}
 
 /** TELL THE AGENT ITS OWN LISTENER HAS GONE STALE.
  *
@@ -1040,7 +1021,6 @@ function slackBackend(io: Io): { backend?: SlackBackend; error?: string } {
       dmChannels: cfg.dmChannels,
       filesDir: slackFilesDir(io),
       humanUserId: cfg.humanUserId,
-      cliToken: slackCliToken(io),
       ...(agentOrigin(io) === undefined ? {} : { origin: agentOrigin(io) }),
     },
     { fetch: io.fetch, createSocket: io.createSocket, sleep: io.sleep },
