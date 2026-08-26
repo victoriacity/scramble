@@ -1205,9 +1205,10 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     expect(await main(["message", "send", "--target", "general", "--as", "dev", "--backend", "slack"], withKey)).toBe(0);
     expect(errs.join(" ")).toContain("holds exactly what was sent");
 
-    // And --no-verify skips the read-back entirely.
+    // And --no-verify skips the read-back entirely. A DIFFERENT draft, because
+    // the same one into the same channel is refused as a duplicate.
     const b = stubIo(cwd, async (u) => responder(String(u)));
-    b.io.readStdin = async () => "the line as drafted";
+    b.io.readStdin = async () => "a second line, drafted separately";
     const skipping: Io = {
       ...b.io,
       env: (n) => (n === "SCRAMBLE_REWRITE_KEY" ? "k" : b.io.env(n)),
@@ -1371,6 +1372,45 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     expect(
       await main(["message", "edit", "--target", "general", "--to", "1.1", "--as", "dev", "--backend", "slack"], bare.io),
     ).toBe(1);
+  });
+
+  test("the same draft into the same channel is REFUSED, and `--again` sends it", async () => {
+    // MEASURED after the `posted:` line shipped: two byte-identical copies 27
+    // seconds apart reached a third agent's inbox (xingyubot reading
+    // @peer_metrics, 2026-08-26). An agent asked for this shape in these words:
+    // "A retry after a genuine post must be a no-op, for example by setting an
+    // idempotency key on the draft hash" (peer-auto-evals, 2026-08-26).
+    const cwd = scratchDir("send-duplicate");
+    let posts = 0;
+    const { io, errs } = stubIo(cwd, async (u) => {
+      if (String(u).includes("chat.postMessage")) {
+        posts += 1;
+        return new Response(JSON.stringify({ ok: true, ts: `9.${posts}`, message: {} }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ ok: true, messages: [] }), { status: 200 });
+    });
+    writeSlackConfig(cwd, {
+      appToken: "xapp-1",
+      token: "xoxb-1",
+      channels: { general: "C1" },
+      agents: { dev: { token: "T", handle: "dev" } },
+    });
+    io.readStdin = async () => "the parser fix shipped and I sent it";
+    const send = (extra: string[] = []): Promise<number> =>
+      main(["message", "send", "--target", "general", "--as", "dev", "--no-verify", "--backend", "slack", ...extra], io);
+    expect(await send()).toBe(0);
+    expect(posts).toBe(1);
+    // The second attempt names the ts Slack already holds and posts nothing.
+    expect(await send()).toBe(1);
+    expect(posts).toBe(1);
+    expect(errs.join(" ")).toContain("you already sent this exact draft to general at ts 9.1");
+    // Saying it twice on purpose stays possible.
+    expect(await send(["--again"])).toBe(0);
+    expect(posts).toBe(2);
+    // A different draft is unaffected.
+    io.readStdin = async () => "something else entirely, and I sent that too";
+    expect(await send()).toBe(0);
+    expect(posts).toBe(3);
   });
 
   test("the send says POSTED with the ts before it says anything else", async () => {

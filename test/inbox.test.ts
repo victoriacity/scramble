@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync, mkdirSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   closeAnsweredBefore,
   closeInboxItems,
@@ -12,6 +12,8 @@ import {
   closeItemById,
   readInbox,
   readSent,
+  readSentRows,
+  sentAlready,
   recordSent,
   sentPath,
   recordInboxItem,
@@ -450,6 +452,37 @@ describe("the record of what this agent said", () => {
     const p = sentPath(join(scratch(), "slack.json"), "dev");
     recordSent(p, "1.1");
     recordSent(p, "2.2");
+    expect(readSent(p)).toEqual(["1.1", "2.2"]);
+  });
+
+  test("a draft rides with the ts, and a repeat of it inside the window is found", () => {
+    // MEASURED: two byte-identical copies 27 seconds apart reached a third
+    // agent's inbox after the `posted:` line shipped (xingyubot reading
+    // @peer_metrics, 2026-08-26). An agent asked for exactly this: "A retry
+    // after a genuine post must be a no-op, for example by setting an
+    // idempotency key on the draft hash" (peer-auto-evals, 2026-08-26).
+    const p = sentPath(join(scratch(), "slack.json"), "dev");
+    recordSent(p, "1.1");
+    recordSent(p, "2.2", { hash: "abc", channel: "general", at: "2026-08-26T12:00:00Z" });
+    // The ts list is unchanged for every older reader.
+    expect(readSent(p)).toEqual(["1.1", "2.2"]);
+    const rows = readSentRows(p);
+    expect(rows[0]).toEqual({ ts: "1.1" });
+    expect(rows[1]?.hash).toBe("abc");
+    const now = Date.parse("2026-08-26T12:05:00Z");
+    expect(sentAlready(rows, "general", "abc", now, 10 * 60 * 1000)?.ts).toBe("2.2");
+    // Another channel, another draft, or past the window: no match.
+    expect(sentAlready(rows, "other", "abc", now, 10 * 60 * 1000)).toBeUndefined();
+    expect(sentAlready(rows, "general", "zzz", now, 10 * 60 * 1000)).toBeUndefined();
+    expect(sentAlready(rows, "general", "abc", Date.parse("2026-08-26T13:00:00Z"), 10 * 60 * 1000)).toBeUndefined();
+    // A row predating the field carries no draft, so it never matches.
+    expect(sentAlready([{ ts: "1.1" }], "general", "abc", now, 10 * 60 * 1000)).toBeUndefined();
+  });
+
+  test("a malformed row reads as an empty ts, never taking the file down", () => {
+    const p = sentPath(join(scratch(), "slack.json"), "dev");
+    mkdirSync(dirname(p), { recursive: true });
+    writeFileSync(p, ['{"ts":"1.1","hash":"a","channel":"c","at":"t"}', "{ broken", '{"nots":1}', "2.2"].join("\n"));
     expect(readSent(p)).toEqual(["1.1", "2.2"]);
   });
 

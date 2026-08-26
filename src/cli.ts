@@ -31,7 +31,13 @@ import {
 import { StatusManager } from "./status";
 import { SCOPE_NAMES, BOT_EVENT_NAMES } from "./app-manifest";
 import { languageRefusal, lengthRefusal, lineOf, lintLanguage, wordCount } from "./language";
+import { createHash } from "node:crypto";
 import { credentialsPath, firstCredential, freshCliToken } from "./slack-credential";
+
+/** How long a draft counts as already sent. Ten minutes covers the retry an
+ *  agent makes after reading a warning as a failure, and it is short enough that
+ *  saying the same thing again in a later conversation goes through. */
+const DUPLICATE_WINDOW_MS = 10 * 60 * 1000;
 import {
   chooseText,
   composePrompt,
@@ -60,7 +66,9 @@ import {
   closeInboxItems,
   closeItemById,
   readSent,
+  readSentRows,
   recordSent,
+  sentAlready,
   sentPath,
   inboxPath,
   isAddressed,
@@ -146,6 +154,7 @@ interface Parsed {
  *  the file it was asked about first became the value of `--comments`. Any
  *  value-less flag followed by a positional has that shape. */
 const BOOLEAN_FLAGS = new Set([
+  "again",
   "comments",
   // `--why` is NOT here: `inbox close --why <text>` takes the reason it stores
   // on every row. `scramble rewrite --why` reads its own argv, so both work.
@@ -464,6 +473,9 @@ async function postText(
   // once more BEFORE it uploads an attachment, which is not a second mechanism
   // but the same one called earlier, so a refused message does not leave a file
   // in the channel with no message to go with it.
+  // WHAT THE AUTHOR TYPED, kept before the rewriter replaces it. The duplicate
+  // check hashes this, since one draft rewrites differently every run.
+  const draft = text;
   const postRefusal = languageRefusal(lintLanguage(text));
   if (postRefusal !== "") {
     io.writeErr(postRefusal);
@@ -524,6 +536,29 @@ async function postText(
     if (s.error !== undefined || s.backend === undefined) {
       io.writeErr(s.error ?? "slack backend unavailable");
       return 1;
+    }
+    // THE SAME DRAFT INTO THE SAME CHANNEL, TWICE, IS REFUSED. Measured after the
+    // `posted:` line shipped: two byte-identical copies 27 seconds apart reached
+    // a third agent's inbox (xingyubot reading @peer_metrics, 2026-08-26). An
+    // agent asked for this shape in these words: "A retry after a genuine post
+    // must be a no-op, for example by setting an idempotency key on the draft
+    // hash" (peer-auto-evals, 2026-08-26).
+    //
+    // The DRAFT is hashed, since the rewrite of one draft differs run to run.
+    // `--again` sends it anyway, for the case where saying the same thing twice
+    // is the intent.
+    const sent = sentPath(slackConfigPath(io), from);
+    const digest = createHash("sha256").update(draft).digest("hex").slice(0, 16);
+    if (!flags.has("again")) {
+      const already = sentAlready(readSentRows(sent), channel, digest, Date.now(), DUPLICATE_WINDOW_MS);
+      if (already !== undefined) {
+        io.writeErr(
+          `message send REFUSED: you already sent this exact draft to ${channel} at ts ${already.ts} ` +
+            `(${already.at}). Slack has that copy, so this would be a second one. Pass --again to send it ` +
+            `twice on purpose.`,
+        );
+        return 1;
+      }
     }
     const r = await s.backend.post(channel, text, from, thread);
     if (!r.ok) {
@@ -603,7 +638,11 @@ async function postText(
         }
       }
     }
-    await settleSend(io, channel, from, r.ts, thread);
+    await settleSend(io, channel, from, r.ts, thread, {
+      hash: digest,
+      channel,
+      at: new Date().toISOString(),
+    });
     if (status !== undefined) await settleStatus(replyStatus(status, channel, from), io);
     return 0;
   }
@@ -1997,12 +2036,15 @@ async function settleSend(
   from: string,
   ts: string | undefined,
   thread: string | undefined,
+  draft?: { hash: string; channel: string; at: string },
 ): Promise<void> {
   const s = slackBackend(io);
   try {
     if (s.backend !== undefined) await reportCrossings(io, s.backend, channel, from, ts);
     closeInboxItems(inboxPath(slackConfigPath(io), from), channel, ts ?? new Date().toISOString(), thread);
-    if (ts !== undefined) recordSent(sentPath(slackConfigPath(io), from), ts);
+    // THE DRAFT RIDES WITH THE ts, so the next send of the same words can see
+    // this one and refuse.
+    if (ts !== undefined) recordSent(sentPath(slackConfigPath(io), from), ts, draft);
   } catch (e) {
     io.writeErr(`inbox ledger not updated after posting to ${channel}: ${String(e)}`);
   }
@@ -3109,6 +3151,7 @@ const USAGE = [
   "scramble <verb> [--as <agent>] [--target <channel>]",
   "",
   "  message send      --target <channel>            the message on stdin",
+  "                    [--again]                     send a draft you already sent to that channel",
   "                    [--verify]                    read the message back and report what Slack stored",
   "  message read      --target <channel> [--after N]",
   "  message check                                   drain what arrived, and what you owe",

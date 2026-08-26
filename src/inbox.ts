@@ -344,7 +344,19 @@ export function sentPath(configPath: string, agent: string): string {
   return join(dirname(configPath), "sent", `${agent}.jsonl`);
 }
 
-export function readSent(path: string): string[] {
+/** One send by this agent. Rows written before this shape are a bare ts, and
+ *  they read as a row with no draft on it. */
+export interface SentRow {
+  ts: string;
+  /** Digest of the text the AUTHOR typed, before the rewriter touched it. The
+   *  rewrite of one draft differs run to run, so the draft is the part that
+   *  repeats when somebody sends the same thing twice. */
+  hash?: string;
+  channel?: string;
+  at?: string;
+}
+
+function rawSentLines(path: string): string[] {
   try {
     return readFileSync(path, "utf8")
       .split("\n")
@@ -355,10 +367,54 @@ export function readSent(path: string): string[] {
   }
 }
 
-export function recordSent(path: string, ts: string): void {
-  const kept = [...readSent(path), ts].slice(-500);
+export function readSentRows(path: string): SentRow[] {
+  return rawSentLines(path).map((l) => {
+    if (!l.startsWith("{")) return { ts: l };
+    try {
+      const row = JSON.parse(l) as SentRow;
+      return typeof row.ts === "string" ? row : { ts: "" };
+    } catch {
+      return { ts: "" };
+    }
+  });
+}
+
+export function readSent(path: string): string[] {
+  return readSentRows(path)
+    .map((r) => r.ts)
+    .filter((t) => t !== "");
+}
+
+export function recordSent(path: string, ts: string, draft?: { hash: string; channel: string; at: string }): void {
+  const line = draft === undefined ? ts : JSON.stringify({ ts, ...draft });
+  const kept = [...rawSentLines(path), line].slice(-500);
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, `${kept.join("\n")}\n`);
+}
+
+/** The ts of a send of this same draft into this same channel inside the window,
+ *  or undefined.
+ *
+ *  A RETRY AFTER A GENUINE POST MUST BE A NO-OP. Asked for in those terms by an
+ *  agent that posted a reply twice (peer-auto-evals, 2026-08-26): "A retry after
+ *  a genuine post must be a no-op, for example by setting an idempotency key on
+ *  the draft hash." Two byte-identical copies 27 seconds apart reached a third
+ *  agent's inbox after the `posted:` line had already shipped, so the sender
+ *  still had a reason to send twice and the tool still let them. */
+export function sentAlready(
+  rows: SentRow[],
+  channel: string,
+  hash: string,
+  nowMs: number,
+  windowMs: number,
+): SentRow | undefined {
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const r = rows[i]!;
+    if (r.hash !== hash || r.channel !== channel || r.at === undefined) continue;
+    const at = Date.parse(r.at);
+    if (Number.isFinite(at) && nowMs - at <= windowMs) return r;
+  }
+  return undefined;
 }
 
 /** Should this delivered line become an item? Only lines ADDRESSED to this agent
