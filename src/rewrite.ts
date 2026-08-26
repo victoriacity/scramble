@@ -214,7 +214,7 @@ export function rewritesReport(rows: RewriteRecord[], agent?: string): string {
   );
 }
 
-/** What to ask the model when someone wants the DIAGNOSIS instead of the fix.
+/** What to ask the model when someone wants the DIAGNOSIS, with no fix attached.
  *
  *  The operator, 2026-08-26, about a refusal message this tool prints: "Use
  *  gemini 3.7 to find why the communication is wrong." A rewrite shows a better
