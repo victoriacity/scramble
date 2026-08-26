@@ -15,6 +15,7 @@ import type { Delivery, Message, Attachment } from "./types";
 import { DM_PREFIX } from "./types";
 import type { SlackSocket } from "./slack-transport";
 import { STATUS_METADATA_TYPE } from "./status";
+import { proseOf } from "./language";
 import { originMetadata, readOrigin, type Origin } from "./origin";
 import { downloadFile, uploadToSlack, type SlackFileMeta } from "./attachments";
 
@@ -297,7 +298,13 @@ export function computeMentions(channel: string, text: string, sender: string): 
       if (seg && seg !== sender) out.add(seg);
     }
   } else {
-    for (const tok of text.split(/\s+/)) {
+    // PROSE ONLY, because `denormalize` skips fenced blocks and backtick spans
+    // and Slack therefore makes no entity for an `@name` written in one. This
+    // counted them anyway, so a delivery claimed a mention that notified
+    // nobody. Measured on a message of mine whose fence carried the words
+    // `preserve EVERY @name`: the delivery came back with `name` in its mention
+    // list, and no such agent exists (model-failure-research, 2026-08-27).
+    for (const tok of proseOf(text).split(/\s+/)) {
       if (!tok.startsWith("@")) continue;
       const name = tok.slice(1).replace(/^\W+/, "").replace(/\W+$/, "");
       if (name) out.add(name);

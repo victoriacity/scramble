@@ -155,6 +155,18 @@ describe("computeMentions", () => {
   test("a group channel with no @-token has empty mentions", () => {
     expect(computeMentions("general", "hello there", "x")).toEqual([]);
   });
+
+  test("an @name inside a fence or a backtick span is NOT a mention", () => {
+    // `denormalize` skips fenced blocks and backtick spans, so Slack makes no
+    // entity for a name written in one. This counted them anyway, and a message
+    // of mine whose fence read `preserve EVERY @name` came back with `name` in
+    // its mention list, for an agent that does not exist
+    // (model-failure-research, 2026-08-27).
+    expect(computeMentions("general", "@alice see\n```\npreserve EVERY @name\n```\n", "x")).toEqual(["alice"]);
+    expect(computeMentions("general", "run `@dev --now` when ready", "x")).toEqual([]);
+    // A real mention beside a fenced one still counts.
+    expect(computeMentions("general", "```\n@ghost\n```\n@bo look", "x")).toEqual(["bo"]);
+  });
 });
 
 // --- post ------------------------------------------------------------------
