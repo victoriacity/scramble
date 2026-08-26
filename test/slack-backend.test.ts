@@ -462,6 +462,28 @@ describe("post", () => {
     expect(seen.some((u) => u.includes("users.conversations"))).toBe(false);
   });
 
+  test("a threaded reply keeps its metadata, so its origin and status survive the read", async () => {
+    // Every read passed include_all_metadata except the thread expansion, so a
+    // reply came back with no origin: `peers` could not name the host or commit
+    // that wrote it, and a status line inside a thread read as ordinary talk
+    // (2026-08-26).
+    let repliesUrl = "";
+    const h = make({}, async (url) => {
+      if (url.includes("conversations.history"))
+        return new Response(
+          JSON.stringify({ ok: true, messages: [{ ts: "1.1", thread_ts: "1.1", reply_count: 1, text: "root" }] }),
+          { status: 200 },
+        );
+      if (url.includes("conversations.replies")) {
+        repliesUrl = url;
+        return new Response(JSON.stringify({ ok: true, messages: [] }), { status: 200 });
+      }
+      return okRouter(url);
+    });
+    await h.backend.history("general", undefined, "bob");
+    expect(repliesUrl).toContain("include_all_metadata=true");
+  });
+
   test("the read expands the threads with the NEWEST replies, never the newest roots", async () => {
     // At 5 roots picked by root age, an agent replying in an older thread read
     // the channel back, saw nothing new, decided the send had failed, and posted

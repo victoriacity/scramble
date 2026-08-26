@@ -1514,7 +1514,15 @@ export class SlackBackend {
       const rootTs = m.ts ?? "";
       const rep = await readOk<{ messages?: SlackHistoryMessage[] }>(
         this.fetch,
-        `${REPLIES_URL}?channel=${encodeURIComponent(slackChannel)}&ts=${encodeURIComponent(rootTs)}`,
+        // ASK FOR THE METADATA HERE TOO. Every other read passes
+        // include_all_metadata and this one did not, so a message posted in a
+        // THREAD came back with no origin and no status marker: `peers` could
+        // not say which host or commit wrote it, and a status line inside a
+        // thread read as an ordinary message. Measured on two threaded replies
+        // whose delivery rows carry `origin: None` while the same agent's
+        // top-level lines carry theirs (2026-08-26).
+        `${REPLIES_URL}?channel=${encodeURIComponent(slackChannel)}&${WITH_METADATA}` +
+          `&ts=${encodeURIComponent(rootTs)}`,
         { headers: { authorization: `Bearer ${token}` } },
       );
       // A replies request that fails must not fail the whole read: keep the
