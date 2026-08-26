@@ -2173,6 +2173,65 @@ async function cmdMessage(args: string[], io: Io, backend: "local" | "slack"): P
       }
       return 0;
     }
+    case "edit":
+    case "delete": {
+      // `message edit --target <ch> --to <ts>` with the new text on stdin, and
+      // `message delete --target <ch> --to <ts>`. Asked for by the operator,
+      // 2026-08-26: "Agents should be able to edit and delete messages."
+      //
+      // AN EDIT IS A SEND. It passes the language rules and the rewriter the
+      // same way, because the channel ends up holding its text either way, and a
+      // rule that a second verb walks around is not a rule.
+      const req = requireTarget(flags, io);
+      if (!req.ok) return 1;
+      const to = flags.get("to");
+      if (to === undefined) {
+        io.writeErr(`message ${sub} requires --to <message-ts>`);
+        return 1;
+      }
+      if (backend !== "slack") {
+        io.writeErr(`message ${sub} needs the slack backend`);
+        return 1;
+      }
+      const sb = slackBackend(io);
+      if (sb.error !== undefined || sb.backend === undefined) {
+        io.writeErr(sb.error ?? "slack backend unavailable");
+        return 1;
+      }
+      const who = nameFor(flags, io);
+      if (sub === "delete") {
+        const d = await sb.backend.remove(req.channel, to, who);
+        if (!d.ok) {
+          io.writeErr(`delete failed: ${d.error}`);
+          return 1;
+        }
+        io.writeErr(`deleted: ${req.channel} ts ${to} is gone from Slack.`);
+        return 0;
+      }
+      const raw = await (io.readStdin ? io.readStdin() : Promise.resolve(""));
+      if (raw.trim() === "") {
+        io.writeErr(`message edit reads the new text on stdin, and stdin was empty.`);
+        return 1;
+      }
+      const refused = languageRefusal(lintLanguage(raw));
+      if (refused !== "") {
+        io.writeErr(refused);
+        return 1;
+      }
+      const { chosen } = await attemptRewrite(raw, io);
+      if ("refuse" in chosen) {
+        io.writeErr(chosen.refuse);
+        return 1;
+      }
+      const u = await sb.backend.update(req.channel, to, chosen.send, who);
+      if (!u.ok) {
+        io.writeErr(`edit failed: ${u.error}`);
+        return 1;
+      }
+      io.writeErr(`edited: ${req.channel} ts ${to} now holds the new text. Slack has it.`);
+      if (chosen.note !== "") io.writeErr(`rewrite: ${chosen.note}`);
+      return 0;
+    }
     case "check":
       return cmdMessageCheck(args, io, backend);
     case "read": {
@@ -2952,6 +3011,8 @@ const USAGE = [
   "  message read      --target <channel> [--after N]",
   "  message check                                   drain what arrived, and what you owe",
   "  message react     --target <channel> --to <ts> --emoji <name>",
+  "  message edit      --target <channel> --to <ts>  the new text on stdin",
+  "  message delete    --target <channel> --to <ts>  remove a message you posted",
   "  inbox pending                                   lines addressed to you with no reply",
   "  peers             [--same-dir]                 who else is running, on which host, in which dir",
   "  rewrite           [<file>]                      what the rewriter makes of this text; sends nothing",

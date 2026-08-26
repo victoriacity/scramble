@@ -1254,6 +1254,125 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     expect(errs.join(" ")).toContain("the reply as stored");
   });
 
+  test("`message edit` rewrites a message already in the channel, and `delete` removes one", async () => {
+    // The operator, 2026-08-26: "Agents should be able to edit and delete
+    // messages. And you should already have the capability to delete your own
+    // message."
+    const cwd = scratchDir("edit-delete");
+    const calls: Array<{ url: string; body: string }> = [];
+    const { io, errs } = stubIo(cwd, async (u, init) => {
+      calls.push({ url: String(u), body: String(init?.body ?? "") });
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    });
+    writeSlackConfig(cwd, {
+      appToken: "xapp-1",
+      token: "xoxb-1",
+      channels: { general: "C1" },
+      agents: { dev: { token: "T", handle: "dev" } },
+      roster: { U1: "bo" },
+    });
+    io.readStdin = async () => "I fixed the parser and shipped it.";
+    expect(
+      await main(
+        ["message", "edit", "--target", "general", "--to", "77.7", "--as", "dev", "--backend", "slack"],
+        io,
+      ),
+    ).toBe(0);
+    const edit = calls.find((c) => c.url.includes("chat.update"));
+    expect(edit?.body).toContain('"ts":"77.7"');
+    expect(errs.join(" ")).toContain("edited: general ts 77.7");
+
+    expect(
+      await main(
+        ["message", "delete", "--target", "general", "--to", "77.7", "--as", "dev", "--backend", "slack"],
+        io,
+      ),
+    ).toBe(0);
+    expect(calls.some((c) => c.url.includes("chat.delete"))).toBe(true);
+    expect(errs.join(" ")).toContain("deleted: general ts 77.7 is gone");
+  });
+
+  test("an edit passes the language rules, needs a ts, needs stdin, and reports Slack's refusal", async () => {
+    const cwd = scratchDir("edit-sad");
+    const { io, errs } = stubIo(cwd, async (u) =>
+      String(u).includes("chat.update")
+        ? new Response(JSON.stringify({ ok: false, error: "message_not_found" }), { status: 200 })
+        : new Response(JSON.stringify({ ok: true }), { status: 200 }),
+    );
+    writeSlackConfig(cwd, {
+      appToken: "xapp-1",
+      token: "xoxb-1",
+      channels: { general: "C1" },
+      agents: { dev: { token: "T", handle: "dev" } },
+    });
+    // No --to.
+    io.readStdin = async () => "text";
+    expect(await main(["message", "edit", "--target", "general", "--as", "dev", "--backend", "slack"], io)).toBe(1);
+    expect(errs.join(" ")).toContain("requires --to");
+    // Empty stdin.
+    io.readStdin = async () => "   ";
+    expect(
+      await main(["message", "edit", "--target", "general", "--to", "1.1", "--as", "dev", "--backend", "slack"], io),
+    ).toBe(1);
+    expect(errs.join(" ")).toContain("stdin was empty");
+    // A banned form: an edit is a send and answers to the same rules.
+    io.readStdin = async () => "Honestly I fixed it.";
+    expect(
+      await main(["message", "edit", "--target", "general", "--to", "1.1", "--as", "dev", "--backend", "slack"], io),
+    ).toBe(1);
+    expect(errs.join(" ")).toContain("language-rule hit");
+    // Slack's own refusal, with the credential that acted.
+    io.readStdin = async () => "I fixed the parser and shipped it.";
+    expect(
+      await main(["message", "edit", "--target", "general", "--to", "1.1", "--as", "dev", "--backend", "slack"], io),
+    ).toBe(1);
+    expect(errs.join(" ")).toContain("message_not_found");
+    expect(errs.join(" ")).toContain("dev's own token");
+    // The local backend has no such call.
+    expect(
+      await main(["message", "delete", "--target", "general", "--to", "1.1", "--as", "dev", "--backend", "local"], io),
+    ).toBe(1);
+    expect(errs.join(" ")).toContain("needs the slack backend");
+
+    // Slack refusing the delete is reported, never swallowed.
+    const nope = stubIo(cwd, async (u) =>
+      String(u).includes("chat.delete")
+        ? new Response(JSON.stringify({ ok: false, error: "cant_delete_message" }), { status: 200 })
+        : new Response(JSON.stringify({ ok: true }), { status: 200 }),
+    );
+    expect(
+      await main(
+        ["message", "delete", "--target", "general", "--to", "1.1", "--as", "dev", "--backend", "slack"],
+        nope.io,
+      ),
+    ).toBe(1);
+    expect(nope.errs.join(" ")).toContain("delete failed: cant_delete_message");
+
+    // A rewrite the guards refuse stops the edit, exactly as it stops a send.
+    const bad = stubIo(cwd, async (u) =>
+      String(u).includes("generativelanguage")
+        ? new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: "it got fixed" }] } }] }), {
+            status: 200,
+          })
+        : new Response(JSON.stringify({ ok: true }), { status: 200 }),
+    );
+    bad.io.readStdin = async () => "I fixed the parser.";
+    expect(
+      await main(["message", "edit", "--target", "general", "--to", "1.1", "--as", "dev", "--backend", "slack"], {
+        ...bad.io,
+        env: (n) => (n === "SCRAMBLE_REWRITE_KEY" ? "k" : bad.io.env(n)),
+        moduleDir: () => join(import.meta.dir, "..", "src"),
+      }),
+    ).toBe(1);
+    expect(bad.errs.join(" ")).toContain("REFUSED");
+
+    // No slack config at all: the verb says so and edits nothing.
+    const bare = stubIo(scratchDir("edit-no-config"), async () => new Response("{}", { status: 200 }));
+    expect(
+      await main(["message", "edit", "--target", "general", "--to", "1.1", "--as", "dev", "--backend", "slack"], bare.io),
+    ).toBe(1);
+  });
+
   test("the send says POSTED with the ts before it says anything else", async () => {
     // Two agents duplicated messages in one hour because the CLI's output after
     // a successful post was a warning, and a warning read as a failure

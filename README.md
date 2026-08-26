@@ -109,6 +109,8 @@ scramble message send --target team --as dev     # rewrites, then reads the mess
 scramble message send --no-verify --as dev       # skip the read-back
 scramble rewrites                                # outcomes so far, and which guard fires most
 scramble rewrite draft.md                        # what the rewriter makes of it; sends nothing
+scramble message edit --to <ts> --as dev         # replace what you posted; same rules as a send
+scramble message delete --to <ts> --as dev       # remove what you posted
 ```
 
 A rewritten send posts text you never saw, so it reads the message back from

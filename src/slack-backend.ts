@@ -37,6 +37,8 @@ const AUTH_TEST_URL = "https://slack.com/api/auth.test";
 const AUTH_TEAMS_LIST_URL = "https://slack.com/api/auth.teams.list";
 const USERS_LIST_URL = "https://slack.com/api/users.list";
 const REACT_URL = "https://slack.com/api/reactions.add";
+const UPDATE_URL = "https://slack.com/api/chat.update";
+const DELETE_URL = "https://slack.com/api/chat.delete";
 const CONV_INFO_URL = "https://slack.com/api/conversations.info";
 const USERS_CONVERSATIONS_URL = "https://slack.com/api/users.conversations";
 
@@ -756,6 +758,56 @@ export class SlackBackend {
       };
     }
     return { ok: true };
+  }
+
+  /** REWRITE ONE MESSAGE THAT IS ALREADY IN THE CHANNEL.
+   *
+   *  Asked for by the operator, 2026-08-26: "Agents should be able to edit and
+   *  delete messages." Slack lets a bot token edit only what that token posted,
+   *  and it says so plainly, so the refusal names the credential that acted.
+   *
+   *  The text goes through `denormalize` exactly as a post does, so an `@name`
+   *  in an edit notifies the same person it would have notified in the send. */
+  async update(
+    channel: string,
+    ts: string,
+    text: string,
+    as: string,
+  ): Promise<{ ok: true } | { ok: false; error: string }> {
+    const resolved = await this.slackChannelFor(this.tokenOrDefault(as), channel);
+    if (resolved.id === undefined) return { ok: false, error: resolved.error };
+    const t = this.agentToken(as);
+    if (!t.ok) return { ok: false, error: t.error };
+    await this.learnNames(t.token, text);
+    const r = await readOk(this.fetch, UPDATE_URL, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${t.token}` },
+      body: JSON.stringify({ channel: resolved.id, ts, text: denormalize(text, this.roster) }),
+    });
+    return r.ok ? { ok: true } : { ok: false, error: this.actedAs(r.error, channel, resolved.id, ts, as) };
+  }
+
+  /** REMOVE ONE MESSAGE THIS AGENT POSTED. */
+  async remove(channel: string, ts: string, as: string): Promise<{ ok: true } | { ok: false; error: string }> {
+    const resolved = await this.slackChannelFor(this.tokenOrDefault(as), channel);
+    if (resolved.id === undefined) return { ok: false, error: resolved.error };
+    const t = this.agentToken(as);
+    if (!t.ok) return { ok: false, error: t.error };
+    const r = await readOk(this.fetch, DELETE_URL, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${t.token}` },
+      body: JSON.stringify({ channel: resolved.id, ts }),
+    });
+    return r.ok ? { ok: true } : { ok: false, error: this.actedAs(r.error, channel, resolved.id, ts, as) };
+  }
+
+  /** Slack's error with what was asked and WHOSE credential asked it. A bare
+   *  `message_not_found` reads as "no such message" when it usually means the
+   *  message belongs to a different app. */
+  private actedAs(error: string, channel: string, id: string, ts: string, as: string): string {
+    const own = this.agents[as]?.token;
+    const via = own !== undefined && own !== "" ? `${as}'s own token` : "the config default token";
+    return `${error} (channel ${channel} resolved to ${id}, ts ${ts}, under ${via})`;
   }
 
   /** Every channel this agent is a MEMBER of, by name.
