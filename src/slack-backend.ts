@@ -147,6 +147,10 @@ type OkResponse<T> = { ok: true; data: T } | { ok: false; error: string };
  *  that does not parse (or a fetch that throws) is surfaced as a FAILURE, never
  *  read as a success, because a caller that cannot tell what Slack said must
  *  not act as if it had. */
+/** How many 200-reply pages a read-back walks before it gives up. A thread this
+ *  long is beyond anything measured here, and the refusal names the bound. */
+const REPLY_PAGE_CAP = 10;
+
 async function readOk<T = Record<string, unknown>>(
   fetch: SlackBackendDeps["fetch"],
   input: string,
@@ -929,18 +933,44 @@ export class SlackBackend {
     // its text was intact. An agent measured that on its own threaded reply and
     // kept its wrapper for the case (2026-08-25). A reply is read through
     // conversations.replies on its ROOT, which is the ts the send threaded under.
-    const q =
-      thread !== undefined && thread !== ""
-        ? `${REPLIES_URL}?channel=${encodeURIComponent(resolved.id)}&${WITH_METADATA}` +
-          `&ts=${encodeURIComponent(thread)}&limit=200`
-        : `${HISTORY_URL}?channel=${encodeURIComponent(resolved.id)}&${WITH_METADATA}` +
-          `&oldest=${encodeURIComponent(ts)}&latest=${encodeURIComponent(ts)}&inclusive=true&limit=1`;
-    const r = await readOk<{ messages?: Array<{ ts?: string; text?: string }> }>(this.fetch, q, {
-      headers: { authorization: `Bearer ${t.token}` },
-    });
-    if (!r.ok) return { ok: false, error: r.error };
-    const row = (r.data.messages ?? []).find((m) => m.ts === ts);
-    if (row === undefined) return { ok: false, error: `slack has no message at ${ts} in ${channel}` };
+    const threaded = thread !== undefined && thread !== "";
+    const base = threaded
+      ? `${REPLIES_URL}?channel=${encodeURIComponent(resolved.id)}&${WITH_METADATA}` +
+        `&ts=${encodeURIComponent(thread)}&limit=200`
+      : `${HISTORY_URL}?channel=${encodeURIComponent(resolved.id)}&${WITH_METADATA}` +
+        `&oldest=${encodeURIComponent(ts)}&latest=${encodeURIComponent(ts)}&inclusive=true&limit=1`;
+    // A REPLY PAST THE FIRST PAGE IS STILL IN THE CHANNEL. conversations.replies
+    // returns the thread OLDEST-FIRST, so the reply just posted is on the LAST
+    // page, and a single 200-reply request answers "slack has no message at
+    // <ts>" for a message sitting in the thread. This is the same false negative
+    // that made a sender post twice, one page further out (2026-08-26).
+    let row: { ts?: string; text?: string } | undefined;
+    let cursor = "";
+    let pages = 0;
+    for (;;) {
+      pages += 1;
+      const r = await readOk<{
+        messages?: Array<{ ts?: string; text?: string }>;
+        response_metadata?: { next_cursor?: string };
+      }>(this.fetch, cursor === "" ? base : `${base}&cursor=${encodeURIComponent(cursor)}`, {
+        headers: { authorization: `Bearer ${t.token}` },
+      });
+      if (!r.ok) return { ok: false, error: r.error };
+      row = (r.data.messages ?? []).find((m) => m.ts === ts);
+      if (row !== undefined) break;
+      const next = r.data.response_metadata?.next_cursor ?? "";
+      // BOUNDED, AND THE BOUND IS REPORTED. A thread longer than this says how
+      // far it looked, so nobody reads the answer as "the message is gone".
+      if (!threaded || next === "" || pages >= REPLY_PAGE_CAP) {
+        return {
+          ok: false,
+          error:
+            `slack has no message at ${ts} in ${channel}` +
+            (threaded ? `, searched ${pages} page(s) of thread ${thread}${next === "" ? "" : " and more remain"}` : ""),
+        };
+      }
+      cursor = next;
+    }
     const stored = row.text ?? "";
     // TWO READINGS OF ONE MESSAGE. The normalized text is what a reader sees and
     // what the sender compares against. The ENTITIES are what Slack will notify

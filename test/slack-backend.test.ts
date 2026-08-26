@@ -462,6 +462,47 @@ describe("post", () => {
     expect(seen.some((u) => u.includes("users.conversations"))).toBe(false);
   });
 
+  test("storedMessage pages a thread until it finds the reply", async () => {
+    // conversations.replies returns a thread OLDEST-FIRST, so a reply just
+    // posted sits on the LAST page. One 200-reply request answered "slack has no
+    // message at <ts>" for a message in the thread, and a sender who believes
+    // that posts again (2026-08-26).
+    const pagesSeen: string[] = [];
+    const h = make({}, async (url) => {
+      if (url.includes("conversations.replies")) {
+        pagesSeen.push(url);
+        return new Response(
+          JSON.stringify(
+            url.includes("cursor=page2")
+              ? { ok: true, messages: [{ ts: "9.9", text: "the reply" }] }
+              : { ok: true, messages: [{ ts: "1.1", text: "the root" }], response_metadata: { next_cursor: "page2" } },
+          ),
+          { status: 200 },
+        );
+      }
+      return okRouter(url);
+    });
+    expect(await h.backend.storedMessage("general", "9.9", "bob", "1.1")).toEqual({
+      ok: true,
+      text: "the reply",
+      mentions: [],
+    });
+    expect(pagesSeen).toHaveLength(2);
+  });
+
+  test("a read-back that runs out of pages says how far it looked", async () => {
+    const h = make({}, async (url) =>
+      url.includes("conversations.replies")
+        ? new Response(JSON.stringify({ ok: true, messages: [{ ts: "1.1", text: "the root" }] }), { status: 200 })
+        : okRouter(url),
+    );
+    const got = await h.backend.storedMessage("general", "9.9", "bob", "1.1");
+    expect(got).toEqual({
+      ok: false,
+      error: "slack has no message at 9.9 in general, searched 1 page(s) of thread 1.1",
+    });
+  });
+
   test("a REFUSED lookup is not reported as a missing channel", async () => {
     const h = make({}, async (url) =>
       url.includes("users.conversations")
