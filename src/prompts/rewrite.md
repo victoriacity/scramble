@@ -19,6 +19,10 @@ numbers and paths inside a fence stay byte for byte.
 
 Preserve:
 
+- EVERY `@name`, spelled the same way and kept in the message. A leading `@name`
+  is the ADDRESS of the message and never a greeting, so it stays at the front.
+  A mention moved into a code span or a backtick notifies nobody, which loses
+  the person the message was for
 - Quoted text byte for byte, even where it contains forbidden items
 - Code, commands, output, and table alignment inside a fenced block byte for byte
 - Numbers, identifiers, timestamps, paths, and commands byte for byte
@@ -64,7 +68,9 @@ Produce:
 
 Remove from the input and never generate:
 
-- Greetings, sign-offs, and any sentence about the message itself
+- Greetings and sign-offs, meaning `hi`, `hello`, `thanks` and the like. A
+  leading `@name` is NOT one of these, and it stays
+- Any sentence about the message itself
 - A closing line that restates or summarizes the message
 - Em dashes and en dashes
 - Filler: `honestly`, `honest`, `honesty`, `truthfully`, `candidly`, `frankly`, `actually`, `basically`, `essentially`, `stated plainly`, `plainly put`
