@@ -3883,6 +3883,57 @@ describe("doctor, and the warning an agent gets without asking", () => {
     expect(said).not.toContain("Fix: bun scripts/onboard-agent.ts");
   });
 
+  test("a credential failure carries its own repair, and doctor adds no guess to it", async () => {
+    // The first live run of the rotation answered `invalid_refresh_token`, and
+    // doctor appended "This app may have been created by another login" to it:
+    // a cause the evidence never established, on the surface an agent trusts,
+    // which is the same defect the ownership branch had a day earlier
+    // (2026-08-26).
+    const home = scratchDir("doc-selfexpl-home");
+    mkdirSync(join(home, ".slack"), { recursive: true });
+    writeFileSync(
+      join(home, ".slack", "credentials.json"),
+      JSON.stringify({ E1: { token: "xoxe-old", refresh_token: "xoxe-r-dead", exp: 1 } }),
+    );
+    const cwd = scratchDir("doc-selfexpl");
+    writeSlackConfig(cwd, {
+      token: "xoxb-d",
+      channels: {},
+      agents: { dev: { token: "T", handle: "dev_bot", appId: "A_MINE" } },
+    });
+    const errs: string[] = [];
+    const io: Io = {
+      write: () => {},
+      writeErr: (l) => errs.push(l),
+      fetch: async (input) => {
+        const url = String(input);
+        if (url.includes("auth.test"))
+          return new Response(JSON.stringify({ ok: true, user: "dev_bot" }), {
+            status: 200,
+            headers: { "x-oauth-scopes": ALL },
+          });
+        if (url.includes("tooling.tokens.rotate"))
+          return new Response(JSON.stringify({ ok: false, error: "invalid_refresh_token" }), { status: 200 });
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      },
+      env: (n) =>
+        n === "HOME" ? home
+        : n === "SCRAMBLE_SLACK_CONFIG" ? join(cwd, ".scramble", "slack.json")
+        : n === "SCRAMBLE_PROC" ? EMPTY_PROC
+        : undefined,
+      cwd: () => cwd,
+      sleep: async () => {},
+      serve: async () => 0,
+      createSocket: () => ({ send: () => {}, close: () => {}, onopen: null, onmessage: null, onclose: null, onerror: null }),
+    };
+    await main(["doctor", "--as", "dev", "--backend", "slack"], io);
+    const said = errs.join(" ");
+    expect(said).toContain("invalid_refresh_token");
+    expect(said).toContain("slack login");
+    expect(said).not.toContain("created by another login");
+    expect(said).not.toContain("drop this agent's entry");
+  });
+
   test("doctor ROTATES a spent app-config token instead of asking a person to log in", async () => {
     // The token lives twelve hours and nothing renewed it, so doctor lost the
     // manifest check every night on both hosts. The entry carries a

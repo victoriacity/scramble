@@ -2378,9 +2378,12 @@ async function cmdDoctor(argv: string[], io: Io): Promise<number> {
   // A stale CLI token is the ordinary case and its repair is a token. Ownership
   // is what `not_authed` and the access errors mean.
   const staleToken = unreadable && /token_expired|invalid_auth|token_revoked/.test(String(declared.unreadable));
+  const selfExplained = unreadable && declared.selfExplained === true;
   const repair = !unreadable
     ? `Fix: bun scripts/onboard-agent.ts ${name}`
-    : staleToken
+    : selfExplained
+      ? ``
+      : staleToken
       ? `The credential that expired is the FIRST entry in ~/.slack/credentials.json, which is ` +
         `where the Slack CLI keeps it, and NOT anything in the scramble config. Nothing about who ` +
         `owns the app follows from it. Someone with the Slack app login runs \`slack login\` on ` +
@@ -2393,7 +2396,7 @@ async function cmdDoctor(argv: string[], io: Io): Promise<number> {
       `this app's manifest cannot be read by this login (apps.manifest.export answered ` +
         `${declared.unreadable}), so its scopes and events cannot be checked or repaired from ` +
         `here. Whether delivery works at all is unknown, and a working read says nothing about ` +
-        `it. ${repair}`,
+        `it.${repair === "" ? "" : ` ${repair}`}`,
     );
   }
   if (declared !== undefined && declared.unreadable === undefined) {
@@ -2872,7 +2875,11 @@ export function pickStale(
 async function declaredManifest(
   io: Io,
   agent: string,
-): Promise<{ orgDeploy: boolean; botEvents: string[]; unreadable?: undefined } | { unreadable: string } | undefined> {
+): Promise<
+  | { orgDeploy: boolean; botEvents: string[]; unreadable?: undefined }
+  | { unreadable: string; selfExplained?: boolean }
+  | undefined
+> {
   const home = io.env("HOME");
   if (home === undefined || home === "") return undefined;
   let appId = "";
@@ -2900,7 +2907,11 @@ async function declaredManifest(
     Math.floor(Date.now() / 1000),
     new Date().toISOString(),
   );
-  if (!cred.ok) return { unreadable: cred.why };
+  // THE CREDENTIAL'S OWN REPORT ALREADY NAMES WHO ACTS, so doctor must not
+  // append a guess to it. It appended the ownership sentence to
+  // `invalid_refresh_token` on the first live run of this code, which is the
+  // same wrong cause the ownership branch printed for `token_expired` a day ago.
+  if (!cred.ok) return { unreadable: cred.why, selfExplained: true };
   const cliToken = cred.token;
   if (cred.rotated) io.writeErr(`doctor: the Slack app-config token was expired and has been rotated in ${path}.`);
   const cfg = loadSlackConfig(io);
