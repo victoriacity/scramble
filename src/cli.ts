@@ -48,6 +48,7 @@ import {
 } from "./rewrite";
 import {
   originOf,
+  peersOnOtherCommits,
   peersPath,
   peersReport,
   readPeers,
@@ -2535,6 +2536,28 @@ async function cmdDoctor(argv: string[], io: Io): Promise<number> {
       `${behind.length} listener(s) for ${name} run a different commit than the installed ${installedNow}: ` +
         `${behind.map((b) => `pid ${b.pid} on ${b.commit}`).join(", ")}. They hold the code they started ` +
         `with, so a fix you installed has not reached them. Stop them and arm the inbox again.`,
+    );
+  }
+
+  // A HOST NOBODY INSTALLS ON HAS NOTHING TO DISAGREE WITH. The staleness notice
+  // compares a running listener to the commit installed beside it, so a machine
+  // that stops updating stays quiet while it falls behind. One did, by five
+  // commits, with every listener matching its install (xingyubot, 2026-08-26).
+  //
+  // A peer's own message carries the commit it ran, so the disagreement is
+  // readable here with no git and no network. Which side is older is left to
+  // `git log`, since commit ids carry no order.
+  const elsewhere = peersOnOtherCommits(
+    readPeers(peersPath(slackConfigPath(io))),
+    installedNow,
+    agentOrigin(io),
+  );
+  if (elsewhere.length > 0) {
+    const named = elsewhere.slice(0, 3).map((p) => `${p.agent} on ${p.host} ran ${p.commit} at ${p.at}`);
+    advisories.push(
+      `this host installs ${installedNow} and ${elsewhere.length} peer(s) ran a different commit: ` +
+        `${named.join("; ")}. One of the two is behind, and \`git log\` says which. A machine nobody ` +
+        `installs on never reports staleness, because its listeners match its own install.`,
     );
   }
 

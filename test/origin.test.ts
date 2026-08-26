@@ -13,6 +13,7 @@ import {
   originMetadata,
   originOf,
   peersPath,
+  peersOnOtherCommits,
   peersReport,
   readOrigin,
   readPeers,
@@ -130,6 +131,32 @@ describe("the peers report", () => {
     expect(said).toContain("2 peer(s)");
     expect(said).toContain("ana  host-two  /srv/dev-work  (abc1234)");
     expect(said).toContain("bo  DESKTOP-STBCRML  C:\\xingyu-agent");
+  });
+
+  test("peersOnOtherCommits names a version disagreement across hosts", () => {
+    // THE HOST THAT STOPS UPDATING SENDS NO SIGNAL: the staleness notice compares
+    // a listener to the install beside it, so a machine nobody installs on stays
+    // quiet while it falls behind. One did, by five commits (xingyubot,
+    // 2026-08-26).
+    const rows = [
+      { agent: "ana", host: "h2", dir: "/d", commit: "old111", at: "2026-08-26T10:00:00Z" },
+      { agent: "bo", host: "h2", dir: "/d", commit: "new222", at: "2026-08-26T11:00:00Z" },
+      { agent: "me", host: "h1", dir: "/mine", commit: "old111", at: "2026-08-26T12:00:00Z" },
+    ];
+    const self: Origin = { host: "h1", dir: "/mine", commit: "new222" };
+    const out = peersOnOtherCommits(rows, "new222", self);
+    // `ana` differs and is named. `bo` matches. `me` is this very process.
+    expect(out.map((r) => r.agent)).toEqual(["ana"]);
+    // Newest sighting first when several differ.
+    const many = peersOnOtherCommits(
+      [...rows, { agent: "cy", host: "h3", dir: "/d", commit: "old111", at: "2026-08-26T13:00:00Z" }],
+      "new222",
+      self,
+    );
+    expect(many.map((r) => r.agent)).toEqual(["cy", "ana"]);
+    // No installed commit to compare against: no claim.
+    expect(peersOnOtherCommits(rows, undefined, self)).toEqual([]);
+    expect(peersOnOtherCommits(rows, "", self)).toEqual([]);
   });
 
   test("a peer on a different commit gets the reader-relative range named", () => {

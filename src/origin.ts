@@ -119,6 +119,31 @@ export function currentPeers(rows: PeerRow[]): PeerRow[] {
 /** The line an agent reads. `sameDir` narrows to peers sharing a directory with
  *  this agent, which is the question the operator asked: who is working where I
  *  am working. */
+/** Peers whose commit differs from the one installed HERE, newest sighting
+ *  first.
+ *
+ *  THE HOST THAT STOPS UPDATING SENDS NO SIGNAL. The staleness notice compares a
+ *  running listener against the commit installed on the same machine, so a
+ *  machine nobody installs on has nothing to disagree with and stays quiet. An
+ *  agent found that on a host five commits behind, where every listener matched
+ *  its install and no notice had ever fired (xingyubot, 2026-08-26).
+ *
+ *  A peer's own message carries the commit it ran, so a difference between that
+ *  and this install is visible without git and without a network. WHICH SIDE IS
+ *  OLDER IS LEFT OPEN: commit ids carry no order, and `git log` answers it in
+ *  one command. */
+export function peersOnOtherCommits(
+  rows: PeerRow[],
+  installed: string | undefined,
+  self: Origin | undefined,
+): PeerRow[] {
+  if (installed === undefined || installed === "") return [];
+  return currentPeers(rows)
+    .filter((r) => r.commit !== undefined && r.commit !== installed)
+    .filter((r) => !(self !== undefined && r.host === self.host && r.dir === self.dir))
+    .sort((a, b) => (a.at < b.at ? 1 : -1));
+}
+
 export function peersReport(rows: PeerRow[], self: Origin | undefined, sameDir: boolean): string {
   const current = currentPeers(rows);
   const shown =

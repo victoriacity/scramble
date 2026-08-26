@@ -4017,6 +4017,58 @@ describe("doctor, and the warning an agent gets without asking", () => {
     expect(said).not.toContain("drop this agent's entry");
   });
 
+  test("doctor names a peer running a different commit than this host installs", async () => {
+    // THE HOST THAT STOPS UPDATING SENDS NO SIGNAL: the staleness notice compares
+    // a listener to the install beside it, so a machine nobody installs on stays
+    // quiet while it falls behind. One sat five commits back with every listener
+    // matching its own install (xingyubot, 2026-08-26).
+    const cwd = scratchDir("doc-peer-commit");
+    const share = scratchDir("doc-peer-share");
+    mkdirSync(join(share, "current", "src"), { recursive: true });
+    writeFileSync(join(share, "current", "src", "COMMIT"), "mine123\n");
+    writeSlackConfig(cwd, {
+      token: "xoxb-d",
+      channels: {},
+      agents: { dev: { token: "T", handle: "dev_bot" } },
+    });
+    writeFileSync(
+      join(cwd, ".scramble", "peers.jsonl"),
+      `${JSON.stringify({
+        agent: "faraway",
+        host: "other-host",
+        dir: "/elsewhere",
+        commit: "newer99",
+        at: "2026-08-26T12:00:00Z",
+      })}\n`,
+    );
+    const errs: string[] = [];
+    const io: Io = {
+      write: () => {},
+      writeErr: (l) => errs.push(l),
+      fetch: async (input) =>
+        String(input).includes("auth.test")
+          ? new Response(JSON.stringify({ ok: true, user: "dev_bot" }), {
+              status: 200,
+              headers: { "x-oauth-scopes": ALL },
+            })
+          : new Response(JSON.stringify({ ok: true }), { status: 200 }),
+      env: (n) =>
+        n === "SCRAMBLE_SLACK_CONFIG" ? join(cwd, ".scramble", "slack.json")
+        : n === "SCRAMBLE_PROC" ? EMPTY_PROC
+        : n === "SCRAMBLE_HOME" ? share
+        : undefined,
+      cwd: () => cwd,
+      sleep: async () => {},
+      serve: async () => 0,
+      createSocket: () => ({ send: () => {}, close: () => {}, onopen: null, onmessage: null, onclose: null, onerror: null }),
+    };
+    await main(["doctor", "--as", "dev", "--backend", "slack"], io);
+    const said = errs.join(" ");
+    expect(said).toContain("this host installs mine123");
+    expect(said).toContain("faraway on other-host ran newer99");
+    expect(said).toContain("A machine nobody installs on never reports staleness");
+  });
+
   test("doctor ROTATES a spent app-config token instead of asking a person to log in", async () => {
     // The token lives twelve hours and nothing renewed it, so doctor lost the
     // manifest check every night on both hosts. The entry carries a
