@@ -5,8 +5,8 @@
 // when you are addressed? Each of your inbox item must be addressed by at least 1
 // reply."
 //
-// The check that existed was per TURN — a turn woken by someone addressing this
-// agent had to send something before it ended — and a turn boundary is not an
+// The check that existed was per TURN, where a turn woken by someone addressing
+// this agent had to send something before it ended, and a turn boundary is not an
 // item boundary. Two items arriving together were satisfied by one reply. An item
 // arriving after the turn had already sent something was satisfied by that
 // earlier send. Counting items requires recording items.
@@ -64,8 +64,8 @@ export function inboxPath(configPath: string, agent: string): string {
   return join(dirname(configPath), "inbox", `${agent}.jsonl`);
 }
 
-/** Every row, oldest first. A malformed line is SKIPPED rather than fatal: a
- *  half-written row from a killed process must not take the whole ledger down,
+/** Every row, oldest first. A malformed line is SKIPPED: a half-written row
+ *  from a killed process must not take the whole ledger down,
  *  since the ledger's job is to be readable at the moment something went wrong. */
 export function readInbox(path: string): InboxItem[] {
   let raw: string;
@@ -268,7 +268,7 @@ export function pendingReport(items: InboxItem[], agent: string): string {
  *  for a sweep). That distinction is the whole broadcast defect: `<!channel>`
  *  was delivered to four agents and addressed to none of them. */
 export function traceReport(rows: InboxItem[], id: string, agent: string, path: string, app?: string): string {
-  // COUNTED BY WHAT THE ROW ACTUALLY CARRIES, never inferred. The first version
+  // COUNTED BY WHAT THE ROW CARRIES. The first version
   // printed "88 of them addressed to this agent" for a file where 88 rows carry
   // no `addressed` field at all, because the back-compat rule that keeps old
   // items in `pending` was reused as a measurement. The agent who read it: "the

@@ -1,4 +1,4 @@
-// src/slack-credential.ts — THE SLACK CLI'S APP-CONFIG CREDENTIAL, kept fresh.
+// src/slack-credential.ts: THE SLACK CLI'S APP-CONFIG CREDENTIAL, kept fresh.
 //
 // `doctor` reads an app's manifest to check its scopes and its subscribed
 // events, and that call takes the `xoxe.xoxp` app-config token the Slack CLI

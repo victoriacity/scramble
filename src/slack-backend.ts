@@ -1,4 +1,4 @@
-// src/slack-backend.ts — SLACK AS A THIRD BACKEND behind the same verbs as
+// src/slack-backend.ts: SLACK AS A THIRD BACKEND behind the same verbs as
 // src/raft.ts. scramble talks to Slack over its REST + Socket Mode transports
 // through INJECTED seams (a `fetch` function and a socket factory), so tests
 // need no Slack token, no network and no socket. The real fetch and the real
@@ -7,8 +7,8 @@
 //
 // Slack is treated as the SOURCE OF TRUTH: every verb talks to Slack directly
 // and never mirrors a local store. Slack has no global sequence number, so the
-// message `ts` is the per-channel cursor (the honest mapping where Slack keeps
-// no shared total order). The line shape we emit matches the local backend
+// message `ts` is the per-channel cursor, which is the mapping available where
+// Slack keeps no shared total order. The line shape we emit matches the local backend
 // EXACTLY (channel, from, text, ts, mentions plus a `mentioned` flag for this
 // agent) because the join skill and the hooks read it verbatim.
 import type { Delivery, Message, Attachment } from "./types";
@@ -42,12 +42,12 @@ const DELETE_URL = "https://slack.com/api/chat.delete";
 const CONV_INFO_URL = "https://slack.com/api/conversations.info";
 const USERS_CONVERSATIONS_URL = "https://slack.com/api/users.conversations";
 
-/** Cap on the number of threaded ROOTS expanded per history call — the fan-out
+/** Cap on the number of threaded ROOTS expanded per history call. The fan-out
  *  is bounded: one extra conversations.replies request per expanded root.
  *  Unbounded expansion on a busy channel is not acceptable; a root dropped by
- *  the cap is REPORTED, never silent.
+ *  the cap is REPORTED in the read's own problems.
  *
- *  CHOSEN BY NEWEST REPLY, never by the root's own age. At 5 roots picked by
+ *  CHOSEN BY NEWEST REPLY. At 5 roots picked by
  *  root age, an agent replying in a thread started hours earlier read the
  *  channel back, saw nothing newer than 04:34:09, decided the send had failed,
  *  and posted the same progress report FIVE times (peer-metrics, 2026-08-26,
@@ -58,7 +58,7 @@ export const THREAD_EXPANSION_CAP = 25;
 /** Backoff for RE-CONNECTING a Socket Mode stream after it dropped: the first
  *  reconnect waits RECONNECT_BACKOFF ms. A connection that once worked keeps
  *  retrying forever (bounded by MAX_RECONNECT_BACKOFF); one that never once
- *  opened is a FAILURE, not a retry. */
+ *  opened is a FAILURE, and it stops there. */
 const RECONNECT_BACKOFF = 1000;
 const MAX_RECONNECT_BACKOFF = 4000;
 
@@ -102,8 +102,8 @@ interface Frame {
 
 /** The config the backend reads, a SUBSET of the bridge config (src/slack.ts):
  * tokens, the channel->Slack channel map, per-agent identities and the mention roster.
- * `postToChannel` is deliberately absent — the backend POSTS STRAIGHT TO SLACK, not
- * into a stitched local channel. There is NO self-filter list here: an agent's own
+ * `postToChannel` is deliberately absent: the backend POSTS STRAIGHT TO SLACK,
+ * with no stitched local channel in between. There is NO self-filter list here: an agent's own
  * posts are suppressed by NAME on the delivery path only (a resolved sender name
  * equals the consuming agent), the same mechanism the local backend uses. */
 export interface SlackBackendConfig {
@@ -148,7 +148,7 @@ export interface SlackBackendDeps {
 }
 
 /** One atomic REST answer: `ok:false`+error text is a FAILURE carrying Slack's
- *  error, never a silent success. */
+ *  error. */
 type OkResponse<T> = { ok: true; data: T } | { ok: false; error: string };
 
 /** Parse a Slack REST payload and decide ok/not by the `ok` field. A response
@@ -218,7 +218,7 @@ export interface SlackHistoryMessage {
    *  row as a root whose replies live under conversations.replies). */
   reply_count?: number;
   /** ts of the newest reply under this root, which is how a read picks the
-   *  threads worth expanding: activity, never the root's own age. */
+   *  threads worth expanding, by activity. */
   latest_reply?: string;
   user?: string;
   username?: string;
@@ -227,7 +227,7 @@ export interface SlackHistoryMessage {
   files?: SlackFileMeta[];
 }
 
-/** Is this line a scramble status rather than something someone said? Keyed on
+/** Is this line a scramble status, or something someone said? Keyed on
  *  the metadata the status manager stamps, so ANY agent recognises ANY agent's
  *  status, and never on the text, because a human is allowed to say "working".
  *  The ts ledger cannot answer this: it only ever knew this agent's own. */
@@ -333,7 +333,7 @@ export class SlackBackend {
    *  what it is scoped to. */
   private readonly deliveredTs = new Set<string>();
   /** users.list is paged at most once per process; a name Slack does not have is
-   *  remembered as a miss so an unknown name costs one lookup, never one each. */
+   *  remembered as a miss, so an unknown name costs one lookup in total. */
   private rosterLoaded = false;
   private readonly rosterMisses = new Set<string>();
   private readonly roster: Record<string, string>;
@@ -363,8 +363,8 @@ export class SlackBackend {
   }
 
   /** ONE helper that answers "which bot token does the acting agent use": the
-   *  agent's OWN token when it has one, else the config default — the way `post`
-   *  already resolves it. EVERY outbound Slack call site (the post, the history
+   *  agent's OWN token when it has one, else the config default, which is how
+   *  `post` already resolves it. EVERY outbound Slack call site (the post, the history
    *  read, the threaded-reply expansion, the users.info name lookup and the
    *  inbound attachment download) resolves THROUGH this helper, so the acting
    *  identity is never lost on a read that was sent with a different agent's
@@ -428,7 +428,7 @@ export class SlackBackend {
    *  Slack treats a thread for a human, and matching only on the name misses
    *  every threaded answer to something you said (operator, 2026-08-21).
    *
-   *  Answered from Slack's own record rather than a local ledger, so it stays
+   *  Answered from Slack's own record, so it stays
    *  right across restarts, across machines, and for threads that predate this
    *  code. Cached per root, since a busy thread asks the same question repeatedly. */
   private async inThread(token: string, channelId: string, root: string, agent: string): Promise<boolean> {
@@ -459,8 +459,8 @@ export class SlackBackend {
   }
 
   /** The acting agent's token when it has one, else the config default. Used for
-   *  a LOOKUP, where a refusal costs a name rather than a message, so falling
-   *  back is better than failing before the verb reports its own error. */
+   *  a LOOKUP, where a refusal costs a name and the message still goes, so
+   *  falling back beats failing before the verb reports its own error. */
   private tokenOrDefault(agent: string): string {
     const t = this.agentToken(agent);
     return t.ok ? t.token : this.token;
@@ -533,7 +533,7 @@ export class SlackBackend {
    *  From auth.teams.list, which is the only method that names WORKSPACES, and
    *  not from auth.test. On an enterprise install auth.test reports
    *  `team_id` = the E… ORG (identical to its own `enterprise_id`), and
-   *  conversations.list answers `team_access_not_granted` to that — so reading
+   *  conversations.list answers `team_access_not_granted` to that, so reading
    *  the obvious field gives an id that is wrong in a way whose error names
    *  neither the field nor the fix. Measured against this org: auth.test says
    *  E0EXAMPLE010, auth.teams.list says T0EXAMPLE012, and only the second works.
@@ -557,18 +557,18 @@ export class SlackBackend {
 
   /** The Slack id for a channel NAME, or the id itself when the caller already
    *  has one. The config's map wins; a name absent from it is looked up among
-   *  the conversations this agent is actually in.
+   *  the conversations this agent belongs to.
    *
    *  The mirror of channelNameFor, and it was missing: after inbound resolution
-   *  landed, a peer measured 129 messages arriving from a channel whose name
+   *  shipped, a peer measured 129 messages arriving from a channel whose name
    *  `message read`, `send`, `react` and `channel join` all refused with "no
    *  Slack channel for channel <name>". An agent could hear a room and not answer
    *  in it. Cached, including the miss, so a wrong name costs one lookup.
    *
-   *  RETURNS SLACK'S OWN REFUSAL rather than a bare miss. The lookup used to
+   *  RETURNS SLACK'S OWN REFUSAL, with the miss inside it. The lookup used to
    *  `break` out of the paging loop on any API error and report the same "no
    *  Slack channel for <name>" a genuine typo produces, so the two were
-   *  indistinguishable — and on this org EVERY lookup was the error one, because
+   *  indistinguishable. On this org EVERY lookup was the error one, because
    *  conversations.list needs a team_id it was not being given. The name of the
    *  channel the operator had just invited an agent into came back as if the
    *  channel did not exist. */
@@ -591,21 +591,21 @@ export class SlackBackend {
   ): Promise<{ id: string; error?: undefined } | { id?: undefined; error: string }> {
     const mapped = this.channels[name];
     if (mapped !== undefined) return { id: mapped };
-    // A RAW SLACK ID IS ALREADY THE ANSWER. `channel` here is a scramble name
-    // that usually is not one, but an agent reading an id out of an event or a
-    // log has the very thing the lookup is for, and sending it through
+    // A RAW SLACK ID IS ALREADY THE ANSWER. `channel` here is usually a scramble
+    // name, and an agent reading an id out of an event or a log already holds
+    // the thing the lookup is for. Sending it through
     // conversations.list only asks whether some channel is NAMED "C0EXAMPLE007".
     if (/^[CGD][A-Z0-9]{6,}$/.test(name)) return { id: name };
     const cached = this.channelIdCache.get(name);
     if (cached !== undefined && cached !== "") return { id: cached };
     const team = await this.teamIdFor(token);
     let cursor = "";
-    // THE AGENT'S OWN CONVERSATIONS, not the workspace's. users.conversations
+    // THE AGENT'S OWN CONVERSATIONS. users.conversations
     // returns exactly the channels this token is a member of, which is exactly
     // the set it can act on: a bot cannot post to, read or react in a channel it
     // was never invited to, so a name matching some other channel resolves to an
-    // id that then fails with `not_in_channel` — a worse answer than saying the
-    // agent is not in it.
+    // id that then fails with `not_in_channel`, which reads worse than saying
+    // the agent is outside that channel.
     //
     // conversations.list was the wrong instrument twice over. It answers with
     // the whole workspace, measured here at 203 channels against the 2 this
@@ -613,9 +613,9 @@ export class SlackBackend {
     // it was capped at ten pages, which on a workspace past 2000 channels stops
     // and reports the same "no Slack channel" a typo produces. Raised by the
     // model-failure-research agent, which could not resolve a private channel it
-    // was in — I could not reproduce that part (paged with a team_id,
+    // was in. I could not reproduce that part (paged with a team_id,
     // conversations.list did list every private channel each agent belongs to),
-    // and the change is right for the reasons above rather than that one.
+    // and the reasons above carry the change on their own.
     for (let page = 0; page < 10; page++) {
       const q =
         `${USERS_CONVERSATIONS_URL}?types=public_channel,private_channel&exclude_archived=true&limit=200` +
@@ -667,8 +667,8 @@ export class SlackBackend {
    *  dropped, silently and with nothing reported, so inviting an agent to a new
    *  channel delivered NOTHING until someone hand-edited slack.json (operator,
    *  2026-08-22). An agent that has been invited somewhere should hear it, and a
-   *  name it cannot look up is a naming problem rather than a reason to lose the
-   *  message. Cached per id. */
+   *  name it cannot look up is a naming problem, and the message still goes
+   *  through. Cached per id. */
   private async channelNameFor(token: string, id: string): Promise<string> {
     const cached = this.channelNameCache.get(id);
     if (cached !== undefined) return cached;
@@ -732,7 +732,7 @@ export class SlackBackend {
    *
    *  Asked for by the operator, 2026-08-26: "Agents should be able to edit and
    *  delete messages." Slack lets a bot token edit only what that token posted,
-   *  and it says so plainly, so the refusal names the credential that acted.
+   *  and it says which, so the refusal names the credential that acted.
    *
    *  The text goes through `denormalize` exactly as a post does, so an `@name`
    *  in an edit notifies the same person it would have notified in the send. */
@@ -823,7 +823,7 @@ export class SlackBackend {
    *  cannot add itself to a Slack conversation, public or private: a member
    *  invites it. So the useful answer to "join" is whether the invite has
    *  happened, and the handle to invite when it has not. A one-message read is
-   *  the probe, because that is the access the agent actually needs. */
+   *  the probe, because that read is the access the agent needs. */
   async membership(
     channel: string,
     as: string,
@@ -893,7 +893,7 @@ export class SlackBackend {
     //
     // The response is the evidence and it costs nothing to read: a threaded post
     // that comes back without message.thread_ts was not threaded. Reported as a
-    // PROBLEM rather than an error, because the message did reach the channel and
+    // PROBLEM, with a 0 exit, because the message did reach the channel and
     // a caller that retries would say everything twice.
     if (thread !== undefined && thread !== "") {
       const landed = r.data.message?.thread_ts;
@@ -909,7 +909,7 @@ export class SlackBackend {
       }
       // A THREAD_TS NAMING A REPLY IS HOISTED, silently. Slack has no nested
       // threads, so it puts the message in that reply's ROOT and answers with
-      // the root's ts. Measured: aiming at a reply landed the message in the
+      // the root's ts. Measured: aiming at a reply put the message in the
       // root thread and returned the root's thread_ts, so a check for "did it
       // thread at all" passes while the message is in a different conversation
       // than the one asked for. A peer hit this on the same commit I had
@@ -918,9 +918,9 @@ export class SlackBackend {
         return {
           ok: true,
           ...(typeof r.data.ts === "string" ? { ts: r.data.ts } : {}),
-          // WHERE THE MESSAGE ACTUALLY LANDED, for whoever reads it back. The
+          // WHERE THE MESSAGE CAME TO REST, for whoever reads it back. The
           // read-back asks conversations.replies for the ROOT, and the root here
-          // is the one Slack picked, never the ts the caller passed. An agent
+          // is the one Slack picked. An agent
           // threaded under a reply and the read-back answered "slack has no
           // message at <ts>" for a message sitting in the channel (2026-08-25).
           thread: landed,
@@ -1063,8 +1063,8 @@ export class SlackBackend {
 
   /** Resolve a Slack user id to a name: the roster wins, then users.info (the
    *  app holds users:read). An id ABSENT from the roster resolves through
-   *  users.info rather than passing through raw — a raw id matches no agent
-   *  name, so a <@U…> mention would land silently unmentioned. Cached per
+   *  users.info, and a raw id passed through matches no agent name, so a
+   *  <@U…> mention would arrive silently unmentioned. Cached per
    *  acting credential (the `token` argument), so one agent's lookup can never
    *  reuse another agent's answer. */
   private async resolveName(token: string, user: string): Promise<string> {
@@ -1088,8 +1088,8 @@ export class SlackBackend {
   }
 
   /** Normalize `<@U…>` to `@name`: an id in the roster resolves immediately; an
-   *  id ABSENT from the roster resolves through (cached) users.info instead of
-   *  passing through raw, so a mention never lands silently unmentioned. Resolved
+   *  id ABSENT from the roster resolves through (cached) users.info, so a
+   *  mention never arrives silently unmentioned. Resolved
    *  under the acting agent's own credential (`token`). */
   private async normalize(token: string, text: string): Promise<string> {
     // A BROADCAST ADDRESSES EVERY AGENT IN THE CHANNEL, and arrived as raw text
@@ -1163,7 +1163,7 @@ export class SlackBackend {
 
   /** Turn one inbound event into an outbound Delivery, or undefined when it
    *  should be dropped (no text, an uninteresting event, an unknown channel).
-   *  PURE: no self-suppression here — every line is returned, and the DELIVERY
+   *  PURE: no self-suppression here. Every line is returned, and the DELIVERY
    *  path (next/listen) decides who to suppress by NAME. Also downloads any
    *  `files` the event carries (under the ACTING agent's `token`) and reports a
    *  download failure that still leaves the message deliverable. */
@@ -1244,7 +1244,7 @@ export class SlackBackend {
     const thread = ev.thread_ts !== undefined && ev.thread_ts !== ts ? ev.thread_ts : undefined;
     // Only on the DELIVERY path: history strips per-recipient state and a
     // transcript does not need a lookup per row.
-    // The GUARD is on the call, not inside it: an `await` on the delivery path
+    // The GUARD sits on the call site: an `await` on the delivery path
     // costs a turn of the event loop even when the function returns at once, and
     // this lookup is impossible without the CLI credential anyway.
     // The sender's own account of where it runs. Malformed metadata reads as no
@@ -1284,7 +1284,8 @@ export class SlackBackend {
 
 /** The connect-refusal report: a refused Socket Mode connection (e.g.
    *  invalid_auth answered by apps.connections.open) means scramble could NOT
-   *  look, not that the channel was quiet. So the message names Slack's error
+   *  look, which says nothing about whether the channel was quiet. So the
+   *  message names Slack's error
    *  AND the config key (`appToken`, the app-level xapp- token) that supplies
    *  the credential: a wrong or missing app token must never read as silence. */
   private connectRefused(e: unknown): string {
@@ -1330,7 +1331,7 @@ export class SlackBackend {
    *  agent learns a file failed but still gets the message. The DELIVERY-only
    *  self-filter lives HERE: an agent's own post (resolved sender name equals
    *  the consuming agent's name) is never delivered, so an agent does not
-   *  answer itself — the same name mechanism the local backend applies to its
+   *  answer itself. It is the same name mechanism the local backend applies to its
    *  stream. history never passes through here, so a transcript read keeps
    *  every line. */
   private deliver(
@@ -1346,7 +1347,7 @@ export class SlackBackend {
       for (const p of problems) onProblem(p);
       if (delivery === undefined) return;
       // An agent never delivers its own posts (it would otherwise answer itself).
-      // EVERY name this agent answers to, not just its scramble name. `from` is
+      // EVERY name this agent answers to, its handle included. `from` is
       // the RESOLVED sender, which for an app is its Slack handle
       // (`scramble_dev`), so comparing it against the scramble name
       // (`scramble-dev`) never matches and the agent is delivered its own posts.
@@ -1450,12 +1451,12 @@ export class SlackBackend {
     const messages: Message[] = [];
     const problems: string[] = [];
     let seq = 0;
-    // ORDER — a caller keeps its cursor on ts: conversations.history returns
+    // ORDER. A caller keeps its cursor on ts: conversations.history returns
     // rows NEWEST-FIRST and we walk them in exactly that order (Slack's ts is
-    // the per-channel cursor). A threaded root's replies land IN PLACE,
+    // the per-channel cursor). A threaded root's replies sit IN PLACE,
     // immediately UNDER the root (conversations.replies lists the root first,
     // then its replies), so a resume at a ts sees every line after it in the
-    // same relative order it always used — a reply never reorders a line above
+    // same relative order it always used, since a reply never reorders a line above
     // its own root, and the read is a single pass preserving Slack's newest-
     // first sequence overall.
     // WHICH ROOTS GET EXPANDED, decided before the walk so the choice is by
@@ -1522,7 +1523,8 @@ export class SlackBackend {
    *  resolve 0; exit-64 semantics preserved by timing out with nothing
    *  delivered-and-nothing-printed. A connection that CANNOT be established
    *  (a refused apps.connections.open, e.g. invalid_auth) resolves with
-   *  code 1 — scramble could not look — never the quiet-channel 64. */
+   *  code 1, meaning scramble could not look. The quiet-channel 64 is for a
+   *  look that worked. */
   async next(
     channels: string[],
     as: string,
@@ -1534,7 +1536,7 @@ export class SlackBackend {
     const t = this.agentToken(as);
     if (!t.ok) {
       // An agent with no token and no default has nothing to act on: FAIL naming
-      // the agent and the key, never a silent nothing.
+      // the agent and the key.
       onProblem(t.error);
       return { code: 1, error: t.error };
     }
@@ -1564,8 +1566,8 @@ export class SlackBackend {
         (e) => {
           // A refused connection means scramble could not look. The caller must
           // tell a broken credential apart from a quiet channel, so we settle
-          // with code 1 — THE CODE FOR "scramble could not look"; 64 is
-          // reserved for "the channel was quiet" — and report a message naming
+          // with code 1, THE CODE FOR "scramble could not look". 64 is
+          // reserved for "the channel was quiet". Report a message naming
           // the Slack error and the appToken config key.
           const msg = this.connectRefused(e);
           onProblem(msg);
@@ -1581,8 +1583,8 @@ export class SlackBackend {
   /** listen(channels, as, onLine, onProblem): the Socket Mode event stream, ONE
    *  JSON line per message as the local backend emits. A connection that ONCE
    *  worked keeps its backoff and RECONNECTS when it drops; a connection that
-   *  NEVER once succeeded FAILS (returns 1) instead of retrying a refusal into
-   *  silence — a broken app token must not scroll past an unattended watch.
+   *  NEVER once succeeded FAILS (returns 1), because retrying a refusal into
+   *  silence lets a broken app token scroll past an unattended watch.
    *  The healthy stream never resolves; the only terminating return is 1. */
   async listen(
     channels: string[],
@@ -1594,7 +1596,7 @@ export class SlackBackend {
     const t = this.agentToken(as);
     if (!t.ok) {
       // An agent with no token and no default has nothing to act on: FAIL naming
-      // the agent and the key, never a silent nothing.
+      // the agent and the key.
       onProblem(t.error);
       return 1;
     }
@@ -1605,7 +1607,8 @@ export class SlackBackend {
       const opened = await this.listenOnce(channels, wantsAll, as, token, onLine, onProblem);
       if (opened) everConnected = true;
       // The FIRST connection could not be established: scramble could not look,
-      // so it fails rather than retrying the same refusal forever. 64 is the
+      // so it fails here, and retrying the same refusal forever is the
+      // alternative that hides it. 64 is the
       // quiet-channel code; 1 is "scramble could not look".
       if (!opened && !everConnected) return 1;
       // A connection that worked then dropped is reconnected with backoff.

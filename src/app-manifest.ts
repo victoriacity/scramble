@@ -5,7 +5,7 @@
  *  It is one list because it was two. The scopes lived here as `REQUIRED_SCOPES`
  *  and again in the onboarding script, under a comment saying the duplication was
  *  deliberate and that "`doctor` compares them so a drift between the two is
- *  reported rather than silent". That comparison was never written, and the two
+ *  reported". That comparison was never written, and the two
  *  lists had already diverged: the script asked for `reactions:write` and
  *  `reactions:read` and this copy did not, so an agent could react and doctor
  *  would not have noticed if it could not. The events had no second copy at all,
@@ -15,8 +15,9 @@
  *  delivering nothing (operator, 2026-08-22: "invited but inbox does not fire").
  */
 
-/** Each scope with the capability that needs it. The rationale travels with the
- *  name so `--print-manifest` and any future reader see why, not just what. */
+/** Each scope with the capability that needs it. The reason travels with the
+ *  name, so `--print-manifest` and every later reader get the why along with
+ *  the what. */
 export const SCOPES: Array<[string, string]> = [
   ["chat:write", "post a message, a threaded reply, and the living status message"],
   ["channels:history", "read a public channel"],
@@ -65,7 +66,7 @@ export const SCOPES: Array<[string, string]> = [
  *  it.
  *
  *  What that measurement does NOT cover: whether a frame for a newly subscribed
- *  event actually ARRIVES. `toDelivery` returns nothing for any type that is not
+ *  event ARRIVES at all. `toDelivery` returns nothing for any type that is not
  *  `message` or `app_mention`, so a subscription this list does not serve is
  *  inert, and its delivery is unproven until something reads it. */
 export const BOT_EVENTS: Array<[string, string]> = [

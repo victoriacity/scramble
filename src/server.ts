@@ -1,4 +1,4 @@
-// src/server.ts — the HTTP surface over the store.
+// src/server.ts: the HTTP surface over the store.
 import { DEFAULTS, type Attachment, type Message, type PostResult, type ServerOptions } from "./types";
 import type { ChannelStore } from "./store";
 
@@ -30,8 +30,8 @@ export function createHandler(store: ChannelStore, opts: ServerOptions = {}) {
   const repeatWindowMs = opts.repeatWindowMs ?? DEFAULTS.repeatWindowMs;
   const requireAuth = opts.token !== undefined;
 
-  // Guard bookkeeping. `joined` records who went through POST /agents/:name —
-  // "joined as an agent". Everyone else is treated as a human and never
+  // Guard bookkeeping. `joined` records who went through POST /agents/:name,
+  // which means "joined as an agent". Everyone else is treated as a human and never
   // rate-limited, exactly as DESIGN.md says.
   const joined = new Set<string>();
   const rates = new Map<string, { times: number[]; lastText: string; lastTs: number }>();

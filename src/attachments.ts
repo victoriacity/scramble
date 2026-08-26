@@ -1,4 +1,4 @@
-// src/attachments.ts — the file/image implementation shared by the backends.
+// src/attachments.ts: the file/image implementation shared by the backends.
 // Keeps the file-specific logic OUT of src/slack-backend.ts and src/cli.ts so
 // those two files change as little as the feature requires and a concurrent
 // merge rebases cleanly. Every byte of network IO goes through the injected
@@ -99,16 +99,16 @@ export function sizeOf(path: string): number {
 }
 
 /** Assertion used on an inbound download: a Slack url_private fetched WITHOUT
- *  the bot token (plain GET) returns an HTML error page, never bytes. So a
- *  download that answers HTML is REPORTED, never written as attachments. */
+ *  the bot token (plain GET) answers with an HTML error page. A download that
+ *  answers HTML is REPORTED, and the bytes are dropped. */
 export function isHtmlResponse(res: Response, bytes: Uint8Array): boolean {
   const ct = (res.headers.get("content-type") ?? "").toLowerCase();
   if (ct.includes("text/html")) return true;
   return looksLikeHtml(bytes);
 }
 
-/** Download one Slack file to `<dir>/<id>-<sanitized name>` and REPORT (via the
- *  error) instead of silently writing when the response is HTML or too big. */
+/** Download one Slack file to `<dir>/<id>-<sanitized name>`. A response that is
+ *  HTML or too big is REPORTED through the error, and nothing is written. */
 export async function downloadFile(
   fetch: (input: string, init?: RequestInit) => Promise<Response>,
   url: string,
@@ -155,7 +155,7 @@ export async function downloadFile(
     return { ok: false, error: `file download returned no bytes for ${url}` };
   }
   if (isHtmlResponse(res, bytes)) {
-    // PRINT WHAT ARRIVED, not the classification. "returned HTML" sent me
+    // PRINT WHAT ARRIVED, with the classification after it. "returned HTML" sent me
     // hunting for an auth problem while the body said `Error serving file.` in
     // 19 bytes, which is a different failure entirely: the token was accepted
     // and the origin would not serve the bytes.
@@ -200,7 +200,7 @@ const GET_UPLOAD_URL = "https://slack.com/api/files.getUploadURLExternal";
 const COMPLETE_UPLOAD_URL = "https://slack.com/api/files.completeUploadExternal";
 
 /** Upload one file to a Slack target (a Slack channel id) with the three-step
- *  flow — getUploadURLExternal -> PUT bytes -> completeUploadExternal — and
+ *  flow (getUploadURLExternal, then PUT bytes, then completeUploadExternal) and
  *  return the file id. `--mime-type` overrides the guess. */
 export async function uploadToSlack(
   fetch: (input: string, init?: RequestInit) => Promise<Response>,
@@ -233,7 +233,7 @@ export async function uploadToSlack(
   if (!get.ok) return { ok: false, error: get.error };
   const uploadUrl = get.data.upload_url as string;
   const fileId = get.data.file_id as string;
-  // MULTIPART POST, never a raw PUT. Slack answers 200 to a PUT and stores a file
+  // MULTIPART POST. Slack answers 200 to a raw PUT and stores a file
   // that cannot be read: completeUploadExternal then shares it with nothing, the
   // bytes come back as a 69KB sign-in page, and nothing anywhere fails. Measured
   // side by side on 2026-08-22: the same bytes as a multipart POST share into the
@@ -345,7 +345,7 @@ function slackError(rec: Record<string, unknown>): string {
 
 /** POST one Slack REST call as FORM ENCODING (the file endpoints read no JSON
  *  fields) and readOk the JSON. ok:false carries `error` plus any
- *  `response_metadata.messages`; status:false is a FAILURE, never a success. */
+ *  `response_metadata.messages`; status:false is a FAILURE. */
 async function readSlack(
   fetch: (input: string, init?: RequestInit) => Promise<Response>,
   url: string,
@@ -395,8 +395,8 @@ export function localPath(dir: string, id: string, name: string): string {
   return join(dir, `${id}-${sanitizeName(name)}`);
 }
 
-/** Read the index ledger (an object id -> record). A missing/absent ledger is
- *  an empty map, never an error. */
+/** Read the index ledger (an object id -> record). A missing ledger reads as an
+ *  empty map. */
 export function readIndex(dir: string): Record<string, LocalFileRecord> {
   try {
     const j = JSON.parse(readFileSync(join(dir, "index.json"), "utf8")) as Record<string, LocalFileRecord>;
@@ -445,8 +445,8 @@ export function findLocalRecord(dir: string, id: string): LocalFileRecord | null
   const rec = readIndex(dir)[id];
   if (rec) return rec;
   // A `<id>-<sanitized>` orphan (no ledger entry): stat the file. Inbound Slack
-  // downloads land there under the file id with no ledger entry, so `view`
-  // finds that bytes-by-id path. A missing filesDir reads empty, never errors.
+  // downloads arrive there under the file id with no ledger entry, so `view`
+  // finds that bytes-by-id path. A missing filesDir reads as empty.
   let hits: string[];
   try {
     hits = readdirSync(dir).filter((ent) => ent.startsWith(`${id}-`));

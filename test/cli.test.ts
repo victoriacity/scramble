@@ -1463,6 +1463,27 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     expect(urls.join(" ")).not.toContain("chat.postMessage");
   });
 
+  test("`lint --comments` reads a source file's comments and skips its code", async () => {
+    // The operator, 2026-08-26, having read a banned form in a comment I shipped
+    // an hour earlier: "Clean the comments first." The rule table's own patterns
+    // contain the words it bans, so the code has to stay out of scope.
+    const cwd = scratchDir("lint-comments");
+    const f = join(cwd, "sample.ts");
+    writeFileSync(
+      f,
+      ['// This is basically the same defect.', 'export const msg = "it is basically done";'].join("\n"),
+    );
+    const { io, errs, writes } = stubIo(cwd, async () => new Response("{}", { status: 200 }));
+    expect(await main(["lint", "--comments", f], io)).toBe(1);
+    expect(errs.join(" ")).toContain("sample.ts:1");
+    expect(errs.filter((l) => l.includes("sample.ts:2"))).toHaveLength(0);
+    // Without the flag the same file reports the code line too.
+    const plain = stubIo(cwd, async () => new Response("{}", { status: 200 }));
+    expect(await main(["lint", f], plain.io)).toBe(1);
+    expect(plain.errs.filter((l) => l.includes("sample.ts:2"))).toHaveLength(1);
+    expect(writes.join("")).toContain('"hits":1');
+  });
+
   test("`rewrite --why` asks for the diagnosis, and never rewrites", async () => {
     // The operator, 2026-08-26, about a refusal this tool prints: "Use gemini
     // 3.7 to find why the communication is wrong." A rewrite hands back a better

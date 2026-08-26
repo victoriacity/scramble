@@ -165,6 +165,24 @@ else
   skill_rc=0
 fi
 
+# THE COMMENTS IN THE SOURCE ARE PROSE A PERSON READS. The operator, 2026-08-26,
+# quoting a banned form out of a refusal string and then finding another in a
+# comment I had shipped an hour before: "Clean the comments first." The rules
+# covered messages and tracked markdown, and the source comments carried 174
+# hits, measured before the cleanup.
+#
+# Comment lines only: the rule table's own patterns contain the words it bans.
+echo "== every source comment passes the language check =="
+COMMENT_FILES=$(git -C "$REPO" ls-files 'src/*.ts')
+if [ -n "$COMMENT_FILES" ]; then
+  # shellcheck disable=SC2086
+  ( cd "$REPO" && "$BUN" src/bin.ts lint --comments $COMMENT_FILES )
+  comment_rc=$?
+else
+  echo "no source files tracked"
+  comment_rc=0
+fi
+
 echo "== tsc --noEmit =="
 "$BUN" x tsc --noEmit
 tsc_rc=$?
@@ -216,8 +234,8 @@ echo "== bun test --coverage =="
 test_rc=$?
 
 echo "== gate summary =="
-echo "self_test_rc=$self_rc (nonzero required) paths_rc=$paths_rc lang_rc=$lang_rc skill_rc=$skill_rc leak_rc=$leak_rc cover_rc=$cover_rc tsc_rc=$tsc_rc test_rc=$test_rc"
-if [ "$paths_rc" -ne 0 ] || [ "$lang_rc" -ne 0 ] || [ "$skill_rc" -ne 0 ] || [ "$leak_rc" -ne 0 ] || [ "$cover_rc" -ne 0 ] || [ "$tsc_rc" -ne 0 ] || [ "$test_rc" -ne 0 ]; then
+echo "self_test_rc=$self_rc (nonzero required) paths_rc=$paths_rc lang_rc=$lang_rc skill_rc=$skill_rc comment_rc=$comment_rc leak_rc=$leak_rc cover_rc=$cover_rc tsc_rc=$tsc_rc test_rc=$test_rc"
+if [ "$paths_rc" -ne 0 ] || [ "$lang_rc" -ne 0 ] || [ "$skill_rc" -ne 0 ] || [ "$comment_rc" -ne 0 ] || [ "$leak_rc" -ne 0 ] || [ "$cover_rc" -ne 0 ] || [ "$tsc_rc" -ne 0 ] || [ "$test_rc" -ne 0 ]; then
   echo "GATE RED"
   exit 1
 fi

@@ -1,4 +1,4 @@
-// src/status.ts — scramble's AUTOMATIC working-status surface.
+// src/status.ts: scramble's AUTOMATIC working-status surface.
 //
 // Status is NOT an agent-invoked verb. It is set and cleared by scramble from
 // events scramble already sees:
@@ -19,22 +19,21 @@
 //
 // The active statuses are recorded in `.scramble/status.json` as channel,
 // agent, the Slack ts of a living message that backs the status, and an expiry.
-// A second status set on one channel updates the living message instead of
-// posting again: one living message per channel, never a second. Slack calls go
+// A second status set on one channel updates the living message it already
+// has: one living message per channel. Slack calls go
 // through an injected `fetch` seam so tests need no token and no network.
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { withFileLock } from "./filelock";
 
 /** The fixed, short text a status carries. Agent-authored progress prose is a
- *  message pretending to be a status, so the text is scramble's, not the
- *  agent's. */
+ *  message pretending to be a status, so scramble owns this text. */
 export const STATUS_TEXT = "working";
 
 /** Slack message metadata marking a line as a scramble status. It rides on the
  *  message itself, so ANY agent can recognise ANY agent's status: the ts ledger
  *  only ever knew about its own, which let a peer's `working` line arrive in
- *  this agent's transcript as if someone had said it. Metadata rather than the
- *  text, because a human, or an agent, is allowed to say "working". */
+ *  this agent's transcript as if someone had said it. Keyed on the metadata,
+ *  because a human, or an agent, is allowed to say "working". */
 export const STATUS_METADATA_TYPE = "scramble_status";
 
 const THREAD_STATUS_URL = "https://slack.com/api/assistant.threads.setStatus";
@@ -69,7 +68,7 @@ export interface StatusConfig {
   ttlMs: number;
   /** injected network seam (Slack backend only). */
   fetch: (input: string, init?: RequestInit) => Promise<Response>;
-  /** diagnostics channel: a failed status is REPORTED here, never escalated. */
+  /** diagnostics channel: a failed status is REPORTED here. */
   writeErr(line: string): void;
   /** Slack channel name -> Slack channel id. */
   channels?: Record<string, string>;
@@ -97,8 +96,8 @@ interface SlackAnswer {
   ts?: string;
 }
 
-/** Read the ledger. A missing or unparseable ledger is a fresh (empty) one — a
- *  corrupt status file must not take an underlying verb down with it. */
+/** Read the ledger. A missing or unparseable ledger reads as a fresh empty one,
+ *  because a corrupt status file must not take an underlying verb down. */
 export function readRecords(file: string): StatusRecord[] {
   try {
     const j = JSON.parse(readFileSync(file, "utf8")) as { entries?: unknown };
@@ -198,7 +197,7 @@ export class StatusManager {
 
   /** Post the living-message status into a channel. Captures the new ts so the
    *  update/delete/expire paths can address it. Returns the ts, or undefined on
-   *  a failure (reported, never escalated). */
+   *  a failure, which is reported here. */
   // THERE IS NO LIVING MESSAGE. A status is Slack's own status on a thread and
   // nothing else: no post, no edit, no delete, and no `ts` on the record
   // (operator, 2026-08-21: "we don't need living messages, only assistant
@@ -226,18 +225,17 @@ export class StatusManager {
    *
    *  `assistant.threads.setStatus` works on an ordinary channel thread, which I
    *  had assumed needed an assistant DM: probed on a real channel thread it
-   *  answers ok:true. That is the whole reason the living message existed, and a
-   *  status is not a message, so posting one into the channel was the wrong
-   *  shape (operator, 2026-08-21: "why did you send a working text to the
-   *  channel? this should be implemented in slack assistant status, not
-   *  message").
+   *  answers ok:true. The living message existed for that one reason. A status
+   *  belongs on Slack's own status surface, so posting one into the channel was
+   *  the wrong shape. The operator, 2026-08-21: `why did you send a working text`
+   *  and `this should be implemented in slack assistant status, not message`.
    *
-   *  With no thread there is no native status, and the answer there is silence
-   *  rather than a message pretending to be one. */
+   *  With no thread there is no native status, and the answer there is
+   *  silence. */
   async setOn(channel: string, agent: string, threadTs?: string): Promise<void> {
     // KEYED BY CHANNEL AND AGENT. Several agents work in one channel, and this
     // ledger held one record per channel, so one agent's status overwrote
-    // another's and, worse, ANY agent's reply cleared it. The live smoke caught
+    // another's, and ANY agent's reply cleared it. The live smoke caught
     // that: a peer's message in the channel took down the status the listener
     // had set for itself (2026-08-25).
     const existing = this.load().find((r) => r.channel === channel && r.agent === agent);

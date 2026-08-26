@@ -1,8 +1,8 @@
 #!/usr/bin/env bun
-// src/bin.ts — the ONLY entrypoint. Binds ports, reads process.argv, and
-// binds the real socket factory here so no test imports this file (keeping the
-// coverage gate green). Everything else is delegated to src/cli.ts's
-// main(argv, io).
+// src/bin.ts: the ONLY entrypoint. Binds ports, reads process.argv, and binds
+// the real socket factory here so no test imports this file, which keeps every
+// line of it out of the coverage report. Everything else is delegated to
+// src/cli.ts and its main(argv, io).
 import { createStore, type ChannelStore } from "./store";
 import { serve, type ServeOptions } from "./server";
 import type { SlackSocket } from "./slack-transport";

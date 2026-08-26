@@ -1,4 +1,4 @@
-// src/slack-transport.ts — the shared Slack wire types and the transport over
+// src/slack-transport.ts: the shared Slack wire types and the transport over
 // the slack BACKEND. The bridge (src/slack.ts) is gone, so the types the
 // socket-mode transport and the backend both need live here, next to the socket
 // surface. Everything is on bun built-ins (fetch + an injected WebSocket), so
@@ -154,8 +154,8 @@ export function createSlackTransport(deps: SlackTransportDeps): SlackTransport {
         body: JSON.stringify(payload),
       });
       const data = (await res.json()) as { ok?: boolean; error?: string };
-      // Slack signals failure with HTTP 200 + {"ok":false,"error":...}. That
-      // must surface as a failure, never silently read as a success.
+      // Slack signals failure with HTTP 200 + {"ok":false,"error":...}. A
+      // reader of that body has to surface it as the failure it is.
       if (data.ok !== true) {
         throw new Error(data.error ?? "Slack postMessage failed");
       }

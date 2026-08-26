@@ -37,8 +37,8 @@ export interface PeerRow extends Origin {
 }
 
 /** Build the origin for THIS process. `commit` is omitted when the running copy
- *  is a checkout with no installed sha, since an absent field is honest and a
- *  made-up one is not. */
+ *  is a checkout with no installed sha: an absent field says nothing, and a
+ *  made-up one says something false. */
 export function originOf(host: string, dir: string, commit?: string): Origin {
   return { host, dir, ...(commit === undefined || commit === "" ? {} : { commit }) };
 }

@@ -31,8 +31,8 @@ export interface Message {
   id: string;
   mentions: string[];
   files?: Attachment[];
-  /** present ONLY when this message is a REPLY inside a thread: the id of the
-   *  thread's root message. A line carrying `thread` is a reply; a line without
+  /** present ONLY on a REPLY inside a thread: the id of the thread's root
+   *  message. A line carrying `thread` is a reply; a line without
    *  it is top-level. Absent-when-unset like `files`, so the two optional
    *  fields read as one design. */
   thread?: string;
@@ -50,7 +50,7 @@ export interface Delivery extends Message {
    *  session, `teammate` is another person, and `human` is a person on a host
    *  whose config records no `humanUserId` to tell those two apart.
    *
-   *  One field rather than a flag per kind: a boolean `operator` would have
+   *  One field, never a flag per kind: a boolean `operator` would have
    *  needed a second flag the first time human-versus-agent mattered, and a
    *  `human` boolean beside this would be the same fact written twice. */
   sender: "operator" | "teammate" | "human" | "agent";
@@ -69,7 +69,7 @@ export interface Agent {
   channels: string[];
 }
 
-/** Result of a post: the new seq plus the messages that landed in the same
+/** Result of a post: the new seq plus the messages that arrived in the same
  *  channel between the sender's last-seen seq and this one (the crossings), so a
  *  sender learns what it raced with at the moment it speaks. */
 export interface PostResult {
@@ -79,7 +79,7 @@ export interface PostResult {
 
 /** What a post attempt carries. `lastSeen` drives crossings; `id` drives
  *  dedup of a retried post. `files` (optional) attaches uploaded files so a
- *  sent message lands carrying them. */
+ *  sent message arrives carrying them. */
 export interface PostInput {
   channel: string;
   from: string;

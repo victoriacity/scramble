@@ -109,8 +109,8 @@ function request(cfg: RewriteConfig & { key: string }, prompt: string): { url: s
 /** WHERE THE INSTRUCTION LIVES: a markdown file beside the code, so it can be
  *  read and changed without touching TypeScript, and so the language gate lints
  *  it like every other document this repo ships. */
-/** ONE ROW PER SEND THAT MET THE REWRITER, so the question "does this help" has
- *  a number instead of an anecdote.
+/** ONE ROW PER SEND THAT MET THE REWRITER, so the question "does this help" is
+ *  answered by a number. Every earlier answer was an anecdote.
  *
  *  The rewriter runs on every send from two hosts and five agents, and nobody can
  *  say how often it improves a message, how often a guard refuses one, or which
@@ -325,8 +325,8 @@ function firstText(body: unknown): string | undefined {
  *  to set. */
 const STRENGTH = /\b(prevents?|guarantees?|ensures?|eliminates?|always|never|cannot|impossible|entirely|fully|completely|may|might|appears?|seems?|likely|possibly|generally|typically|usually)\b/gi;
 
-/** Strength words the REWRITE introduced. Case-folded, and counted by presence
- *  rather than by number, so a word the author already used is the author's. */
+/** Strength words the REWRITE introduced. Case-folded, and counted by
+ *  presence, so a word the author already used stays the author's. */
 export function strengthDrift(original: string, rewritten: string): string[] {
   const had = new Set([...proseOf(original).matchAll(STRENGTH)].map((m) => m[0].toLowerCase()));
   const added = new Set<string>();
@@ -349,7 +349,7 @@ export function strengthDrift(original: string, rewritten: string): string[] {
  *  prose reads like an interrogation", inventing a causal claim from two
  *  adjacent statements.
  *
- *  COUNTED AS A CLASS, never word by word. Two agents measured `which is why` ->
+ *  COUNTED AS A CLASS. Two agents measured `which is why` ->
  *  `because` and `therefore` -> `because` across ten sentences on two hosts, with
  *  the clauses swapped and the logic intact (2026-08-25). Swapping one connective
  *  for another keeps the count and passes; flattening a link into `and` or a full
@@ -452,7 +452,7 @@ function atomsIn(text: string): string[] {
  *  Keeping mentions working is the point of the message, so this is checked in
  *  PROSE on both sides. */
 export function mentionsIn(text: string): string[] {
-  // TRAILING PUNCTUATION IS SENTENCE, never name. A Slack handle may contain a
+  // TRAILING PUNCTUATION BELONGS TO THE SENTENCE. A Slack handle may contain a
   // dot, so the match takes one and `@name.` at the end of a sentence read as a
   // different person from `@name`: the added-mention guard called it a new
   // mention and blocked two sends by the agent writing them (2026-08-25).
