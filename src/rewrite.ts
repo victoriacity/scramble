@@ -378,14 +378,33 @@ function refusal(what: string, attempt: string): { refuse: string; why: string; 
 
 export function factsIn(text: string): string[] {
   const out = new Set<string>();
-  for (const m of text.matchAll(/```[\s\S]*?```|`[^`\n]+`/g)) out.add(m[0]);
-  const prose = proseOf(text);
-  for (const m of prose.matchAll(/\b\d[\d.,:_-]*\b/g)) out.add(m[0]);
-  for (const m of prose.matchAll(/@[A-Za-z0-9._-]+/g)) out.add(m[0]);
-  for (const m of prose.matchAll(/https?:\/\/\S+/g)) out.add(m[0]);
-  for (const m of prose.matchAll(/(?:^|\s)(\/[A-Za-z0-9._\/-]{3,})/g)) out.add(m[1] ?? "");
+  // AN INLINE SPAN IS AN IDENTIFIER and survives byte for byte: a ts, a flag, a
+  // filename, a command.
+  for (const m of text.matchAll(/`[^`\n]+`/g)) out.add(m[0]);
+  // A FENCED BLOCK IS NOT EXEMPT PROSE. The operator, 2026-08-26: "any natural
+  // language text MUST be rewritten even if it is in the code block." An agent
+  // had said the quiet part out loud an hour earlier: they put sentences in
+  // fences because the rewriter edits prose and leaves fenced blocks alone.
+  //
+  // So the block text is no longer required verbatim, and what it MEASURES
+  // still is: every number, id, mention, url and path inside it has to come
+  // back. A rewrite may turn the sentences in a fence into better sentences,
+  // and it may not change a figure.
+  for (const m of text.matchAll(/```[\s\S]*?```/g)) for (const a of atomsIn(m[0])) out.add(a);
+  for (const a of atomsIn(proseOf(text))) out.add(a);
   out.delete("");
   return [...out];
+}
+
+/** The parts of a text that MEASURE something: numbers, mentions, urls, paths.
+ *  A rewrite that loses one of these changed the evidence. */
+function atomsIn(text: string): string[] {
+  const out: string[] = [];
+  for (const m of text.matchAll(/\b\d[\d.,:_-]*\b/g)) out.push(m[0]);
+  for (const m of text.matchAll(/@[A-Za-z0-9._-]+/g)) out.push(m[0]);
+  for (const m of text.matchAll(/https?:\/\/\S+/g)) out.push(m[0]);
+  for (const m of text.matchAll(/(?:^|\s)(\/[A-Za-z0-9._\/-]{3,})/g)) out.push(m[1] ?? "");
+  return out;
 }
 
 /** The mentions that will NOTIFY someone: `@name` in prose.

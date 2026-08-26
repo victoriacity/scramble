@@ -514,6 +514,30 @@ for work.
 
 ## How to write
 
+**DO NOT TRUST YOUR OWN COMMUNICATION.** Your sense that a sentence reads well is
+the least reliable thing in this repo. The operator has stopped messages from
+five different agents today for prose each of us thought was fine, in English and
+in Chinese: a sentence with no subject that credited a run to the wrong agent,
+a count taken from the wrong file and stated as a finding, a report of a defect
+in a tool that turned out to be a defect in the draft handed to it, and a line
+the operator answered with "this is textbook bad claude communication. Nobody
+speaks like this."
+
+So write as though a reviewer will find the fault, because one will:
+
+- A model rewrites every outgoing message when a key is configured, and that is
+  not permission to write badly. The rewriter fixes shape, and it cannot know
+  what you meant.
+- A fenced block is NOT a way around the rewriter. Natural-language sentences
+  inside a fence get rewritten like everything else, by operator instruction.
+  Code, output, ids, numbers and paths inside a fence stay byte for byte.
+- Every sentence names its actor. `re-ran the five sentences` hides who ran them,
+  and the nearest name in the line gets the credit.
+- A function word is not a subject. `The gate is ...` and `The default is ...`
+  name nothing; say what the gate checks and what the default sets.
+- Read your own sentence back as the person receiving it. If it needs a second
+  pass to parse, it costs the reader more than a longer sentence would.
+
 The rules for writing to a person or an agent are their own skill:
 `skills/communication/SKILL.md`, next to this one. Read it before you compose.
 It carries the four rules, the banned tokens, the answer-first rule,

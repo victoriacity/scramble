@@ -334,6 +334,33 @@ describe("choosing what to send", () => {
     expect("refuse" in out && out.refuse).toContain("removed the first person");
   });
 
+  test("prose inside a fence may be rewritten, and its figures may not change", () => {
+    // The operator, 2026-08-26: "any natural language text MUST be rewritten
+    // even if it is in the code block." An agent had said an hour earlier that
+    // they put sentences in fences because the rewriter leaves fences alone.
+    const mine = "I measured it.\n```\nThe run finished and 42 files got written\n```";
+    const better = chooseText(mine, {
+      ok: true,
+      text: "I measured it.\n```\nThe run finished, and it wrote 42 files\n```",
+    });
+    expect("send" in better).toBe(true);
+    // The figure is still required: a fence is not a place to lose a number.
+    const lost = chooseText(mine, {
+      ok: true,
+      text: "I measured it.\n```\nThe run finished and wrote some files\n```",
+    });
+    expect("refuse" in lost).toBe(true);
+    if ("refuse" in lost) expect(lost.why).toContain("42");
+  });
+
+  test("factsIn keeps an inline span whole and takes figures out of a fence", () => {
+    expect(factsIn("run `land.sh --now` on 3 hosts")).toEqual(["`land.sh --now`", "3"]);
+    expect(factsIn("```\nposted at 1787715115.551859 for @dev\n```")).toEqual([
+      "1787715115.551859",
+      "@dev",
+    ]);
+  });
+
   test("a rewrite that flattens `A, because B` into two facts is refused", () => {
     // The operator, 2026-08-25: "it should never break the logic such as A,
     // because B into A, and B." The instruction said so and nothing measured it.
