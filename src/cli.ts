@@ -2357,8 +2357,15 @@ async function cmdDoctor(argv: string[], io: Io): Promise<number> {
   //
   // A stale CLI token is the ordinary case and its repair is a token. Ownership
   // is what `not_authed` and the access errors mean.
-  const staleToken = unreadable && /token_expired|invalid_auth|token_revoked/.test(String(declared.unreadable));
+  const answer = String(declared === undefined ? "" : declared.unreadable);
+  const staleToken = unreadable && /token_expired|invalid_auth|token_revoked/.test(answer);
   const selfExplained = unreadable && declared.selfExplained === true;
+  // OWNERSHIP IS CLAIMED ONLY WHERE SLACK SAYS SO. This used to be the `else` of
+  // a whitelist, so every string the list missed was printed as an ownership
+  // verdict: `token_expired` on 2026-08-25, then `invalid_refresh_token` from my
+  // own rotation code a day later. A guess in a default branch comes back with
+  // each new error string, so the default states the answer and stops.
+  const ownership = unreadable && /no_permission|not_authed|access_denied|app_not_found|invalid_app_id/.test(answer);
   const repair = !unreadable
     ? `Fix: bun scripts/onboard-agent.ts ${name}`
     : selfExplained
@@ -2368,9 +2375,12 @@ async function cmdDoctor(argv: string[], io: Io): Promise<number> {
         `where the Slack CLI keeps it, and NOT anything in the scramble config. Nothing about who ` +
         `owns the app follows from it. Someone with the Slack app login runs \`slack login\` on ` +
         `THIS host to write a fresh one; until then the scopes and events are simply unchecked.`
-      : `This app may have been created by another login, and this login cannot change it: ask ` +
-        `its owner to add them, or drop this agent's entry from the config and let ` +
-        `onboard-agent.ts create an app the agent owns.`;
+      : ownership
+      ? `Slack named an access failure, so this login cannot change this app: ask its owner to ` +
+        `add them, or drop this agent's entry from the config and let onboard-agent.ts create an ` +
+        `app the agent owns.`
+      : `Slack's answer above is the whole of what is known, and it names neither a credential ` +
+        `nor an access problem, so the cause is UNDETERMINED here. Read that error before acting.`;
   if (unreadable) {
     problems.push(
       `this app's manifest cannot be read by this login (apps.manifest.export answered ` +

@@ -3842,6 +3842,29 @@ describe("doctor, and the warning an agent gets without asking", () => {
     const said = errs.join(" ");
     expect(said).toContain("no_permission");
     expect(said).toContain("ask its owner");
+
+    // AN ERROR SLACK NEVER TIED TO ACCESS gets no ownership verdict. The
+    // ownership sentence was the `else` of a whitelist, so each new error string
+    // arrived as an ownership claim: `token_expired` on 2026-08-25, then
+    // `invalid_refresh_token` from my own rotation code a day later.
+    const errs2: string[] = [];
+    const io2: Io = {
+      ...io,
+      writeErr: (l) => errs2.push(l),
+      fetch: async (input) =>
+        String(input).includes("auth.test")
+          ? new Response(JSON.stringify({ ok: true, user: "dev_bot" }), {
+              status: 200,
+              headers: { "x-oauth-scopes": ALL },
+            })
+          : new Response(JSON.stringify({ ok: false, error: "ratelimited" }), { status: 200 }),
+    };
+    await main(["doctor", "--as", "dev", "--backend", "slack"], io2);
+    const said2 = errs2.join(" ");
+    expect(said2).toContain("ratelimited");
+    expect(said2).toContain("UNDETERMINED");
+    expect(said2).not.toContain("ask its owner");
+    expect(said2).not.toContain("drop this agent's entry");
     // The command that cannot run is NOT named as the fix.
     expect(said).not.toContain("Fix: bun scripts/onboard-agent.ts");
   });
