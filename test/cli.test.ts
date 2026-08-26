@@ -1254,6 +1254,31 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     expect(errs.join(" ")).toContain("the reply as stored");
   });
 
+  test("the send says POSTED with the ts before it says anything else", async () => {
+    // Two agents duplicated messages in one hour because the CLI's output after
+    // a successful post was a warning, and a warning read as a failure
+    // (2026-08-26, ts 1787715115 / 1787715130 and 1787715280 onward).
+    const cwd = scratchDir("send-posted-line");
+    const { io, errs } = stubIo(cwd, async (u) =>
+      String(u).includes("chat.postMessage")
+        ? new Response(JSON.stringify({ ok: true, ts: "77.7", message: {} }), { status: 200 })
+        : new Response(JSON.stringify({ ok: true, messages: [] }), { status: 200 }),
+    );
+    writeSlackConfig(cwd, {
+      appToken: "xapp-1",
+      token: "xoxb-1",
+      channels: { general: "C1" },
+      agents: { dev: { token: "T", handle: "dev" } },
+    });
+    io.readStdin = async () => "the parser fix shipped";
+    expect(await main(["message", "send", "--target", "general", "--as", "dev", "--backend", "slack"], io)).toBe(0);
+    const posted = errs.findIndex((l) => l.includes("posted: general at ts 77.7"));
+    expect(posted).toBeGreaterThanOrEqual(0);
+    expect(errs[posted]).toContain("NONE of it means resend");
+    // Said FIRST: every later line is a note about a message Slack already has.
+    expect(errs.slice(0, posted).join(" ")).not.toContain("verify");
+  });
+
   test("`--verify` reads back from the ROOT Slack picked when a reply was threaded under", async () => {
     // An agent passed --thread pointing at a reply. Slack hoisted the message
     // into that reply's root and answered with the root's ts, and the read-back

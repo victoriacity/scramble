@@ -504,6 +504,19 @@ async function postText(
       io.writeErr(`post failed: ${r.error}`);
       return 1;
     }
+    // SLACK HAS THE MESSAGE. Said first, said always, with the ts, because
+    // everything printed after this point is a caveat and an agent that reads a
+    // caveat as a failure sends again.
+    //
+    // MEASURED THE SAME HOUR: one agent posted a reply twice after the CLI
+    // printed only the unread-messages warning, and another posted the same
+    // progress report FIVE times because a stale read-back convinced them
+    // nothing had gone out (2026-08-26, ts 1787715115 / 1787715130 and
+    // 1787715280 through 1787715629). Neither output ever said the word posted.
+    io.writeErr(
+      `posted: ${channel} at ts ${r.ts ?? "unknown"}${r.thread === undefined ? "" : ` in thread ${r.thread}`}. ` +
+        `Slack has it. Anything below is a note about the message, and NONE of it means resend.`,
+    );
     // A post that landed somewhere other than where it was aimed is REPORTED,
     // never inferred from a clean exit.
     if (r.problem !== undefined) io.writeErr(`slack: ${r.problem}`);

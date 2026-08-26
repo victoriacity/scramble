@@ -41,10 +41,17 @@ const CONV_INFO_URL = "https://slack.com/api/conversations.info";
 const USERS_CONVERSATIONS_URL = "https://slack.com/api/users.conversations";
 
 /** Cap on the number of threaded ROOTS expanded per history call — the fan-out
- *  is bounded: one extra conversations.replies request per expanded root, on
- *  the NEWEST roots only. Unbounded expansion on a busy channel is not
- *  acceptable; a root dropped by the cap is REPORTED, never silent. */
-export const THREAD_EXPANSION_CAP = 5;
+ *  is bounded: one extra conversations.replies request per expanded root.
+ *  Unbounded expansion on a busy channel is not acceptable; a root dropped by
+ *  the cap is REPORTED, never silent.
+ *
+ *  CHOSEN BY NEWEST REPLY, never by the root's own age. At 5 roots picked by
+ *  root age, an agent replying in a thread started hours earlier read the
+ *  channel back, saw nothing newer than 04:34:09, decided the send had failed,
+ *  and posted the same progress report FIVE times (peer-metrics, 2026-08-26,
+ *  ts 1787715280 through 1787715629). The thread they were writing in is the
+ *  one they need expanded, and its root is old by definition. */
+export const THREAD_EXPANSION_CAP = 25;
 
 /** Backoff for RE-CONNECTING a Socket Mode stream after it dropped: the first
  *  reconnect waits RECONNECT_BACKOFF ms. A connection that once worked keeps
@@ -209,6 +216,9 @@ export interface SlackHistoryMessage {
    *  (reply_count above zero with thread_ts equal to its own ts marks the
    *  row as a root whose replies live under conversations.replies). */
   reply_count?: number;
+  /** ts of the newest reply under this root, which is how a read picks the
+   *  threads worth expanding: activity, never the root's own age. */
+  latest_reply?: string;
   user?: string;
   username?: string;
   text?: string;
@@ -1429,19 +1439,26 @@ export class SlackBackend {
     // same relative order it always used — a reply never reorders a line above
     // its own root, and the read is a single pass preserving Slack's newest-
     // first sequence overall.
-    let expandedRoots = 0;
+    // WHICH ROOTS GET EXPANDED, decided before the walk so the choice is by
+    // newest reply and never by the order history happens to return.
+    const roots = (r.data.messages ?? []).filter(isThreadRoot);
+    const expandable = new Set(
+      [...roots]
+        .sort((a, b) => Number(b.latest_reply ?? b.ts ?? 0) - Number(a.latest_reply ?? a.ts ?? 0))
+        .slice(0, THREAD_EXPANSION_CAP)
+        .map((m) => m.ts ?? ""),
+    );
     let droppedRoots = 0;
     for (const m of r.data.messages ?? []) {
       seq = await this.appendLine(m, slackChannel, channel, messages, problems, seq, token, as ?? "", forDelivery);
       if (!isThreadRoot(m)) continue;
       // FAN-OUT IS BOUND: one extra conversations.replies request per threaded
-      // root, capped at THREAD_EXPANSION_CAP on the NEWEST roots (history walks
-      // newest-first). Unbounded expansion on a busy channel is unacceptable.
-      if (expandedRoots >= THREAD_EXPANSION_CAP) {
+      // root, capped at THREAD_EXPANSION_CAP on the roots with the NEWEST
+      // replies. Unbounded expansion on a busy channel is unacceptable.
+      if (!expandable.has(m.ts ?? "")) {
         droppedRoots += 1;
         continue;
       }
-      expandedRoots += 1;
       const rootTs = m.ts ?? "";
       const rep = await readOk<{ messages?: SlackHistoryMessage[] }>(
         this.fetch,
@@ -1465,7 +1482,11 @@ export class SlackBackend {
       // A dropped root must never look like an empty thread: the cap truncates
       // the read, so it is REPORTED through the same problems channel a partial
       // read already uses, naming how many roots went unexpanded.
-      problems.push(`read capped: ${droppedRoots} threaded root(s) left unexpanded`);
+      problems.push(
+        `read capped: ${droppedRoots} threaded root(s) left unexpanded, chosen by newest reply. ` +
+          `A reply in one of those threads is NOT in this read, so an absence here is not proof ` +
+          `a message failed to post.`,
+      );
     }
     return { code: 0, messages, problems };
   }

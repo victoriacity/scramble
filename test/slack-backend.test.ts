@@ -462,6 +462,36 @@ describe("post", () => {
     expect(seen.some((u) => u.includes("users.conversations"))).toBe(false);
   });
 
+  test("the read expands the threads with the NEWEST replies, never the newest roots", async () => {
+    // At 5 roots picked by root age, an agent replying in an older thread read
+    // the channel back, saw nothing new, decided the send had failed, and posted
+    // the same report five times (peer-metrics, 2026-08-26).
+    const asked: string[] = [];
+    const CAP = THREAD_EXPANSION_CAP;
+    const roots = Array.from({ length: CAP + 1 }, (_, i) => ({
+      ts: `${100 + i}.1`,
+      thread_ts: `${100 + i}.1`,
+      reply_count: 1,
+      // The OLDEST root carries the NEWEST reply.
+      latest_reply: i === 0 ? "999.9" : `${200 + i}.1`,
+      text: `root ${i}`,
+    }));
+    const h = make({}, async (url) => {
+      if (url.includes("conversations.history"))
+        return new Response(JSON.stringify({ ok: true, messages: [...roots].reverse() }), { status: 200 });
+      if (url.includes("conversations.replies")) {
+        asked.push(url);
+        return new Response(JSON.stringify({ ok: true, messages: [] }), { status: 200 });
+      }
+      return okRouter(url);
+    });
+    const read = await h.backend.history("general", undefined, "bob");
+    expect(asked).toHaveLength(CAP);
+    // The root with the newest reply is expanded, and it is the oldest root.
+    expect(asked.some((u) => u.includes(encodeURIComponent("100.1")))).toBe(true);
+    expect(read.problems.join(" ")).toContain("an absence here is not proof");
+  });
+
   test("storedMessage pages a thread until it finds the reply", async () => {
     // conversations.replies returns a thread OLDEST-FIRST, so a reply just
     // posted sits on the LAST page. One 200-reply request answered "slack has no
