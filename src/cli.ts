@@ -31,6 +31,7 @@ import {
 import { StatusManager } from "./status";
 import { SCOPE_NAMES, BOT_EVENT_NAMES } from "./app-manifest";
 import { languageRefusal, lengthRefusal, lineOf, lintLanguage, wordCount } from "./language";
+import { credentialsPath, firstCredential, freshCliToken } from "./slack-credential";
 import {
   chooseText,
   composePrompt,
@@ -2874,24 +2875,36 @@ async function declaredManifest(
 ): Promise<{ orgDeploy: boolean; botEvents: string[]; unreadable?: undefined } | { unreadable: string } | undefined> {
   const home = io.env("HOME");
   if (home === undefined || home === "") return undefined;
-  let cliToken = "";
   let appId = "";
+  const path = credentialsPath(home);
+  let fileText: string;
   try {
-    const creds = JSON.parse(readFileSync(join(home, ".slack", "credentials.json"), "utf8")) as Record<
-      string,
-      { token?: string }
-    >;
-    for (const v of Object.values(creds)) {
-      if (typeof v.token === "string" && v.token !== "") {
-        cliToken = v.token;
-        break;
-      }
-    }
+    fileText = readFileSync(path, "utf8");
   } catch {
     return undefined;
   }
+  // ROTATE THE APP-CONFIG TOKEN RATHER THAN ASK A PERSON TWICE A DAY. It lives
+  // twelve hours, nothing on either host renewed it, and doctor lost the
+  // manifest check every night as a result. The entry carries a refresh_token
+  // (peer-metrics read the expiry and named this, 2026-08-26).
+  //
+  // NO CREDENTIAL AT ALL LEAVES THE QUESTION OPEN, exactly as it did before a
+  // rotation existed: an agent without the Slack CLI installed is not a broken
+  // agent. A credential that EXISTS and cannot be made usable is a problem,
+  // which is how the expired one surfaced in the first place.
+  if (!firstCredential(fileText).ok) return undefined;
+  const cred = await freshCliToken(
+    fileText,
+    path,
+    (u, init) => io.fetch(u, init),
+    Math.floor(Date.now() / 1000),
+    new Date().toISOString(),
+  );
+  if (!cred.ok) return { unreadable: cred.why };
+  const cliToken = cred.token;
+  if (cred.rotated) io.writeErr(`doctor: the Slack app-config token was expired and has been rotated in ${path}.`);
   const cfg = loadSlackConfig(io);
-  if (cfg === null || cliToken === "") return undefined;
+  if (cfg === null) return undefined;
   // THE AGENT BEING CHECKED, not whichever entry happens to be last. The first
   // version of this took the last appId in the config, so a healthy agent's
   // manifest answered for a broken one and doctor cleared an app whose inbox

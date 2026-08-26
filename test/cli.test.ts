@@ -3883,6 +3883,66 @@ describe("doctor, and the warning an agent gets without asking", () => {
     expect(said).not.toContain("Fix: bun scripts/onboard-agent.ts");
   });
 
+  test("doctor ROTATES a spent app-config token instead of asking a person to log in", async () => {
+    // The token lives twelve hours and nothing renewed it, so doctor lost the
+    // manifest check every night on both hosts. The entry carries a
+    // refresh_token, which is what an agent found in the file (peer-metrics,
+    // 2026-08-26).
+    const home = scratchDir("doc-rotate-home");
+    mkdirSync(join(home, ".slack"), { recursive: true });
+    writeFileSync(
+      join(home, ".slack", "credentials.json"),
+      JSON.stringify({ E1: { token: "xoxe-old", refresh_token: "xoxe-r-old", exp: 1, team_domain: "examplecorp" } }),
+    );
+    const cwd = scratchDir("doc-rotate");
+    writeSlackConfig(cwd, {
+      token: "xoxb-d",
+      channels: {},
+      agents: { dev: { token: "T", handle: "dev_bot", appId: "A_MINE" } },
+    });
+    const errs: string[] = [];
+    let rotateUrl = "";
+    const io: Io = {
+      write: () => {},
+      writeErr: (l) => errs.push(l),
+      fetch: async (input) => {
+        const url = String(input);
+        if (url.includes("auth.test"))
+          return new Response(JSON.stringify({ ok: true, user: "dev_bot" }), {
+            status: 200,
+            headers: { "x-oauth-scopes": ALL },
+          });
+        if (url.includes("tooling.tokens.rotate")) {
+          rotateUrl = url;
+          return new Response(
+            JSON.stringify({ ok: true, token: "xoxe-new", refresh_token: "xoxe-r-new", exp: 4102444800 }),
+            { status: 200 },
+          );
+        }
+        return new Response(JSON.stringify({ ok: true, manifest: { settings: { event_subscriptions: {} } } }), {
+          status: 200,
+        });
+      },
+      env: (n) =>
+        n === "HOME" ? home
+        : n === "SCRAMBLE_SLACK_CONFIG" ? join(cwd, ".scramble", "slack.json")
+        : n === "SCRAMBLE_PROC" ? EMPTY_PROC
+        : undefined,
+      cwd: () => cwd,
+      sleep: async () => {},
+      serve: async () => 0,
+      createSocket: () => ({ send: () => {}, close: () => {}, onopen: null, onmessage: null, onclose: null, onerror: null }),
+    };
+    await main(["doctor", "--as", "dev", "--backend", "slack"], io);
+    expect(rotateUrl).toContain("xoxe-r-old");
+    expect(errs.join(" ")).toContain("has been rotated");
+    // The new pair is on disk, and the Slack CLI's own fields survive.
+    const after = JSON.parse(readFileSync(join(home, ".slack", "credentials.json"), "utf8"));
+    expect(after.E1.token).toBe("xoxe-new");
+    expect(after.E1.refresh_token).toBe("xoxe-r-new");
+    expect(after.E1.team_domain).toBe("examplecorp");
+  });
+
   test("an EXPIRED cli token is a token problem, and says nothing about ownership", async () => {
     // Run against my own app, which I own, this answered "This app was created by
     // another login" from a `token_expired` error and told me to ask the owner or
