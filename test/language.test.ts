@@ -15,7 +15,7 @@ describe("the language rules, checked where the message leaves", () => {
       { label: "coined jargon: 'land' for committing", match: "landed", index: 9 },
       { label: "em dash", match: "—", index: 36 },
     ]);
-    expect(languageRefusal(hits)).toContain("message send REFUSED: 2 language-rule hit(s)");
+    expect(languageRefusal(hits)).toContain("message send REFUSED: 2 language rule(s) broken");
     expect(languageRefusal(hits)).toContain("[em dash]");
     expect(languageRefusal(hits)).toContain("the `communication` skill");
   });
@@ -149,7 +149,7 @@ describe("the language rules, checked where the message leaves", () => {
     expect(hits.length).toBeGreaterThan(2);
     const said = languageRefusal(hits);
     for (const h of hits) expect(said).toContain(h.label);
-    expect(said).toContain(`${hits.length} language-rule hit(s)`);
+    expect(said).toContain(`${hits.length} language rule(s) broken`);
   });
 });
 

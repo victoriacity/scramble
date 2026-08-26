@@ -1320,7 +1320,7 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     expect(
       await main(["message", "edit", "--target", "general", "--to", "1.1", "--as", "dev", "--backend", "slack"], io),
     ).toBe(1);
-    expect(errs.join(" ")).toContain("language-rule hit");
+    expect(errs.join(" ")).toContain("language rule(s) broken");
     // Slack's own refusal, with the credential that acted.
     io.readStdin = async () => "I fixed the parser and shipped it.";
     expect(
@@ -1461,6 +1461,45 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     // One call, to the model. Nothing went to a channel.
     expect(urls.length).toBe(1);
     expect(urls.join(" ")).not.toContain("chat.postMessage");
+  });
+
+  test("`rewrite --why` asks for the diagnosis, and never rewrites", async () => {
+    // The operator, 2026-08-26, about a refusal this tool prints: "Use gemini
+    // 3.7 to find why the communication is wrong." A rewrite hands back a better
+    // version and leaves the author guessing which habit produced the worse one.
+    const cwd = scratchDir("rewrite-why");
+    let asked = "";
+    const { io, writes, errs } = stubIo(cwd, async (_u, init) => {
+      asked = String(init?.body ?? "");
+      return new Response(
+        JSON.stringify({ candidates: [{ content: { parts: [{ text: "1. The answer is buried." }] } }] }),
+        { status: 200 },
+      );
+    });
+    io.readStdin = async () => "An agent hit five refusals in a row on one rule.";
+    const withKey: Io = {
+      ...io,
+      env: (n) => (n === "SCRAMBLE_REWRITE_KEY" ? "k" : io.env(n)),
+      moduleDir: () => join(import.meta.dir, "..", "src"),
+    };
+    expect(await main(["rewrite", "--why"], withKey)).toBe(0);
+    expect(writes.join("")).toContain("The answer is buried");
+    expect(asked).toContain("Name what is wrong with it");
+    expect(asked).toContain("Do not rewrite it");
+
+    // No key, and a model that fails, each say so and change nothing.
+    expect(await main(["rewrite", "--why"], io)).toBe(1);
+    expect(errs.join(" ")).toContain("SCRAMBLE_REWRITE_KEY");
+    const dead = stubIo(cwd, async () => new Response("nope", { status: 500 }));
+    dead.io.readStdin = async () => "text";
+    expect(
+      await main(["rewrite", "--why"], {
+        ...dead.io,
+        env: (n) => (n === "SCRAMBLE_REWRITE_KEY" ? "k" : dead.io.env(n)),
+        moduleDir: () => join(import.meta.dir, "..", "src"),
+      }),
+    ).toBe(1);
+    expect(dead.errs.join(" ")).toContain("the model did not answer");
   });
 
   test("`rewrite` reads stdin when no file is named, and says when nothing changed", async () => {

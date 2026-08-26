@@ -208,7 +208,7 @@ export const WORD_LIMIT = 200;
  *  So the refusal carries the pointer. It arrives at the moment someone is
  *  writing and got it wrong, which is the only moment the skill is worth
  *  reading, and nobody has to remember anything. */
-const SKILL_POINTER = "The rules and the reasons: the `communication` skill.";
+const SKILL_POINTER = "Read the `communication` skill for the rules and the reasons.";
 
 /** Words of PROSE in a message. Fenced blocks and backtick spans do not count:
  *  a measurement, a command or a log line is the evidence someone asked for, and
@@ -226,15 +226,25 @@ export function wordCount(text: string): number {
   return cjk + latin;
 }
 
+// WHAT A REFUSAL SAYS, AND WHAT IT LEAVES OUT. The operator, 2026-08-26, reading
+// the language refusal: "this is very bad language ... you DO NOT need the exact
+// example quote in code." The text carried an incident from the day before,
+// which is history a reader hits while blocked on their own send. Run through the
+// model for a diagnosis, the same five faults came back: an anecdote burying the
+// fix, an exemption written obscurely, a verbless pointer, an edge case ahead of
+// the fix, and a count in developer syntax.
+//
+// A refusal names the rule, shows the words, says what to do. The reasons live
+// in the skill.
+
 /** The refusal for a message over the limit, or "" when it is within it. */
 export function lengthRefusal(text: string): string {
   const n = wordCount(text);
   if (n <= WORD_LIMIT) return "";
   return (
     `message send REFUSED: ${n} words of prose, and the limit is ${WORD_LIMIT}.\n` +
-    `Send the answer alone. What you cut is the reasoning behind it, which the reader ` +
-    `asks for when they want it, in the next message.\n` +
-    `Code blocks and backtick spans are not counted, so evidence costs nothing.\n` +
+    `Send the answer alone, and keep the reasoning for a reply if someone asks for it.\n` +
+    `Code and fenced blocks do not count, so evidence is free.\n` +
     `${SKILL_POINTER}`
   );
 }
@@ -243,12 +253,10 @@ export function languageRefusal(hits: LanguageHit[]): string {
   if (hits.length === 0) return "";
   const lines = hits.map((h) => `  [${h.label}] ${JSON.stringify(h.match)}`);
   return (
-    `message send REFUSED: ${hits.length} language-rule hit(s). Rewrite and send again.\n` +
+    `message send REFUSED: ${hits.length} language rule(s) broken.\n` +
     `${lines.join("\n")}\n` +
-    `Someone else's words are exempt: put a quoted span in backticks.\n` +
-    `A comparison you have to make survives inside a fenced block, which is exempt whole. An agent ` +
-    `hit five refusals in a row on one rule, because its finding compared two behaviours and every ` +
-    `phrasing of that comparison tripped it (2026-08-25).\n` +
+    `Rewrite those words and send again.\n` +
+    `Backticks and fenced blocks are exempt, so quote someone else's words inside them.\n` +
     `${SKILL_POINTER}`
   );
 }

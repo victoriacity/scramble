@@ -35,6 +35,7 @@ import { credentialsPath, firstCredential, freshCliToken } from "./slack-credent
 import {
   chooseText,
   composePrompt,
+  critiquePrompt,
   mentionsIn,
   readPromptTemplate,
   readRewrites,
@@ -1733,6 +1734,24 @@ async function cmdRewrite(argv: string[], io: Io): Promise<number> {
     io.writeErr(`rewrite: ${file ?? "stdin"} is empty, so there is nothing to rewrite.`);
     return 1;
   }
+  // `--why` ASKS FOR THE DIAGNOSIS. The operator, 2026-08-26, about a refusal
+  // this tool prints: "Use gemini 3.7 to find why the communication is wrong."
+  // A rewrite hands back a better version and leaves the author guessing which
+  // habit produced the worse one.
+  if (argv.includes("--why")) {
+    const cfg = rewriteConfig(io.env);
+    if (cfg.key === undefined) {
+      io.writeErr(`rewrite: no model is configured; set SCRAMBLE_REWRITE_KEY to turn it on.`);
+      return 1;
+    }
+    const said = await rewriteWith(io.fetch, cfg, critiquePrompt(text));
+    if (!said.ok) {
+      io.writeErr(`rewrite: the model did not answer (${said.why}).`);
+      return 1;
+    }
+    io.write(said.text.endsWith("\n") ? said.text : `${said.text}\n`);
+    return 0;
+  }
   const { chosen, retried, configured } = await attemptRewrite(text, io);
   if (!configured) {
     io.writeErr(`rewrite: no model is configured; set SCRAMBLE_REWRITE_KEY to turn it on.`);
@@ -3031,7 +3050,8 @@ const USAGE = [
   "  message delete    --target <channel> --to <ts>  remove a message you posted",
   "  inbox pending                                   lines addressed to you with no reply",
   "  peers             [--same-dir]                 who else is running, on which host, in which dir",
-  "  rewrite           [<file>]                      what the rewriter makes of this text; sends nothing",
+  "  rewrite           [<file>] [--why]              what the rewriter makes of this text, or with",
+  "                                                  --why, what is wrong with it; sends nothing",
   "  rewrites          [--as <agent>]                what the rewriter did on this host, by outcome",
   "  inbox trace <ts>                                did that message reach you, and wake you",
   "  inbox close <ts>… --why <text>                 settle items the sender said need no reply",

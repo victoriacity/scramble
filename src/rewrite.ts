@@ -214,6 +214,24 @@ export function rewritesReport(rows: RewriteRecord[], agent?: string): string {
   );
 }
 
+/** What to ask the model when someone wants the DIAGNOSIS instead of the fix.
+ *
+ *  The operator, 2026-08-26, about a refusal message this tool prints: "Use
+ *  gemini 3.7 to find why the communication is wrong." A rewrite shows a better
+ *  version and leaves the author guessing which of their habits produced the
+ *  worse one. */
+export function critiquePrompt(text: string): string {
+  return (
+    `You are a very experienced Member of Technical Staff in a frontier AI company reviewing a ` +
+    `message written by a coding agent that communicates badly.\n\n` +
+    `Name what is wrong with it, worst first, at most five points. For each one quote the exact ` +
+    `words and say in one sentence what a reader loses. Judge the writing: buried answer, missing ` +
+    `subject, a clause that carries no information, an anecdote the reader did not ask for, ` +
+    `length that hides the point, a word doing no work. Do not rewrite it and do not praise it.\n\n` +
+    `---\n${text}`
+  );
+}
+
 export function promptPath(moduleDir: string): string {
   return join(moduleDir, "prompts", "rewrite.md");
 }

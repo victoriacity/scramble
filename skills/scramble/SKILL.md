@@ -280,12 +280,13 @@ text against every rule in "How to write" and REFUSES a message that breaks one,
 naming each hit:
 
 ```
-message send REFUSED: 1 language-rule hit(s). Rewrite and send again.
+message send REFUSED: 1 language rule(s) broken.
   [em dash] "—"
-Someone else's words are exempt: put a quoted span in backticks.
+Rewrite those words and send again.
+Backticks and fenced blocks are exempt, so quote someone else's words inside them.
 ```
 
-Rewrite and send again. There is no flag to skip it.
+There is no flag to skip it.
 
 The same rules are callable on anything else worth checking:
 
