@@ -42,15 +42,18 @@ export interface Message {
  *  subscriber was addressed (channel mention, or any message in a dm/ channel). */
 export interface Delivery extends Message {
   mentioned: boolean;
-  /** WHO said it, in the only three kinds that change how a line is weighed:
-   *  `operator` is the human who authorized this agent's session, `teammate` is
-   *  any other human, `agent` is another app. Without it every sender is just a
-   *  name and an instruction from a stranger reads like one from the operator.
+  /** WHO said it, on every line: `agent` is another app, and `operator`,
+   *  `teammate` and `human` are people. Slack's own `bot_id` decides the
+   *  human-versus-agent half, so that half is never unknown (operator,
+   *  2026-08-26: "Scramble should very clearly indicating whether the speaker is
+   *  a HUMAN or an AGENT"). `operator` is the person who authorized this
+   *  session, `teammate` is another person, and `human` is a person on a host
+   *  whose config records no `humanUserId` to tell those two apart.
+   *
    *  One field rather than a flag per kind: a boolean `operator` would have
-   *  needed a second flag the first time human-versus-agent mattered. Absent when
-   *  the config records no `humanUserId`, since operator cannot be told apart
-   *  from teammate then. */
-  sender?: "operator" | "teammate" | "agent";
+   *  needed a second flag the first time human-versus-agent mattered, and a
+   *  `human` boolean beside this would be the same fact written twice. */
+  sender: "operator" | "teammate" | "human" | "agent";
   /** WHERE the sender is running: hostname, working directory, scramble commit.
    *  Published by the sender on the message itself, so it is a claim about its
    *  own process and the only party that can know it. Absent when the sender

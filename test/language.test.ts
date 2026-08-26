@@ -35,6 +35,7 @@ describe("the language rules, checked where the message leaves", () => {
       ["minimization of work", "A quick fix for the lookup."],
       ["internal shorthand nobody outside can read", "Gate green at 457, six live stages pass."],
       ["coined jargon: 'land' for committing", "Landed a44ac75 and pushed it."],
+      ["human-team vocabulary (agents are not staff)", "The staffing for this migration is thin."],
       ["em dash", "One thing — another thing."],
       ["en dash", "One thing – another thing."],
       ["adverb parked between commas", "The read, obviously, returned nothing."],

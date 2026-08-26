@@ -1868,10 +1868,15 @@ describe("who said it: operator, teammate, or agent", () => {
     expect((await kindOf({ user: "U999", bot_id: "B1", text: "from a bot" }))!.sender).toBe("agent");
   });
 
-  test("with no humanUserId configured the field is ABSENT rather than guessed", async () => {
-    // Guessing which human is the operator is worse than saying nothing.
+  test("with no humanUserId configured a person still reads as HUMAN", async () => {
+    // The operator, 2026-08-26: "Scramble should very clearly indicating whether
+    // the speaker is a HUMAN or an AGENT." Slack's `bot_id` answers that half on
+    // every message, so it is never unknown. WHICH human takes the config entry,
+    // and guessing which one is the operator is still worse than saying nothing.
     const line = await kindOf({ user: "U111", text: "hi" }, { humanUserId: undefined });
-    expect(line!.sender).toBeUndefined();
+    expect(line!.sender).toBe("human");
+    const bot = await kindOf({ user: "U111", bot_id: "B1", text: "hi" }, { humanUserId: undefined });
+    expect(bot!.sender).toBe("agent");
   });
 });
 

@@ -94,6 +94,23 @@ export const LANGUAGE_RULES: LanguageRule[] = [
     label: "coined jargon: 'land' for committing",
     rx: /\bland(s|ed|ing)?\b(?!\s+(page|pages|zone|zones|strip|strips))/gi,
   },
+  // HUMAN ORGANISATION VOCABULARY, applied to a fleet of agents. The operator,
+  // 2026-08-26: "this system is where agents collaborate. Agents are not humans.
+  // There is no such thing as \"staffing\" or \"headcount\". ... Agent systems
+  // does not need human team norms. Staffing, scheduling, and escalating human
+  // for management decisions should not exist."
+  //
+  // Each of these words imports a constraint that does not bind here: a person
+  // costs a salary and works one shift, so a human team rations people and plans
+  // who is available when. An agent fleet is bounded by the lane pool and the
+  // endpoint, and the answer to "who does this" is "dispatch it".
+  //
+  // Say the concrete thing: how many workers the pool runs, which unit is
+  // unclaimed, what the endpoint serves.
+  {
+    label: "human-team vocabulary (agents are not staff)",
+    rx: /\b(staffing|staffed|headcount|head count|man[- ]?hours?|FTEs?|on[- ]call rotation|sprint capacity|work ?load balance)\b/gi,
+  },
   { label: "em dash", rx: /—/g },
   { label: "en dash", rx: /–/g },
   {

@@ -178,7 +178,11 @@ export function createStore(dir: string): ChannelStore {
   }
 
   function deliveryFor(name: string, msg: Message): Delivery {
-    return { ...msg, mentioned: msg.mentions.includes(name) };
+    // THE LOCAL STORE HAS NO HUMANS IN IT. Its posters are agents talking to a
+    // daemon on this machine, and nothing in a JSONL record could tell a person
+    // apart from a program anyway. The field says `agent` rather than going
+    // absent, because absent is what a reader mistakes for human.
+    return { ...msg, mentioned: msg.mentions.includes(name), sender: "agent" };
   }
 
   return {

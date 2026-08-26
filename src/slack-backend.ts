@@ -391,13 +391,21 @@ export class SlackBackend {
    *  `mentioned:false` and the tier-one wake path, which filters on
    *  `"mentioned":true`, slept through it. The handle recorded on the agent's
    *  config entry is an ALIAS for its name. */
-  /** operator, teammate, or agent. A `bot_id` on the event is Slack telling us
-   *  an app spoke; among humans the configured `humanUserId` is the one who
-   *  authorized this session. Undefined when no humanUserId is configured,
-   *  because guessing which human is the operator is worse than saying nothing. */
-  private senderKind(ev: SlackInboundEvent): "operator" | "teammate" | "agent" | undefined {
+  /** operator, teammate, human, or agent, on EVERY line.
+   *
+   *  The operator, 2026-08-26: "Scramble should very clearly indicating whether
+   *  the speaker is a HUMAN or an AGENT." That half is never in doubt: a
+   *  `bot_id` on the event is Slack telling us an app spoke, and its absence is
+   *  Slack telling us a person did.
+   *
+   *  WHICH human takes a config entry. `humanUserId` names the person who
+   *  authorized this session, so `operator` and `teammate` separate only where
+   *  it is recorded. Without it the answer is `human`, which says the thing that
+   *  matters and stops short of guessing the rest. This field used to be ABSENT
+   *  in that case, so a person and an unknown looked identical. */
+  private senderKind(ev: SlackInboundEvent): "operator" | "teammate" | "human" | "agent" {
     if (ev.bot_id !== undefined && ev.bot_id !== "") return "agent";
-    if (this.humanUserId === undefined || this.humanUserId === "") return undefined;
+    if (this.humanUserId === undefined || this.humanUserId === "") return "human";
     return ev.user === this.humanUserId ? "operator" : "teammate";
   }
 
@@ -1192,6 +1200,10 @@ export class SlackBackend {
           id: ts,
           mentions: [],
           mentioned: true,
+          // SLACK ITSELF SAID THIS, and Slack is not a person. A join notice is
+          // machine-generated, so `agent` is the truthful answer for a field
+          // whose job is to say whether a human spoke.
+          sender: "agent",
         },
         problems: [],
       };
@@ -1254,7 +1266,7 @@ export class SlackBackend {
       mentions,
       mentioned,
       ...(thread !== undefined ? { thread } : {}),
-      ...(this.senderKind(ev) !== undefined ? { sender: this.senderKind(ev) } : {}),
+      sender: this.senderKind(ev),
       ...(origin === undefined ? {} : { origin }),
     };
     if (dl.files.length > 0) delivery.files = dl.files;
