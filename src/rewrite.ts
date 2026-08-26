@@ -344,6 +344,22 @@ export function connectivesIn(text: string): string[] {
   return [...proseOf(text).matchAll(CONNECTIVES)].map((m) => m[0].toLowerCase());
 }
 
+/** The connectives that state WHY, which is the half a rewrite must not invent.
+ *
+ *  MEASURED over 29 sends on two hosts: the connective guard fired four times,
+ *  every one of them in the ADD direction, and it killed one send outright. Two
+ *  of the four added `because`, which is a claim about why that the author did
+ *  not make. The other two added `when` and `whenever`, which restate timing and
+ *  invent nothing (2026-08-26).
+ *
+ *  So the DROP check keeps the whole class, since losing any link flattens the
+ *  logic, and the ADD check counts these only. */
+const CAUSAL = /\b(because|so|since|therefore|thus|hence|which means|as a result|that is why|which is why)\b/gi;
+
+export function causalIn(text: string): string[] {
+  return [...proseOf(text).matchAll(CAUSAL)].map((m) => m[0].toLowerCase());
+}
+
 /** What the send should post, and what it should say about it.
  *
  *  A rewrite that breaks a language rule is DROPPED: the sender's own words
@@ -525,13 +541,22 @@ export function chooseText(
   // true facts with the connective gone leave a reader nothing to object to.
   const myLinks = connectivesIn(original);
   const keptLinks = connectivesIn(rewritten.text);
-  if (keptLinks.length !== myLinks.length) {
-    const dropped = keptLinks.length < myLinks.length;
+  if (keptLinks.length < myLinks.length) {
     return refusal(
-      `the rewrite ${dropped ? "flattened" : "invented"} the logic: yours has ${myLinks.length} ` +
-        `connective(s) (${[...new Set(myLinks)].slice(0, 6).join(", ") || "none"}) and the rewrite has ` +
-        `${keptLinks.length} (${[...new Set(keptLinks)].slice(0, 6).join(", ") || "none"}), so ` +
-        `${dropped ? "a stated link between two facts is gone" : "it claims a link you did not"}`,
+      `the rewrite flattened the logic: yours has ${myLinks.length} connective(s) ` +
+        `(${[...new Set(myLinks)].slice(0, 6).join(", ") || "none"}) and the rewrite has ` +
+        `${keptLinks.length} (${[...new Set(keptLinks)].slice(0, 6).join(", ") || "none"}), so a stated ` +
+        `link between two facts is gone`,
+      rewritten.text,
+    );
+  }
+  const myWhy = causalIn(original);
+  const keptWhy = causalIn(rewritten.text);
+  if (keptWhy.length > myWhy.length) {
+    return refusal(
+      `the rewrite invented a reason: yours states why ${myWhy.length} time(s) ` +
+        `(${[...new Set(myWhy)].slice(0, 6).join(", ") || "never"}) and the rewrite ${keptWhy.length} ` +
+        `(${[...new Set(keptWhy)].slice(0, 6).join(", ")}), so it claims a cause you did not`,
       rewritten.text,
     );
   }

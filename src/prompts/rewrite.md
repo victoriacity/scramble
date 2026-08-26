@@ -35,9 +35,12 @@ Preserve:
   turn `A, so B` into two adjacent statements. Two true facts with the connective
   gone read as terse and lose the claim the author was making, with nothing on
   the page for a reader to object to
-- The same NUMBER of connectives the input used. Swapping one for another is
-  fine, `therefore` for `because` with the clauses turned around; dropping one
-  or adding one is not, and the send refuses both
+- Every connective the input used. Swapping one for another is fine,
+  `therefore` for `because` with the clauses turned around, and dropping one is
+  refused
+- The number of times the input says WHY. Adding `because`, `so`, `since`,
+  `therefore` or `which means` where the input stated two facts side by side
+  invents a cause, and the send refuses it
 - The original language
 
 Produce:

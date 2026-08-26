@@ -15,6 +15,7 @@ import {
   DEFAULT_TIMEOUT_MS,
   MIN_PROSE_RATIO,
   chooseText,
+  causalIn,
   connectivesIn,
   factsIn,
   mentionsIn,
@@ -373,6 +374,30 @@ describe("choosing what to send", () => {
     }
   });
 
+  test("a rewrite that adds a TIMING word passes, where adding a reason does not", () => {
+    // MEASURED over 29 sends on two hosts: the connective guard fired four
+    // times, always in the ADD direction, and killed one send. Two of the four
+    // added `because`, a claim about why the author never made. The other two
+    // added `when` and `whenever`, which restate timing (2026-08-26).
+    const mine = "I restarted the listener, so the new build is live.";
+    const timing = chooseText(mine, {
+      ok: true,
+      text: "I restarted the listener when the build changed, so the new build is live.",
+    });
+    expect("send" in timing).toBe(true);
+    const why = chooseText(mine, {
+      ok: true,
+      text: "I restarted the listener because the build changed, so the new build is live.",
+    });
+    expect("refuse" in why).toBe(true);
+    if ("refuse" in why) expect(why.why).toContain("invented a reason");
+  });
+
+  test("causalIn counts only the words that state why", () => {
+    expect(causalIn("I did it because it broke, so I restarted it when it settled")).toEqual(["because", "so"]);
+    expect(causalIn("I did it when it broke, although it settled")).toEqual([]);
+  });
+
   test("a rewrite that invents a link between two facts is refused", () => {
     // Measured on the instruction file itself: "Do not compress. Clipped prose
     // reads as an interrogation" came back joined by `because` (2026-08-25).
@@ -382,7 +407,7 @@ describe("choosing what to send", () => {
       text: "I do not compress the text because clipped prose reads as an interrogation.",
     });
     expect("refuse" in out).toBe(true);
-    if ("refuse" in out) expect(out.why).toContain("invented the logic");
+    if ("refuse" in out) expect(out.why).toContain("invented a reason");
   });
 
   test("swapping one connective for another keeps the count and passes", () => {
