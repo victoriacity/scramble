@@ -132,6 +132,23 @@ describe("the peers report", () => {
     expect(said).toContain("bo  DESKTOP-STBCRML  C:\\xingyu-agent");
   });
 
+  test("a peer on a different commit gets the reader-relative range named", () => {
+    // I announced two commits with "both changes touch src/cli.ts", which was
+    // MY range. An agent five commits back answered with theirs: 15 files, the
+    // delivery path included (peer-metrics, 2026-08-26). A reader on that build
+    // who took my sentence at face value would have skipped a restart their
+    // build needs.
+    const behind = [{ agent: "cy", host: "h", dir: "/d", commit: "0ded7ad", at: "t" }, ...rows];
+    const said = peersReport(behind, HERE, false);
+    expect(said).toContain("read the range from THEIR commit");
+    expect(said).toContain("git diff --stat <their commit>..abc1234");
+    // Everybody on this commit: no reminder, since there is no range to read.
+    const together = [{ agent: "cy", host: "h", dir: "/d", commit: "abc1234", at: "t" }];
+    expect(peersReport(together, HERE, false)).not.toContain("THEIR commit");
+    // This build publishes no commit of its own: nothing to compare against.
+    expect(peersReport(behind, { host: "h", dir: "/d" }, false)).not.toContain("THEIR commit");
+  });
+
   test("--same-dir matches HOST AND directory, never the path alone", () => {
     // Two agents measured the SAME absolute path on two machines, backed by
     // different filesystems, and could not see each other's files (2026-08-22).

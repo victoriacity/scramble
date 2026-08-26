@@ -135,5 +135,21 @@ export function peersReport(rows: PeerRow[], self: Origin | undefined, sameDir: 
   const lines = shown.map(
     (r) => `  ${r.agent}  ${r.host}  ${r.dir}${r.commit === undefined ? "" : `  (${r.commit})`}  seen ${r.at}`,
   );
-  return `${shown.length} peer(s):\n${lines.join("\n")}`;
+  // WHAT TO TELL EACH OF THEM DEPENDS ON THEIR OWN COMMIT. I
+  // announced two commits with "both changes touch src/cli.ts", which was the
+  // range I had just written. An agent five commits back answered with their own
+  // range: 15 files, the delivery path included (peer-metrics, 2026-08-26). A
+  // reader on that build who took my sentence at face value would have skipped a
+  // restart their build needs.
+  //
+  // The commits above are the input to that sentence, so the reminder goes where
+  // they are printed.
+  const behind = [...new Set(shown.map((r) => r.commit).filter((c): c is string => c !== undefined))];
+  const note =
+    self?.commit === undefined || behind.every((c) => c === self.commit)
+      ? ""
+      : `\nBefore you tell any of them what changed, read the range from THEIR commit:\n` +
+        `  git diff --stat <their commit>..${self.commit}\n` +
+        `Your own last diff describes nobody's build except yours.`;
+  return `${shown.length} peer(s):\n${lines.join("\n")}${note}`;
 }
