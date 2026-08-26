@@ -1463,6 +1463,43 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     expect(urls.join(" ")).not.toContain("chat.postMessage");
   });
 
+  test("a rewrite call that times out is asked once more, and the send goes", async () => {
+    // MEASURED on my own send: the model timed out at 20s, the send refused, and
+    // the identical text went through seconds later. A timeout says nothing
+    // about the message (2026-08-26).
+    const cwd = scratchDir("rewrite-timeout");
+    let calls = 0;
+    const { io, errs } = stubIo(cwd, async (u) => {
+      const url = String(u);
+      if (url.includes("generativelanguage")) {
+        calls += 1;
+        if (calls === 1) throw new Error("The operation was aborted.");
+        return new Response(
+          JSON.stringify({ candidates: [{ content: { parts: [{ text: "I shipped the parser fix." }] } }] }),
+          { status: 200 },
+        );
+      }
+      return new Response(JSON.stringify({ ok: true, ts: "5.5", message: {} }), { status: 200 });
+    });
+    writeSlackConfig(cwd, {
+      appToken: "xapp-1",
+      token: "xoxb-1",
+      channels: { general: "C1" },
+      agents: { dev: { token: "T", handle: "dev" } },
+    });
+    io.readStdin = async () => "the parser fix shipped and I sent it";
+    expect(
+      await main(["message", "send", "--target", "general", "--as", "dev", "--no-verify", "--backend", "slack"], {
+        ...io,
+        env: (n) => (n === "SCRAMBLE_REWRITE_KEY" ? "k" : io.env(n)),
+        moduleDir: () => join(import.meta.dir, "..", "src"),
+      }),
+    ).toBe(0);
+    expect(calls).toBe(2);
+    expect(errs.join(" ")).toContain("the model did not answer");
+    expect(errs.join(" ")).toContain("posted: general at ts 5.5");
+  });
+
   test("`lint --comments` reads a source file's comments and skips its code", async () => {
     // The operator, 2026-08-26, having read a banned form in a comment I shipped
     // an hour earlier: "Clean the comments first." The rule table's own patterns

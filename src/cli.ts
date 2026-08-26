@@ -409,11 +409,21 @@ async function attemptRewrite(
 ): Promise<{ chosen: RewriteChoice; retried: boolean; retriedWhy?: string; configured: boolean }> {
   const cfg = rewriteConfig(io.env);
   const template = cfg.key === undefined ? undefined : readPromptTemplate(io.moduleDir ? io.moduleDir() : "src");
+  // A CALL THAT NEVER ANSWERED IS TRIED ONCE MORE. Measured on my own send: the
+  // model timed out at 20s, the send refused, and the same text went through on
+  // the next attempt seconds later. A timeout says nothing about the message, so
+  // spending the whole send on one slow call is the wrong price (2026-08-26).
+  const ask = async (prompt: string): Promise<{ ok: true; text: string } | { ok: false; why: string }> => {
+    const first = await rewriteWith(io.fetch, cfg, prompt);
+    if (first.ok) return first;
+    io.writeErr(`rewrite: the model did not answer (${first.why}). Asking once more.`);
+    return rewriteWith(io.fetch, cfg, prompt);
+  };
   let chosen: RewriteChoice =
     template === undefined
       ? { send: text, note: "" }
       : template.ok
-        ? chooseText(text, await rewriteWith(io.fetch, cfg, composePrompt(template.text, text)))
+        ? chooseText(text, await ask(composePrompt(template.text, text)))
         : chooseText(text, { ok: false, why: template.why });
   // ONE MORE ATTEMPT, WITH WHAT IT BROKE. Every guard fires on something the
   // MODEL did, so the model is the party that can fix it, and the author is left
@@ -424,10 +434,7 @@ async function attemptRewrite(
     const why = guardName(chosen.why);
     io.writeErr(`rewrite: ${chosen.retry} Asking once more.`);
     return {
-      chosen: chooseText(
-        text,
-        await rewriteWith(io.fetch, cfg, `${composePrompt(template.text, text)}\n\n${chosen.retry}`),
-      ),
+      chosen: chooseText(text, await ask(`${composePrompt(template.text, text)}\n\n${chosen.retry}`)),
       retried: true,
       retriedWhy: why,
       configured: true,
