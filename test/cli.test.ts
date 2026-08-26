@@ -3918,9 +3918,16 @@ describe("doctor, and the warning an agent gets without asking", () => {
     expect(await main(["doctor", "--as", "dev", "--backend", "slack"], io)).toBe(1);
     const said = errs.join(" ");
     expect(said).toContain("token_expired");
-    expect(said).toContain("says nothing about who owns the app");
+    expect(said).toContain("Nothing about who owns the app follows from it");
     expect(said).not.toContain("ask its owner");
     expect(said).not.toContain("drop this agent's entry");
+    // NAMES THE FILE THAT HOLDS IT. The credential comes from the Slack CLI's
+    // own store, and this line used to say "the CLI token in this config",
+    // pointing at a scramble config that has no such key. An agent read that,
+    // opened the config, found nothing, and reported it could not fix the gap
+    // (peer-metrics, 2026-08-26).
+    expect(said).toContain("~/.slack/credentials.json");
+    expect(said).toContain("slack login");
   });
 
   test("doctor --wake REFUSES to run while a listener holds the socket", async () => {

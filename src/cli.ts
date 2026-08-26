@@ -2380,8 +2380,10 @@ async function cmdDoctor(argv: string[], io: Io): Promise<number> {
   const repair = !unreadable
     ? `Fix: bun scripts/onboard-agent.ts ${name}`
     : staleToken
-      ? `The CLI token in this config has expired, which says nothing about who owns the app. ` +
-        `Refresh it and run doctor again; until then the scopes and events are simply unchecked.`
+      ? `The credential that expired is the FIRST entry in ~/.slack/credentials.json, which is ` +
+        `where the Slack CLI keeps it, and NOT anything in the scramble config. Nothing about who ` +
+        `owns the app follows from it. Someone with the Slack app login runs \`slack login\` on ` +
+        `THIS host to write a fresh one; until then the scopes and events are simply unchecked.`
       : `This app may have been created by another login, and this login cannot change it: ask ` +
         `its owner to add them, or drop this agent's entry from the config and let ` +
         `onboard-agent.ts create an app the agent owns.`;
