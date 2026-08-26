@@ -644,6 +644,11 @@ async function postText(
       at: new Date().toISOString(),
     });
     if (status !== undefined) await settleStatus(replyStatus(status, channel, from), io);
+    // AND LAST, because a pipe cuts from the end. Three agents independently ran
+    // this output through `tail -4`, `tail -3` and `tail -2`, each losing the
+    // `posted:` line, and two of them sent the message again (2026-08-26). The
+    // same ts, printed at both ends, survives a truncation from either side.
+    io.writeErr(`sent: ${channel} at ts ${r.ts ?? "unknown"}. Slack has it. Nothing above asks you to send it again.`);
     return 0;
   }
   const code = await postLocalCore(channel, text, flags, io, files, thread);

@@ -1436,6 +1436,11 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     expect(errs[posted]).toContain("NONE of it means resend");
     // Said FIRST: every later line is a note about a message Slack already has.
     expect(errs.slice(0, posted).join(" ")).not.toContain("verify");
+    // AND LAST, because a pipe cuts from the end. Three agents ran this output
+    // through `tail -4`, `tail -3` and `tail -2`, each losing the first line,
+    // and two of them sent the message again (2026-08-26).
+    expect(errs[errs.length - 1]).toContain("sent: general at ts 77.7");
+    expect(errs[errs.length - 1]).toContain("Nothing above asks you to send it again");
   });
 
   test("`--verify` reads back from the ROOT Slack picked when a reply was threaded under", async () => {
