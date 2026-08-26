@@ -481,6 +481,36 @@ async function postText(
     io.writeErr(postRefusal);
     return 1;
   }
+  // THE SAME DRAFT INTO THE SAME CHANNEL, TWICE, IS REFUSED, and this runs
+  // BEFORE the rewriter. Measured after the `posted:` line shipped: two
+  // byte-identical copies 27 seconds apart reached a third agent's inbox
+  // (xingyubot reading @peer_metrics, 2026-08-26). An agent asked for this shape
+  // in these words: "A retry after a genuine post must be a no-op, for example
+  // by setting an idempotency key on the draft hash" (peer-auto-evals,
+  // 2026-08-26).
+  //
+  // The DRAFT is hashed, since one draft rewrites differently every run, so a
+  // digest of the posted text would let every duplicate through. `--again` sends
+  // it anyway, for the case where saying the same thing twice is the intent.
+  const sender = nameFor(flags, io);
+  const digest = createHash("sha256").update(draft).digest("hex").slice(0, 16);
+  if (!flags.has("again")) {
+    const already = sentAlready(
+      readSentRows(sentPath(slackConfigPath(io), sender)),
+      channel,
+      digest,
+      Date.now(),
+      DUPLICATE_WINDOW_MS,
+    );
+    if (already !== undefined) {
+      io.writeErr(
+        `message send REFUSED: you already sent this exact draft to ${channel} at ts ${already.ts} ` +
+          `(${already.at}). Slack has that copy, so this would be a second one. Pass --again to send it ` +
+          `twice on purpose.`,
+      );
+      return 1;
+    }
+  }
   // A MODEL REWRITES WHAT GOES OUT, when one is configured. Asked for directly:
   // "For every sentence gone through scramble message, using Gemini 3.7 flash to
   // rewrite it to professional product and technical communication standards."
@@ -536,29 +566,6 @@ async function postText(
     if (s.error !== undefined || s.backend === undefined) {
       io.writeErr(s.error ?? "slack backend unavailable");
       return 1;
-    }
-    // THE SAME DRAFT INTO THE SAME CHANNEL, TWICE, IS REFUSED. Measured after the
-    // `posted:` line shipped: two byte-identical copies 27 seconds apart reached
-    // a third agent's inbox (xingyubot reading @peer_metrics, 2026-08-26). An
-    // agent asked for this shape in these words: "A retry after a genuine post
-    // must be a no-op, for example by setting an idempotency key on the draft
-    // hash" (peer-auto-evals, 2026-08-26).
-    //
-    // The DRAFT is hashed, since the rewrite of one draft differs run to run.
-    // `--again` sends it anyway, for the case where saying the same thing twice
-    // is the intent.
-    const sent = sentPath(slackConfigPath(io), from);
-    const digest = createHash("sha256").update(draft).digest("hex").slice(0, 16);
-    if (!flags.has("again")) {
-      const already = sentAlready(readSentRows(sent), channel, digest, Date.now(), DUPLICATE_WINDOW_MS);
-      if (already !== undefined) {
-        io.writeErr(
-          `message send REFUSED: you already sent this exact draft to ${channel} at ts ${already.ts} ` +
-            `(${already.at}). Slack has that copy, so this would be a second one. Pass --again to send it ` +
-            `twice on purpose.`,
-        );
-        return 1;
-      }
     }
     const r = await s.backend.post(channel, text, from, thread);
     if (!r.ok) {

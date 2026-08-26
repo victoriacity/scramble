@@ -1404,6 +1404,8 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     expect(await send()).toBe(1);
     expect(posts).toBe(1);
     expect(errs.join(" ")).toContain("you already sent this exact draft to general at ts 9.1");
+    // The check runs BEFORE the rewriter, so a duplicate costs no model call.
+    expect(errs.join(" ")).not.toContain("rewrite:");
     // Saying it twice on purpose stays possible.
     expect(await send(["--again"])).toBe(0);
     expect(posts).toBe(2);
