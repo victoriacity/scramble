@@ -2609,9 +2609,12 @@ async function cmdDoctor(argv: string[], io: Io): Promise<number> {
   if (elsewhere.length > 0) {
     const named = elsewhere.slice(0, 3).map((p) => `${p.agent} on ${p.host} ran ${p.commit} at ${p.at}`);
     advisories.push(
-      `this host installs ${installedNow} and ${elsewhere.length} peer(s) ran a different commit: ` +
-        `${named.join("; ")}. One of the two is behind, and \`git log\` says which. A machine nobody ` +
-        `installs on never reports staleness, because its listeners match its own install.`,
+      `this host installs ${installedNow} and ${elsewhere.length} peer(s) LAST SPOKE on a different ` +
+        `commit: ${named.join("; ")}. Each is the commit that peer ran when it wrote, so one that ` +
+        `upgraded without speaking since still shows the old one, and the time beside it says how ` +
+        `stale the reading is. Where the difference is real, \`git log\` says which side is behind. ` +
+        `A machine nobody installs on never reports staleness, because its listeners match its own ` +
+        `install.`,
     );
   }
 

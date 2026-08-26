@@ -4113,6 +4113,11 @@ describe("doctor, and the warning an agent gets without asking", () => {
     const said = errs.join(" ");
     expect(said).toContain("this host installs mine123");
     expect(said).toContain("faraway on other-host ran newer99");
+    // WHAT THE READING IS: a commit that peer ran when it wrote. An agent was
+    // flagged on `d836964` while running `1f082b8`, because that was the newest
+    // message the ledger held from them (xingyubot, 2026-08-26).
+    expect(said).toContain("LAST SPOKE on a different commit");
+    expect(said).toContain("upgraded without speaking since still shows the old one");
     expect(said).toContain("A machine nobody installs on never reports staleness");
   });
 
