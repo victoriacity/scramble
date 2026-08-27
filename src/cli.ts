@@ -2926,6 +2926,16 @@ async function cmdDoctor(argv: string[], io: Io): Promise<number> {
         events: declared !== undefined && declared.unreadable === undefined ? [...declared.botEvents].sort() : null,
         listeners: seen.length,
         installed: installedNow === "" ? null : installedNow,
+        // THE PEER RECORD'S OWN HEALTH, as a field a monitor can read. Six
+        // agents append to that file on one host, one of them found a line no
+        // parser could read, and the agent that armed a watcher for it wrote its
+        // own parse loop. Two definitions of `damaged` disagree the day the row
+        // shape changes, and a monitor grepping the prose sentence breaks on a
+        // rewording, which is the trap this repo took out of its wake filter.
+        peer_record: (() => {
+          const read = readPeerFile(peersPath(slackConfigPath(io)));
+          return { rows: read.rows.length, damaged: read.damaged };
+        })(),
       }),
     );
     return 0;

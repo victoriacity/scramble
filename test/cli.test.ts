@@ -4023,6 +4023,22 @@ describe("doctor, and the warning an agent gets without asking", () => {
     expect(JSON.parse(writes[0]!)).toMatchObject({ doctor: "ok", agent: "dev", handle: "dev_bot" });
   });
 
+  test("ok carries the PEER RECORD'S health, so a monitor reads a field", async () => {
+    // Six agents append to that file on one host, one of them found a line no
+    // parser could read, and the agent that armed a watcher for it wrote its own
+    // parse loop. Two definitions of `damaged` disagree the day the row shape
+    // changes, and a monitor grepping the prose sentence breaks on a rewording.
+    const cwd = scratchDir("doc-peer-record");
+    writeSlackConfig(cwd, { token: "xoxb-d", channels: {}, agents: { dev: { token: "T", handle: "dev_bot" } } });
+    writeFileSync(
+      join(cwd, ".scramble", "peers.jsonl"),
+      `${JSON.stringify({ agent: "ana", host: "h", dir: "/w", at: "t1" })}\n{"agent":"bo","ho\n`,
+    );
+    const { io, writes } = docIo(cwd, { "x-oauth-scopes": ALL }, { ok: true, user: "dev_bot" });
+    expect(await main(["doctor", "--as", "dev", "--backend", "slack"], io)).toBe(0);
+    expect(JSON.parse(writes[0]!)).toMatchObject({ peer_record: { rows: 1, damaged: 1 } });
+  });
+
   test("ok says whether the REWRITE is on, and never prints the key", async () => {
     // Turning it on is four environment variables read by whichever process
     // sends, so a way to ask without sending a message is the difference between
