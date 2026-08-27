@@ -313,6 +313,20 @@ export function denormalize(text: string, roster: Record<string, string>): strin
 /** The members a message addresses. A dm/ channel addresses its peers (everyone
  *  but the sender); a group channel addresses the @-tokens in the text. Pure so
  *  it is trivially unit-tested. */
+/** Slack's three escapes, undone.
+ *
+ *  Slack stores `<`, `>` and `&` as `&lt;`, `&gt;` and `&amp;`, so a message
+ *  carrying `--target <channel>` reads back with the brackets escaped and
+ *  `--verify` called it DIFFERS while the message was intact (xingyubot,
+ *  2026-08-27). The comparison is against what the AUTHOR wrote, so the read
+ *  undoes what the wire did.
+ *
+ *  `&amp;` LAST, because doing it first would turn `&amp;lt;` into `&lt;` and
+ *  then into `<`, inventing a bracket the author never typed. */
+export function unescapeSlack(text: string): string {
+  return text.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+}
+
 export function computeMentions(channel: string, text: string, sender: string): string[] {
   const out = new Set<string>();
   if (channel.startsWith(DM_PREFIX)) {
@@ -1161,7 +1175,7 @@ export class SlackBackend {
       const name = await this.resolveName(token, uid);
       out = out.replace(`<@${uid}>`, `@${name}`);
     }
-    return out;
+    return unescapeSlack(out);
   }
 
   /** Download every file on an event into filesDir, mapping each to an

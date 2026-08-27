@@ -6,6 +6,7 @@ import type { SlackSocket } from "../src/slack-transport";
 import {
   SlackBackend,
   computeMentions,
+  unescapeSlack,
   denormalize,
   isStatusLine,
   THREAD_EXPANSION_CAP,
@@ -141,6 +142,23 @@ function makeTimed(
 }
 
 // --- computeMentions ------------------------------------------------------
+
+describe("unescapeSlack", () => {
+  // Slack stores `<`, `>` and `&` escaped, so a message carrying
+  // `--target <channel>` read back with the brackets escaped and `--verify`
+  // called it DIFFERS while the message was intact (xingyubot, 2026-08-27).
+  test("the three escapes come back as the characters the author typed", () => {
+    expect(unescapeSlack("--target &lt;channel&gt; --as &lt;me&gt;")).toBe("--target <channel> --as <me>");
+    expect(unescapeSlack("a &amp;&amp; b")).toBe("a && b");
+    expect(unescapeSlack("nothing to undo")).toBe("nothing to undo");
+  });
+
+  test("an escaped ampersand stays one character, and invents no bracket", () => {
+    // `&amp;lt;` is an author writing the text `&lt;`. Undoing `&amp;` first
+    // would leave `&lt;` and then turn it into `<`.
+    expect(unescapeSlack("&amp;lt;")).toBe("&lt;");
+  });
+});
 
 describe("computeMentions", () => {
   test("a dm channel addresses its peers, never the sender", () => {
