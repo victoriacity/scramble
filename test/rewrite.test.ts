@@ -19,6 +19,7 @@ import {
   causalIn,
   connectivesIn,
   factsIn,
+  INSTRUCTION_ECHOES,
   citedTimestamps,
   mentionsIn,
   proseRatio,
@@ -289,6 +290,29 @@ describe("choosing what to send", () => {
 
   test("an unchanged rewrite says nothing at all", () => {
     expect(chooseText("same words", { ok: true, text: " same words " })).toEqual({ send: "same words", note: "" });
+  });
+
+  test("a rewrite that COPIES THE INSTRUCTION into the message is refused", () => {
+    // On a second attempt the model receives the guard's complaint appended to
+    // the instruction, and one answer came back with that complaint as a closing
+    // paragraph addressed to the reader: "The reviewer rejected your previous
+    // attempt because ... You must rewrite the message again without that added
+    // cause." Sending it would have put a guard's words in the channel as the
+    // author's own.
+    const leaked =
+      "Your reading of the mechanism is correct.\n\n" +
+      "The reviewer rejected your previous attempt because the rewrite claimed a cause you did not assert.";
+    const out = chooseText("your reading of the mechanism is right", { ok: true, text: leaked });
+    expect("refuse" in out && out.refuse).toContain("copied the instruction into the message");
+    expect("refuse" in out && out.refuse).toContain("the reviewer rejected");
+    // Every phrase this file's prompts own is caught, whatever the casing.
+    for (const phrase of INSTRUCTION_ECHOES) {
+      const echo = chooseText("mine", { ok: true, text: `A fine sentence. ${phrase.toUpperCase()}.` });
+      expect("refuse" in echo).toBe(true);
+    }
+    // Prose that merely discusses rewriting still goes out.
+    const fine = chooseText("mine", { ok: true, text: "I rewrote the message and sent it again." });
+    expect("send" in fine).toBe(true);
   });
 
   test("a rewrite that DROPS what the original carried is refused", () => {

@@ -411,6 +411,18 @@ export function causalIn(text: string): string[] {
  *  Backticked spans and fenced blocks, numbers, @mentions, URLs and file paths.
  *  A rewrite missing any of them changed the evidence, whatever it did to the
  *  prose. */
+/** Phrases only this file's own prompts use, so an answer carrying one is the
+ *  model repeating its instructions into the message. Lower case, matched against
+ *  a lower-cased answer. */
+export const INSTRUCTION_ECHOES = [
+  "your previous attempt was rejected",
+  "rewrite again without that",
+  "rewrite your message and send again",
+  "the reviewer rejected",
+  "you must rewrite the message",
+  "output only the rewritten message",
+];
+
 /** The refusal a failed rewrite produces, carrying what the model returned so the
  *  author sees what happened before writing it again. */
 function refusal(what: string, attempt: string): { refuse: string; why: string; attempt: string; retry: string } {
@@ -534,6 +546,18 @@ export function chooseText(
     };
   }
   if (rewritten.text.trim() === original.trim()) return { send: original, note: "" };
+  // THE INSTRUCTION IS NOT THE MESSAGE. On a second attempt the model receives
+  // the guard's complaint appended to the instruction, and one answer came back
+  // with that complaint as a closing paragraph addressed to me: "The reviewer
+  // rejected your previous attempt because ... You must rewrite the message again
+  // without that added cause." Sending it would have put my own guard's words in
+  // the channel as though I had written them to a peer.
+  //
+  // The retry sentence is fixed text this file owns, so the detector is exact.
+  const echoed = INSTRUCTION_ECHOES.find((phrase) => rewritten.text.toLowerCase().includes(phrase));
+  if (echoed !== undefined) {
+    return refusal(`the rewrite copied the instruction into the message ("${echoed}")`, rewritten.text);
+  }
   const over = lengthRefusal(rewritten.text);
   if (over !== "") {
     return refusal("the rewrite ran over the word limit", rewritten.text);
