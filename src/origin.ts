@@ -13,7 +13,7 @@
 //
 // The limit, and it is inherent: an agent learns a peer's location from a
 // message that peer has SENT. A silent agent stays unknown until it speaks.
-import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { withFileLock } from "./filelock";
 
@@ -211,19 +211,68 @@ export function peersPath(configPath: string): string {
   return join(dirname(configPath), "peers.jsonl");
 }
 
+/** ONE FILE PER WRITER, so no two processes ever append to the same file.
+ *
+ *  Six agents shared `peers.jsonl` on one host. That host's filesystem stalled
+ *  under an orphaned `du -shx` walking 1.3PB for 81 hours: writes returned EIO,
+ *  eight processes sat in D-state, and the shared file ended up with a line no
+ *  parser could read. A lock helps a healthy filesystem and degrades on that one,
+ *  since `withFileLock` breaks a lock it cannot take within a second and writes
+ *  anyway.
+ *
+ *  A writer that owns its file needs no agreement with anybody. A torn write can
+ *  only damage the writer's own rows, and the reader merges every file it finds. */
+export function peersDir(pathInRecordDir: string): string {
+  return join(dirname(pathInRecordDir), "peers.d");
+}
+
+/** The file one agent writes. The name is sanitised because it becomes a path,
+ *  and an agent name arrives from a config a person edits. */
+export function peerFileFor(configPath: string, agent: string): string {
+  const safe = agent.replace(/[^A-Za-z0-9._-]/g, "_").replace(/^\.+/, "_") || "agent";
+  return join(peersDir(configPath), `${safe}.jsonl`);
+}
+
 /** Every peer row, oldest first, skipping anything unparseable: a half-written
  *  line from a killed process must not take the whole record down. */
 export function readPeers(path: string): PeerRow[] {
   return readPeerFile(path).rows;
 }
 
-/** The rows AND the count of lines no parser could read.
+/** THE WHOLE RECORD: the shared file every build wrote before this change, plus
+ *  one file per writer. Rows come back oldest first across all of them, since the
+ *  newest row per agent is what `currentPeers` keeps.
  *
- *  A SKIPPED LINE IS A SIGNAL, and this dropped it. Six agents append to one file
- *  on a shared filesystem, an agent reported a line nothing could parse, and the
- *  reader had been stepping over it in silence since it appeared: the surface said
- *  `here are the peers` and never `one line of the record is damaged`. */
+ *  The shared file is still READ. It holds every row written up to this change,
+ *  and rewriting a record of what was seen is never on the table. */
 export function readPeerFile(path: string): { rows: PeerRow[]; damaged: number } {
+  const shared = readOneFile(path);
+  const rows = [...shared.rows];
+  let damaged = shared.damaged;
+  let names: string[] = [];
+  try {
+    names = readdirSync(peersDir(path)).filter((n) => n.endsWith(".jsonl"));
+  } catch {
+    names = [];
+  }
+  for (const name of names.sort()) {
+    const one = readOneFile(join(peersDir(path), name));
+    rows.push(...one.rows);
+    damaged += one.damaged;
+  }
+  // OLDEST FIRST ACROSS FILES. Each file is already in order, and a merge of two
+  // files is not, so the newest-row-wins read would pick whichever file sorted
+  // last. A row with no timestamp keeps its place.
+  return { rows: rows.sort((a, b) => (a.at ?? "").localeCompare(b.at ?? "")), damaged };
+}
+
+/** The rows AND the count of lines no parser could read, from ONE file.
+ *
+ *  A SKIPPED LINE IS A SIGNAL, and this dropped it. Six agents appended to one
+ *  file on a shared filesystem, an agent reported a line nothing could parse, and
+ *  the reader had been stepping over it in silence since it appeared: the surface
+ *  said `here are the peers` and never `one line of the record is damaged`. */
+export function readOneFile(path: string): { rows: PeerRow[]; damaged: number } {
   let raw: string;
   try {
     raw = readFileSync(path, "utf8");
@@ -260,25 +309,26 @@ export function recordPeer(path: string, arrivedAs: string, o: Origin, at: strin
   // from a build that publishes no name.
   const agent = o.agent === undefined || o.agent === "" ? arrivedAs : o.agent;
   const handle = agent === arrivedAs ? undefined : arrivedAs;
-  // UNDER THE LOCK, read and append together. Six agents on one host append to
-  // this file over a shared filesystem, and an agent reported a line nothing
-  // could parse there along with EIO on the write. Two processes appending at
-  // once on a network filesystem tear a line, and the read that decides whether
-  // to write at all was happening outside any lock, so two agents starting
-  // together each wrote the row the other was about to write.
+  // THIS AGENT'S OWN FILE, which nobody else writes. Six agents shared one file
+  // on a host whose filesystem stalled: writes returned EIO, eight processes sat
+  // in D-state, and the shared file ended with a line no parser could read. A
+  // lock was the first fix and it degrades on exactly that filesystem, since
+  // `withFileLock` breaks a lock it cannot take within a second and writes
+  // anyway. A writer that owns its file needs no agreement with anybody.
   //
-  // This is the lock `status.json` and the inbox ledger already use: a directory,
-  // atomic to create on every filesystem this runs on.
-  return withFileLock(path, () => {
-    const rows = readPeers(path);
+  // The lock stays for the processes of THIS agent, which are several: a
+  // listener, a send, and a sweep on a timer all record the same row.
+  const mine = peerFileFor(path, agent);
+  return withFileLock(mine, () => {
+    const rows = readOneFile(mine).rows;
     const last = rows.filter((r) => r.agent === agent).at(-1);
     // THE WHOLE ORIGIN DECIDES WHETHER THIS IS NEWS, runtime and session
     // included. A key of host, dir and commit alone kept the first session id an
     // agent ever published and dropped every later one, so a restart into a new
     // session left the record pointing at a session that had died.
     if (last !== undefined && sameOrigin(last, o) && last.handle === handle) return false;
-    mkdirSync(dirname(path), { recursive: true });
-    appendFileSync(path, `${JSON.stringify({ agent, ...o, ...(handle === undefined ? {} : { handle }), at })}\n`);
+    mkdirSync(dirname(mine), { recursive: true });
+    appendFileSync(mine, `${JSON.stringify({ agent, ...o, ...(handle === undefined ? {} : { handle }), at })}\n`);
     return true;
   });
 }

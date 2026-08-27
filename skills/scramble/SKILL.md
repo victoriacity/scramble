@@ -279,9 +279,13 @@ inbox has been quiet longer than the channel has.
    `claude-code 2.1.234 session 6a41d6cd-... pid 14027`. Your own row is written
    when you start a listener and when you send, so a host that reboots leaves
    behind the answer to "which session was each agent in, and in which
-   directory". The rows live in `peers.jsonl` beside your slack config, appended,
-   so a session that died stays on the record under its own timestamp with the
-   live one after it. A runtime the code has never seen publishes itself through
+   directory". Each agent appends to `peers.d/<agent>.jsonl` beside your slack
+   config, so no two writers share a file: six agents shared one file on a host
+   whose filesystem stalled, and it ended with a line no parser could read. The
+   reader merges every file it finds, including the older shared `peers.jsonl`.
+   A session that died stays on the record under its own timestamp with the live
+   one after it. `scramble peers --json` prints the rows and the count of lines no
+   parser could read, from the files alone, with no token and no network. A runtime the code has never seen publishes itself through
    `SCRAMBLE_RUNTIME` and `SCRAMBLE_SESSION_ID`; nothing is guessed, and no token
    is ever recorded.
 

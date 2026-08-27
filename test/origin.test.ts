@@ -4,14 +4,16 @@
 // scramble and an agent may know its same directory peers?" It did not, and the
 // absence cost two round trips that afternoon.
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   ORIGIN_METADATA_TYPE,
   currentPeers,
   originMetadata,
   originOf,
+  peerFileFor,
+  peersDir,
   peersPath,
   peersOnOtherCommits,
   peersReport,
@@ -278,6 +280,53 @@ describe("the peers record", () => {
       );
     }
     expect(readPeerFile(p).rows).toHaveLength(8);
+  });
+
+  test("EACH WRITER OWNS ITS FILE, and the reader merges every one it finds", () => {
+    // Six agents shared one file on a host whose filesystem stalled under an
+    // orphaned `du` walking 1.3PB for 81 hours: writes returned EIO, eight
+    // processes sat in D-state, and the shared file ended with a line no parser
+    // could read. A lock degrades on that filesystem, since `withFileLock` breaks
+    // a lock it cannot take within a second and writes anyway. A writer that owns
+    // its file needs no agreement with anybody.
+    const cfg = join(scratch(), "slack.json");
+    const p = peersPath(cfg);
+    expect(recordPeer(p, "ana", { host: "h", dir: "/a", agent: "ana" }, "2026-08-28T01:00:00Z")).toBe(true);
+    expect(recordPeer(p, "bo", { host: "h", dir: "/b", agent: "bo" }, "2026-08-28T01:00:01Z")).toBe(true);
+    // Two files, one per writer, and the shared file untouched by either.
+    expect(readdirSync(peersDir(p)).sort()).toEqual(["ana.jsonl", "bo.jsonl"]);
+    expect(existsSync(p)).toBe(false);
+    // The reader merges them, oldest first, so the newest row per agent wins.
+    expect(readPeerFile(p).rows.map((r) => r.agent)).toEqual(["ana", "bo"]);
+    // A NAME THAT IS A PATH stays inside the record directory, since an agent name
+    // comes from a config a person edits. The property is what matters here: the
+    // file lands in peers.d, its name carries no separator and no leading dot.
+    for (const name of ["../../etc/passwd", ".hidden", "", "a/b", "..", "with space"]) {
+      const file = peerFileFor(cfg, name);
+      expect(dirname(file)).toBe(peersDir(cfg));
+      const base = file.slice(peersDir(cfg).length + 1);
+      expect(base.startsWith(".")).toBe(false);
+      expect(base).toMatch(/^[A-Za-z0-9._-]+\.jsonl$/);
+    }
+  });
+
+  test("THE SHARED FILE IS STILL READ, so no row written before this change is lost", () => {
+    const cfg = join(scratch(), "slack.json");
+    const p = peersPath(cfg);
+    mkdirSync(dirname(p), { recursive: true });
+    // What every build wrote up to this change.
+    writeFileSync(
+      p,
+      `${JSON.stringify({ agent: "old", host: "h", dir: "/legacy", at: "2026-08-27T10:00:00Z" })}\n` +
+        `{"agent":"torn","ho\n`,
+    );
+    // And one row from a writer that owns its file, newer than the legacy row.
+    expect(recordPeer(p, "old", { host: "h", dir: "/now", agent: "old" }, "2026-08-28T10:00:00Z")).toBe(true);
+    const read = readPeerFile(p);
+    expect(read.damaged).toBe(1);
+    // Newest wins across the two files, and the older row stays readable.
+    expect(currentPeers(read.rows).map((r) => r.dir)).toEqual(["/now"]);
+    expect(read.rows.map((r) => r.dir)).toEqual(["/legacy", "/now"]);
   });
 
   test("an unreadable or damaged file is skipped, never fatal", () => {

@@ -2770,7 +2770,8 @@ describe("message check under the slack backend", () => {
     // that handle retires without waiting for this agent to send again. The
     // config already holds the mapping, and an agent that upgrades and stays
     // quiet would otherwise keep two identities on one host in one session.
-    const rows = readFileSync(join(cwd, ".scramble", "peers.jsonl"), "utf8").trim().split("\n");
+    // THE AGENT'S OWN FILE, since no two writers share one file any more.
+    const rows = readFileSync(join(cwd, ".scramble", "peers.d", "dev.jsonl"), "utf8").trim().split("\n");
     expect(JSON.parse(rows[rows.length - 1]!)).toMatchObject({ agent: "dev", handle: "dev_bot" });
   });
 
@@ -2834,13 +2835,20 @@ describe("message check under the slack backend", () => {
     const errs: string[] = [];
     const writes: string[] = [];
     const watched: Io = { ...io, writeErr: (l) => errs.push(l), write: (l) => writes.push(l) };
-    // A DIRECTORY where the record belongs: the append throws, while everything
-    // else under .scramble stays writable, so the test proves the delivery
-    // survives THIS failure and not some other one.
-    mkdirSync(join(cwd, ".scramble", "peers.jsonl"), { recursive: true });
-    expect(await main(["message", "check", "--as", "dev", "--backend", "slack"], watched)).toBe(0);
-    expect(writes.length).toBeGreaterThan(0);
-    expect(errs.join(" ")).toContain("peer record not written for");
+    // A READ-ONLY RECORD DIRECTORY: each writer owns a file inside it now, so the
+    // write fails wherever the peer's name lands, while everything else under
+    // .scramble stays writable. The test then proves the delivery survives THIS
+    // failure and no other one.
+    const recordDir = join(cwd, ".scramble", "peers.d");
+    mkdirSync(recordDir, { recursive: true });
+    chmodSync(recordDir, 0o500);
+    try {
+      expect(await main(["message", "check", "--as", "dev", "--backend", "slack"], watched)).toBe(0);
+      expect(writes.length).toBeGreaterThan(0);
+      expect(errs.join(" ")).toContain("peer record not written for");
+    } finally {
+      chmodSync(recordDir, 0o700);
+    }
   });
 
   test("`peers` on a build with no hostname seam publishes nothing and says so", async () => {
