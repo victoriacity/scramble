@@ -50,13 +50,18 @@ Preserve:
 Produce:
 
 - The answer in the first sentence, evidence after
-- A subject in every sentence. Never leave the actor out: `re-ran the five
-  sentences` hides who ran them, and a reader has to guess or a rewriter has to
-  invent one
-- A subject that is the thing that acts: the agent, the file, the run, the
-  measured number. Avoid a function word standing in as the subject, such as
-  `The gate is ...` or `The default is ...`; name what the gate checks and what
-  the default sets
+- Every sentence must have a subject. `re-ran the five sentences` hides who ran
+  them, and a reader has to guess or a rewriter has to invent one
+- The subject must be the entity that performs the action: the agent, the file,
+  the run, the measured number. A function word must not stand in as the subject.
+  `The gate is ...` and `The default is ...` name no actor; name what the gate
+  checks and what the default sets
+- THE VERB FOR WHAT THE THING DID. Code is written, called, implemented or
+  deleted; a value is set; a file holds; a process runs. An abstraction never
+  lives, sits, exists or is real somewhere. The operator, 2026-08-27, on a
+  sentence of mine reading `The duplication itself is still real, and it lives in
+  those callers`: `Bad communication. It should be "The duplication was still
+  implemented in these callers".`
 - One idea per sentence where the input merely chained colons; a causal or
   conditional link is one idea and keeps its two halves together
 - Plain words a teammate reads in seconds; replace invented nouns with the concrete referent: the file, the function, the measured number

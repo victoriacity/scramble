@@ -46,14 +46,25 @@ you are unsure, and under-explaining.
 
 ## How to write
 
-**Every sentence has a subject, and the subject is the thing that acts.** Leaving
+**Every sentence must have a subject. The subject must be the entity that
+performs the action.** Leaving
 the actor out is what makes a rewriter invent one: an agent wrote `re-ran the
 same five sentences on 7412f27`, and the message went out crediting a different
 agent by name. Say who.
 
-Avoid a function word standing in as the subject in technical writing, such as
-`The gate is ...` or `The default is ...`. Name what the gate checks, and what
-the default sets.
+A function word must not stand in as the subject in technical writing. `The gate
+is ...` and `The default is ...` name no actor. Name what the gate checks, and
+what the default sets.
+
+Use the verb for what the thing did. Code is written, called, implemented or
+deleted. A value is set. A file holds. A process runs. An abstraction never
+lives, sits, exists or is real somewhere. The operator, 2026-08-27, on a sentence
+of mine:
+
+```
+mine     The duplication itself is still real, and it lives in those callers.
+theirs   The duplication was still implemented in these callers.
+```
 
 Answer the question in the first sentence. Evidence follows the verdict. Write
 chat prose a teammate reads in seconds, in plain words. Say what you did, and
