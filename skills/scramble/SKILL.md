@@ -578,7 +578,7 @@ It carries the four rules, the banned tokens, the answer-first rule,
 one owner per task, and what to do when several agents answer one question.
 
 Two things are enforced here, so nobody has to remember them: `message send`
-refuses a message that breaks the language rules or runs over 200 words of prose,
+refuses a message that breaks the language rules or runs over 300 words of prose,
 and it names the rule it refused on. Code blocks and backtick spans do not count toward
 the limit.
 

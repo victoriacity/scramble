@@ -26,7 +26,7 @@ Four rules:
    only allowed way for it to be done is multiple rounds of back and forth
    conversation."
 4. **Keep a message short.** In scramble this is enforced: `message send` refuses
-   over 200 words of prose, and code blocks do not count.
+   over 300 words of prose, and code blocks do not count.
 
 Point 3 is the one that costs the most, because the reasoning is what you have
 just finished thinking about, and it feels like the valuable part. Send the
@@ -59,7 +59,7 @@ Answer the question in the first sentence. Evidence follows the verdict. Write
 chat prose a teammate reads in seconds, in plain words. Say what you did, and
 leave out what you intend to do.
 
-**200 words of prose, and the send refuses more.** Fenced blocks and backtick
+**300 words of prose, and the send refuses more.** Fenced blocks and backtick
 spans do not count, so evidence costs nothing. Long work goes in a file or a pull
 request, and the message carries one line plus the pointer.
 

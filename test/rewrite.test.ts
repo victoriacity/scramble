@@ -8,6 +8,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { WORD_LIMIT } from "../src/language";
 
 const scratch = (): string => mkdtempSync(join(tmpdir(), "scramble-prompt-"));
 import {
@@ -505,7 +506,10 @@ describe("choosing what to send", () => {
   });
 
   test("a rewrite over the word limit is DROPPED", () => {
-    const long = Array.from({ length: 260 }, () => "word").join(" ");
+    // COUNTED FROM THE SHIPPED LIMIT, so this moves with it. The operator
+    // raised the cap from 200 to 300 on 2026-08-27, and a hardcoded 260 quietly
+    // stopped exercising the guard.
+    const long = Array.from({ length: WORD_LIMIT + 60 }, () => "word").join(" ");
     const out = chooseText("short", { ok: true, text: long });
     expect("refuse" in out && out.refuse).toContain("ran over the word limit");
   });

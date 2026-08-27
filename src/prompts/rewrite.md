@@ -61,7 +61,7 @@ Produce:
   conditional link is one idea and keeps its two halves together
 - Plain words a teammate reads in seconds; replace invented nouns with the concrete referent: the file, the function, the measured number
 - Full sentences with their connecting words, the way a colleague speaks; drop no article, pronoun, or verb to save space
-- Under 200 words of prose; fenced blocks and backtick spans do not count
+- Under 300 words of prose; fenced blocks and backtick spans do not count
 - What was done; drop reasoning, process detail, and intentions the reader did not ask for
 - Verdicts clean: a plain yes, or a plain no with the real reason
 - Where the input contrasts alternatives, name the one that holds in precise terms; the rejected alternative may go

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import type { ChannelStore } from "../src/store";
 import { createStore } from "../src/store";
 import { createHandler } from "../src/server";
+import { WORD_LIMIT } from "../src/language";
 import { main, parseBind, loadSlackConfig, slackConfigPath, staleConfigWarning, staleListeners, pickStale, staleListenerProblem, readProcesses, liveListeners, stillAlive, watchForNewerInstall, listenerCommit, listenersBehind, processesReadable, type Io } from "../src/cli";
 import { SCOPE_NAMES, BOT_EVENT_NAMES } from "../src/app-manifest";
 
@@ -1834,12 +1835,16 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     // Operator, 2026-08-22: "We need to impose a message length limit in words.
     // Maybe 200." A refusal and not a warning: the long version is meant to
     // become several short turns, and a warning leaves that to the sender who
-    // just wrote 900 words.
+    // just wrote 900 words. Raised to 300 by the operator on 2026-08-27.
+    //
+    // COUNTED FROM THE SHIPPED LIMIT, so this test moves with it and never
+    // hardcodes a number the code no longer uses.
     const cwd = scratchDir("send-toolong");
     const { io, errs } = stubIo(cwd, async () => new Response(JSON.stringify({ crossings: [] }), { status: 200 }));
-    io.readStdin = async () => Array.from({ length: 260 }, () => "word").join(" ");
+    const over = WORD_LIMIT + 60;
+    io.readStdin = async () => Array.from({ length: over }, () => "word").join(" ");
     expect(await main(["message", "send", "--target", "general", "--as", "dev"], io)).toBe(1);
-    expect(errs.join(" ")).toContain("260 words of prose, and the limit is 200");
+    expect(errs.join(" ")).toContain(`${over} words of prose, and the limit is ${WORD_LIMIT}`);
   });
 
   test("`inbox close` takes SEVERAL ids, and one bad id never hides the rest", async () => {

@@ -194,8 +194,11 @@ export function lintLanguage(text: string, rules: LanguageRule[] = LANGUAGE_RULE
  *
  *  So the limit is a REFUSAL and not a warning: the long version is meant to
  *  become several short turns, and a warning would leave that to the sender who
- *  just wrote 900 words. */
-export const WORD_LIMIT = 200;
+ *  just wrote 900 words.
+ *
+ *  RAISED TO 300 by the operator, 2026-08-27: `Increase slack message word count`
+ *  `cap to 300`. */
+export const WORD_LIMIT = 300;
 
 /** WHERE THE RULES ARE WRITTEN, printed on every refusal.
  *

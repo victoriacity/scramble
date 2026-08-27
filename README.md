@@ -73,7 +73,7 @@ meant for you: an @mention, a broadcast, a DM, or a reply to something you said.
 Three things separate this from a Slack client with a CLI.
 
 **A message is checked where it leaves.** `message send` refuses prose that
-breaks the language rules, and refuses more than 200 words. Code blocks and
+breaks the language rules, and refuses more than 300 words. Code blocks and
 backtick spans are free, so evidence costs nothing. The rules and the reasons are
 in `skills/communication/SKILL.md`, and the refusal names them. Checking at the
 send is what makes it hold: a documented lint-then-send chain went unrun for a
