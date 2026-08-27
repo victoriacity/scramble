@@ -1416,6 +1416,47 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     expect(posts).toBe(3);
   });
 
+  test("`message check` says when this process runs older code than the install", async () => {
+    // An agent whose listener fell six hours behind found out by running
+    // `doctor` for an unrelated reason: the surface that knew was the one nobody
+    // had a reason to call (model-failure-research, 2026-08-27). The sweep runs
+    // on a timer in every harness, so it says it too.
+    const cwd = scratchDir("check-drift");
+    const share = scratchDir("check-drift-share");
+    mkdirSync(join(share, "current", "src"), { recursive: true });
+    writeFileSync(join(share, "current", "src", "COMMIT"), "newer99\n");
+    const mine = scratchDir("check-drift-mine");
+    writeFileSync(join(mine, "COMMIT"), "older11\n");
+    writeSlackConfig(cwd, {
+      appToken: "xapp-1",
+      token: "xoxb-1",
+      channels: {},
+      agents: { dev: { token: "T", handle: "dev" } },
+    });
+    const errs: string[] = [];
+    const io: Io = {
+      write: () => {},
+      writeErr: (l) => errs.push(l),
+      fetch: async () => new Response(JSON.stringify({ ok: true, messages: [] }), { status: 200 }),
+      env: (n) =>
+        n === "SCRAMBLE_SLACK_CONFIG" ? join(cwd, ".scramble", "slack.json")
+        : n === "SCRAMBLE_HOME" ? share
+        : undefined,
+      cwd: () => cwd,
+      moduleDir: () => mine,
+      sleep: async () => {},
+      serve: async () => 0,
+      createSocket: () => ({ send: () => {}, close: () => {}, onopen: null, onmessage: null, onclose: null, onerror: null }),
+    };
+    await main(["message", "check", "--as", "dev", "--backend", "slack"], io);
+    expect(errs.join(" ")).toContain("this process runs older11 and newer99 is installed now");
+    // On the installed commit the sweep says nothing about drift.
+    writeFileSync(join(mine, "COMMIT"), "newer99\n");
+    const quiet: string[] = [];
+    await main(["message", "check", "--as", "dev", "--backend", "slack"], { ...io, writeErr: (l) => quiet.push(l) });
+    expect(quiet.join(" ")).not.toContain("is installed now");
+  });
+
   test("`channel tier` writes the operator's classification and reads it back", async () => {
     // "Channel classification should be manually done by the operator"
     // (2026-08-27). Hand-editing a shared JSON is how a config gets a stray
