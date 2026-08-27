@@ -1974,6 +1974,79 @@ describe("a reply in your own thread wakes you without naming you", () => {
   });
 });
 
+describe("who is in the channel", () => {
+  // The operator, 2026-08-27, asking for a tiered register: an external channel
+  // has lots of humans in it, an internal one is where agents talk, and neither
+  // follows from the channel being public or private. Membership is the fact
+  // underneath that description.
+  test("members are counted as people and agents from Slack's own marking", async () => {
+    const h = make({ roster: {} }, (url) => {
+      if (url.includes("conversations.members"))
+        return new Response(JSON.stringify({ ok: true, members: ["U1", "B1", "B2"] }), { status: 200 });
+      if (url.includes("users.list"))
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            members: [
+              { id: "U1", name: "ana", is_bot: false },
+              { id: "B1", name: "dev", is_bot: true },
+              { id: "B2", name: "ops", is_bot: true },
+            ],
+          }),
+          { status: 200 },
+        );
+      return okRouter(url);
+    });
+    const got = await h.backend.composition("general", "bob");
+    expect(got).toEqual({ ok: true, composition: { humans: 1, agents: 2, unknown: 0 } });
+  });
+
+  test("an id the roster page never carried is asked for by name", async () => {
+    let infos = 0;
+    const h = make({ roster: {} }, (url) => {
+      if (url.includes("conversations.members"))
+        return new Response(JSON.stringify({ ok: true, members: ["U9"] }), { status: 200 });
+      if (url.includes("users.list")) return new Response(JSON.stringify({ ok: true, members: [] }), { status: 200 });
+      if (url.includes("users.info")) {
+        infos += 1;
+        return new Response(JSON.stringify({ ok: true, user: { is_bot: false } }), { status: 200 });
+      }
+      return okRouter(url);
+    });
+    expect(await h.backend.composition("general", "bob")).toEqual({
+      ok: true,
+      composition: { humans: 1, agents: 0, unknown: 0 },
+    });
+    expect(infos).toBe(1);
+  });
+
+  test("a member nobody can classify is counted as unknown, never as an agent", async () => {
+    const h = make({ roster: {} }, (url) => {
+      if (url.includes("conversations.members"))
+        return new Response(JSON.stringify({ ok: true, members: ["U9"] }), { status: 200 });
+      if (url.includes("users.list")) return new Response(JSON.stringify({ ok: true, members: [] }), { status: 200 });
+      if (url.includes("users.info"))
+        return new Response(JSON.stringify({ ok: false, error: "user_not_found" }), { status: 200 });
+      return okRouter(url);
+    });
+    expect(await h.backend.composition("general", "bob")).toEqual({
+      ok: true,
+      composition: { humans: 0, agents: 0, unknown: 1 },
+    });
+  });
+
+  test("a refused members call is REPORTED, never counted as an empty room", async () => {
+    const h = make({ roster: {} }, (url) =>
+      url.includes("conversations.members")
+        ? new Response(JSON.stringify({ ok: false, error: "channel_not_found" }), { status: 200 })
+        : okRouter(url),
+    );
+    const got = await h.backend.composition("general", "bob");
+    expect(got.ok).toBe(false);
+    expect(got.ok === false && got.error).toContain("channel_not_found");
+  });
+});
+
 describe("the regular path never touches the Slack CLI credential", () => {
   // The operator, 2026-08-26: "Ideally, we only need to authenticate Slack CLI
   // when a new agent joins the app or do a scramble doctor fix. Regular

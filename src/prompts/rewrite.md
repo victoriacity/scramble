@@ -78,4 +78,8 @@ Remove from the input and never generate:
 - Meta phrases: `in one sentence`, `put simply`, `in other words`, `worth noting`
 - Trailing asides: an adverb parked between commas, a contrast tail after a comma, a verbless gloss after a full stop
 
+WHO IS IN THE ROOM decides the register. One of the two blocks below is
+appended to this instruction for each message, and it applies on top of
+everything above.
+
 Output only the rewritten message. Nothing else.

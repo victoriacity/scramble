@@ -232,6 +232,28 @@ export function critiquePrompt(text: string): string {
   );
 }
 
+/** The register block for a tier, appended to the instruction.
+ *
+ *  Two files beside the instruction, so the difference between speaking to
+ *  agents and speaking to people is readable in one place and editable without
+ *  touching code (operator, 2026-08-27). */
+export function tierPromptPath(moduleDir: string, tier: string): string {
+  return join(moduleDir, "prompts", `tier-${tier}.md`);
+}
+
+export function readTierBlock(moduleDir: string, tier: string): { ok: true; text: string } | { ok: false; why: string } {
+  const path = tierPromptPath(moduleDir, tier);
+  let raw: string;
+  try {
+    raw = readFileSync(path, "utf8");
+  } catch (e) {
+    return { ok: false, why: `the ${tier} register at ${path} could not be read: ${e instanceof Error ? e.message : String(e)}` };
+  }
+  const body = raw.split(/\n---\n/).slice(1).join("\n---\n").trim();
+  if (body === "") return { ok: false, why: `the ${tier} register at ${path} carries no instruction below its first --- line` };
+  return { ok: true, text: body };
+}
+
 export function promptPath(moduleDir: string): string {
   return join(moduleDir, "prompts", "rewrite.md");
 }
@@ -255,8 +277,9 @@ export function readPromptTemplate(moduleDir: string): { ok: true; text: string 
 }
 
 /** The instruction with the message appended, which is what the model receives. */
-export function composePrompt(template: string, text: string): string {
-  return `${template}\n\n---\n${text}`;
+export function composePrompt(template: string, text: string, register?: string): string {
+  const withRegister = register === undefined || register === "" ? template : `${template}\n\n${register}`;
+  return `${withRegister}\n\n---\n${text}`;
 }
 
 /** The Gemini REST call, returning the rewritten text or a reason it is absent.

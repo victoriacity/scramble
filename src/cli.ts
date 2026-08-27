@@ -32,6 +32,7 @@ import { StatusManager } from "./status";
 import { SCOPE_NAMES, BOT_EVENT_NAMES } from "./app-manifest";
 import { languageRefusal, lengthRefusal, lineOf, lintLanguage, wordCount } from "./language";
 import { createHash } from "node:crypto";
+import { tierFor, type Tier } from "./tier";
 import { credentialsPath, firstCredential, freshCliToken } from "./slack-credential";
 
 /** How long a draft counts as already sent. Ten minutes covers the retry an
@@ -42,6 +43,7 @@ import {
   chooseText,
   composePrompt,
   critiquePrompt,
+  readTierBlock,
   mentionsIn,
   readPromptTemplate,
   readRewrites,
@@ -406,6 +408,33 @@ async function postLocalCore(
  *  store's message when `message send --attach` produced them; the slack
  *  backend attaches by its own upload flow (files are uploaded to the target
  *  before the text send). */
+/** The register a channel calls for, and why.
+ *
+ *  A configured entry wins, since a room full of agents can still be where a
+ *  customer reads and nothing derives that. Otherwise the membership answers:
+ *  people against agents, counted from Slack's own marking of each member. A
+ *  membership this host cannot read gives the careful register, which costs a
+ *  reader nothing. */
+async function channelTier(
+  channel: string,
+  as: string,
+  io: Io,
+  backend: "local" | "slack",
+): Promise<{ tier: Tier; why: string }> {
+  const configured = loadSlackConfig(io)?.tiers;
+  const set = tierFor(channel, configured, undefined);
+  if (set.why.startsWith("set to")) return set;
+  if (backend !== "slack") return { tier: "internal", why: "" };
+  const s = slackBackend(io);
+  // NO BACKEND MEANS THE SEND IS ABOUT TO FAIL AND SAY SO, so this stays quiet:
+  // a register line ahead of that error buries it.
+  if (s.backend === undefined) return { tier: "external", why: "" };
+  const c = await s.backend.composition(channel, as);
+  return c.ok
+    ? tierFor(channel, configured, c.composition)
+    : { tier: "external", why: `the membership could not be read (${c.error}), so the careful register applies` };
+}
+
 /** The rewrite attempt, with its one retry: the model's answer put through the
  *  guards, and asked again with what it broke.
  *
@@ -416,6 +445,7 @@ async function postLocalCore(
 async function attemptRewrite(
   text: string,
   io: Io,
+  register?: string,
 ): Promise<{ chosen: RewriteChoice; retried: boolean; retriedWhy?: string; configured: boolean }> {
   const cfg = rewriteConfig(io.env);
   const template = cfg.key === undefined ? undefined : readPromptTemplate(io.moduleDir ? io.moduleDir() : "src");
@@ -433,7 +463,7 @@ async function attemptRewrite(
     template === undefined
       ? { send: text, note: "" }
       : template.ok
-        ? chooseText(text, await ask(composePrompt(template.text, text)))
+        ? chooseText(text, await ask(composePrompt(template.text, text, register)))
         : chooseText(text, { ok: false, why: template.why });
   // ONE MORE ATTEMPT, WITH WHAT IT BROKE. Every guard fires on something the
   // MODEL did, so the model is the party that can fix it, and the author is left
@@ -444,7 +474,7 @@ async function attemptRewrite(
     const why = guardName(chosen.why);
     io.writeErr(`rewrite: ${chosen.retry} Asking once more.`);
     return {
-      chosen: chooseText(text, await ask(`${composePrompt(template.text, text)}\n\n${chosen.retry}`)),
+      chosen: chooseText(text, await ask(`${composePrompt(template.text, text, register)}\n\n${chosen.retry}`)),
       retried: true,
       retriedWhy: why,
       configured: true,
@@ -524,7 +554,21 @@ async function postText(
   // rewrite. Nothing changes silently: when a rewrite is sent, the sender's own
   // words are printed beside it. And the rewrite passes the same rules the
   // sender's words did, or it is dropped in favour of the words that passed.
-  const { chosen, retried, retriedWhy, configured } = await attemptRewrite(text, io);
+  // WHO IS IN THE ROOM DECIDES THE REGISTER. The operator, 2026-08-27: agents
+  // speak differently in a channel full of people from the way they speak where
+  // agents work, and neither follows from the channel being public or private.
+  //
+  // The tier is read from the membership, with a config entry overriding it,
+  // and the matching block rides on the instruction the model already gets.
+  const decided = await channelTier(channel, nameFor(flags, io), io, backend);
+  if (decided.why !== "") io.writeErr(`register: ${decided.tier} for ${channel} (${decided.why}).`);
+  const registerBlock = readTierBlock(io.moduleDir ? io.moduleDir() : "src", decided.tier);
+  if (!registerBlock.ok) io.writeErr(`register: ${registerBlock.why}`);
+  const { chosen, retried, retriedWhy, configured } = await attemptRewrite(
+    text,
+    io,
+    registerBlock.ok ? registerBlock.text : undefined,
+  );
   // A REWRITE THAT CANNOT BE USED STOPS THE SEND. The author's own words used to
   // go out here, which published exactly the prose the rewrite exists to
   // replace.
@@ -983,6 +1027,11 @@ export function loadSlackConfig(io: Io): SlackBackendConfig | null {
       appToken: typeof j.appToken === "string" ? j.appToken : undefined,
       filesDir: typeof j.filesDir === "string" ? j.filesDir : "",
       humanUserId: typeof j.humanUserId === "string" ? j.humanUserId : undefined,
+      // THE REGISTER OVERRIDE, carried through. A key the loader drops is a key
+      // the config claims to have and the code never sees.
+      ...(typeof j.tiers === "object" && j.tiers !== null && !Array.isArray(j.tiers)
+        ? { tiers: j.tiers as Record<string, string> }
+        : {}),
     };
   } catch {
     return null;

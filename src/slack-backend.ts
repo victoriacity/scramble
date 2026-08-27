@@ -17,6 +17,7 @@ import type { SlackSocket } from "./slack-transport";
 import { STATUS_METADATA_TYPE } from "./status";
 import { proseOf } from "./language";
 import { originMetadata, readOrigin, type Origin } from "./origin";
+import type { Composition } from "./tier";
 import { downloadFile, uploadToSlack, type SlackFileMeta } from "./attachments";
 
 // --- slack endpoint URLs ------------------------------------------------
@@ -42,6 +43,7 @@ const UPDATE_URL = "https://slack.com/api/chat.update";
 const DELETE_URL = "https://slack.com/api/chat.delete";
 const CONV_INFO_URL = "https://slack.com/api/conversations.info";
 const USERS_CONVERSATIONS_URL = "https://slack.com/api/users.conversations";
+const MEMBERS_URL = "https://slack.com/api/conversations.members";
 
 /** Cap on the number of threaded ROOTS expanded per history call. The fan-out
  *  is bounded: one extra conversations.replies request per expanded root.
@@ -126,6 +128,12 @@ export interface SlackBackendConfig {
   // scramble doctor fix. Regular operations should be done through the bot
   // token." This backend serves the regular operations, so the app-config token
   // it used to carry for peer descriptions is gone, along with the description.
+  /** channel -> `internal` or `external`, overriding what the membership says.
+   *
+   *  A room full of agents can still be where a customer reads, and nothing
+   *  derives that. This names those rooms; every other channel is answered by
+   *  counting who is in it (operator, 2026-08-27). */
+  tiers?: Record<string, string>;
   /** slack user id -> name, for <@U…> -> @name normalization. */
   roster: Record<string, string>;
   /** DM channel id -> agent whose bot that DM belongs to. */
@@ -378,6 +386,9 @@ export class SlackBackend {
    *  ITS OWN credential: the same Slack user id can answer differently under one
    *  app than under another, so the two must never share a cache slot. */
   private readonly nameCache = new Map<string, string>();
+  /** Slack user id -> is this member a bot. Filled from users.list and from
+   *  users.info for an id that page never carried. */
+  private readonly botById = new Map<string, boolean>();
 
   constructor(cfg: SlackBackendConfig, deps: SlackBackendDeps) {
     this.fetch = deps.fetch;
@@ -543,12 +554,15 @@ export class SlackBackend {
         (team === "" ? "" : `&team_id=${encodeURIComponent(team)}`) +
         (cursor === "" ? "" : `&cursor=${encodeURIComponent(cursor)}`);
       const r = await readOk<{
-        members?: Array<{ id?: string; name?: string; deleted?: boolean }>;
+        members?: Array<{ id?: string; name?: string; deleted?: boolean; is_bot?: boolean }>;
         response_metadata?: { next_cursor?: string };
       }>(this.fetch, q, { headers: { authorization: `Bearer ${token}` } });
       if (!r.ok) break;
       for (const u of r.data.members ?? []) {
         if (u.deleted === true) continue;
+        // BOT OR PERSON, from the same page that carries the name. The channel
+        // tier is a count of who is in the room, and Slack marks every member.
+        if (typeof u.id === "string" && typeof u.is_bot === "boolean") this.botById.set(u.id, u.is_bot);
         if (typeof u.id === "string" && typeof u.name === "string" && this.roster[u.id] === undefined) {
           this.roster[u.id] = u.name;
         }
@@ -810,6 +824,64 @@ export class SlackBackend {
     const own = this.agents[as]?.token;
     const via = own !== undefined && own !== "" ? `${as}'s own token` : "the config default token";
     return `${error} (channel ${channel} resolved to ${id}, ts ${ts}, under ${via})`;
+  }
+
+  /** WHO IS IN THIS CHANNEL, counted as people and agents.
+   *
+   *  The operator, 2026-08-27, asking for a tiered register: an `external`
+   *  channel has lots of humans in it, an `internal` one is where agents talk,
+   *  and neither follows from a channel being public or private. Membership is
+   *  the fact underneath that description, and Slack marks every member as a bot
+   *  or a person.
+   *
+   *  A MEMBER THIS HOST CANNOT CLASSIFY IS COUNTED AS UNKNOWN, never as an
+   *  agent: `tierOf` adds those to the people, because putting internal
+   *  shorthand in front of somebody who cannot read it is the failure worth
+   *  avoiding. */
+  async composition(
+    channel: string,
+    as: string,
+  ): Promise<{ ok: true; composition: Composition } | { ok: false; error: string }> {
+    const resolved = await this.slackChannelFor(this.tokenOrDefault(as), channel);
+    if (resolved.id === undefined) return { ok: false, error: resolved.error };
+    const t = this.agentToken(as);
+    if (!t.ok) return { ok: false, error: t.error };
+    const ids: string[] = [];
+    let cursor = "";
+    for (let page = 0; page < 10; page++) {
+      const r = await readOk<{ members?: string[]; response_metadata?: { next_cursor?: string } }>(
+        this.fetch,
+        `${MEMBERS_URL}?channel=${encodeURIComponent(resolved.id)}&limit=200` +
+          (cursor === "" ? "" : `&cursor=${encodeURIComponent(cursor)}`),
+        { headers: { authorization: `Bearer ${t.token}` } },
+      );
+      if (!r.ok) return { ok: false, error: r.error };
+      ids.push(...(r.data.members ?? []));
+      cursor = r.data.response_metadata?.next_cursor ?? "";
+      if (cursor === "") break;
+    }
+    // ONE users.list PAGE ANSWERS MOST OF THEM, and it is the page the roster
+    // already pays for. An id it never carried is asked for by name.
+    if (ids.some((id) => !this.botById.has(id))) await this.learnNames(t.token, "@__tier__");
+    let humans = 0;
+    let agents = 0;
+    let unknown = 0;
+    for (const id of ids) {
+      let isBot = this.botById.get(id);
+      if (isBot === undefined) {
+        const who = await readOk<{ user?: { is_bot?: boolean } }>(
+          this.fetch,
+          `${USERS_INFO_URL}?user=${encodeURIComponent(id)}`,
+          { headers: { authorization: `Bearer ${t.token}` } },
+        );
+        isBot = who.ok ? who.data.user?.is_bot : undefined;
+        if (typeof isBot === "boolean") this.botById.set(id, isBot);
+      }
+      if (isBot === true) agents += 1;
+      else if (isBot === false) humans += 1;
+      else unknown += 1;
+    }
+    return { ok: true, composition: { humans, agents, unknown } };
   }
 
   /** Every channel this agent is a MEMBER of, by name.

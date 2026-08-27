@@ -1416,6 +1416,140 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     expect(posts).toBe(3);
   });
 
+  test("the send picks a register from who is in the channel", async () => {
+    // The operator, 2026-08-27: agents speak differently in a channel full of
+    // people from the way they speak where agents work, and neither follows from
+    // the channel being public or private.
+    const cwd = scratchDir("send-register");
+    let prompt = "";
+    const { io, errs } = stubIo(cwd, async (u, init) => {
+      const url = String(u);
+      if (url.includes("generativelanguage")) {
+        prompt = String(init?.body ?? "");
+        return new Response(
+          JSON.stringify({ candidates: [{ content: { parts: [{ text: "I shipped the parser fix." }] } }] }),
+          { status: 200 },
+        );
+      }
+      if (url.includes("conversations.members"))
+        return new Response(JSON.stringify({ ok: true, members: ["U1", "U2", "B1"] }), { status: 200 });
+      if (url.includes("users.list"))
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            members: [
+              { id: "U1", name: "ana", is_bot: false },
+              { id: "U2", name: "bo", is_bot: false },
+              { id: "B1", name: "dev", is_bot: true },
+            ],
+          }),
+          { status: 200 },
+        );
+      if (url.includes("chat.postMessage"))
+        return new Response(JSON.stringify({ ok: true, ts: "8.8", message: {} }), { status: 200 });
+      return new Response(JSON.stringify({ ok: true, messages: [] }), { status: 200 });
+    });
+    writeSlackConfig(cwd, {
+      appToken: "xapp-1",
+      token: "xoxb-1",
+      channels: { general: "C1" },
+      agents: { dev: { token: "T", handle: "dev" } },
+    });
+    io.readStdin = async () => "the parser fix shipped and I sent it";
+    const withKey: Io = {
+      ...io,
+      env: (n) => (n === "SCRAMBLE_REWRITE_KEY" ? "k" : io.env(n)),
+      moduleDir: () => join(import.meta.dir, "..", "src"),
+    };
+    expect(
+      await main(["message", "send", "--target", "general", "--as", "dev", "--no-verify", "--backend", "slack"], withKey),
+    ).toBe(0);
+    // Two people and one agent: the careful register, and the model is told so.
+    expect(errs.join(" ")).toContain("register: external for general (2 human(s) and 1 agent(s))");
+    expect(prompt).toContain("This channel holds people who do not read this repository");
+  });
+
+  test("a channel of agents gets the dense register, and the config can override it", async () => {
+    const cwd = scratchDir("send-register-internal");
+    let prompt = "";
+    const responder = async (u: string | URL): Promise<Response> => {
+      const url = String(u);
+      if (url.includes("conversations.members"))
+        return new Response(JSON.stringify({ ok: true, members: ["U1", "B1", "B2"] }), { status: 200 });
+      if (url.includes("users.list"))
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            members: [
+              { id: "U1", name: "ana", is_bot: false },
+              { id: "B1", name: "dev", is_bot: true },
+              { id: "B2", name: "ops", is_bot: true },
+            ],
+          }),
+          { status: 200 },
+        );
+      if (url.includes("chat.postMessage"))
+        return new Response(JSON.stringify({ ok: true, ts: "8.8", message: {} }), { status: 200 });
+      return new Response(JSON.stringify({ ok: true, messages: [] }), { status: 200 });
+    };
+    const { io, errs } = stubIo(cwd, async (u, init) => {
+      if (String(u).includes("generativelanguage")) {
+        prompt = String(init?.body ?? "");
+        return new Response(
+          JSON.stringify({ candidates: [{ content: { parts: [{ text: "I shipped the parser fix." }] } }] }),
+          { status: 200 },
+        );
+      }
+      return responder(u);
+    });
+    writeSlackConfig(cwd, {
+      appToken: "xapp-1",
+      token: "xoxb-1",
+      channels: { general: "C1" },
+      agents: { dev: { token: "T", handle: "dev" } },
+    });
+    io.readStdin = async () => "the parser fix shipped and I sent it";
+    const withKey: Io = {
+      ...io,
+      env: (n) => (n === "SCRAMBLE_REWRITE_KEY" ? "k" : io.env(n)),
+      moduleDir: () => join(import.meta.dir, "..", "src"),
+    };
+    expect(
+      await main(["message", "send", "--target", "general", "--as", "dev", "--no-verify", "--backend", "slack"], withKey),
+    ).toBe(0);
+    expect(errs.join(" ")).toContain("register: internal for general (1 human(s) and 2 agent(s))");
+    expect(prompt).toContain("This channel is where agents work");
+
+    // THE CONFIG WINS. A room of agents can still be where a customer reads.
+    writeSlackConfig(cwd, {
+      appToken: "xapp-1",
+      token: "xoxb-1",
+      channels: { general: "C1" },
+      agents: { dev: { token: "T", handle: "dev" } },
+      tiers: { general: "external" },
+    });
+    const second = stubIo(cwd, async (u, init) => {
+      if (String(u).includes("generativelanguage")) {
+        prompt = String(init?.body ?? "");
+        return new Response(
+          JSON.stringify({ candidates: [{ content: { parts: [{ text: "I shipped the parser fix, again." }] } }] }),
+          { status: 200 },
+        );
+      }
+      return responder(u);
+    });
+    second.io.readStdin = async () => "a different draft, sent to the same room";
+    expect(
+      await main(["message", "send", "--target", "general", "--as", "dev", "--no-verify", "--backend", "slack"], {
+        ...second.io,
+        env: (n) => (n === "SCRAMBLE_REWRITE_KEY" ? "k" : second.io.env(n)),
+        moduleDir: () => join(import.meta.dir, "..", "src"),
+      }),
+    ).toBe(0);
+    expect(second.errs.join(" ")).toContain("register: external for general (set to external in the config)");
+    expect(prompt).toContain("This channel holds people who do not read this repository");
+  });
+
   test("the send says POSTED with the ts before it says anything else", async () => {
     // Two agents duplicated messages in one hour because the CLI's output after
     // a successful post was a warning, and a warning read as a failure
