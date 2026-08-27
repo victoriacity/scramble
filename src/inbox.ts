@@ -35,6 +35,11 @@ export interface InboxItem {
   at: string;
   /** The id of the message that answered it, once one has. */
   answeredBy?: string;
+  /** The names the delivery carried, so `inbox trace` can say WHY a row is
+   *  this agent's. Without it the ledger records the verdict and drops the
+   *  evidence, and two agents spent a round guessing which mention opened six
+   *  items (2026-08-27). Absent on rows written before this field. */
+  mentions?: string[];
   /** Was this line ADDRESSED to this agent, and so did it owe an answer?
    *
    *  Every delivered line is recorded, addressed or not, because "did this reach
@@ -322,12 +327,21 @@ export function traceReport(rows: InboxItem[], id: string, agent: string, path: 
     );
   }
   const lines = hits.map((r) => {
+    // WHY IT IS THIS AGENT'S, from the names the delivery carried. The verdict
+    // alone sent two agents guessing which mention opened six items, and one
+    // guess reached the channel as a cause (2026-08-27).
+    const why =
+      r.mentions === undefined
+        ? ``
+        : r.mentions.length === 0
+          ? ` The line named nobody, so a reply in a thread this agent is in is what could carry it.`
+          : ` The line named ${r.mentions.map((m) => `@${m}`).join(", ")}.`;
     const woke =
       r.addressed === undefined
         ? `whether it ADDRESSED ${agent} is UNRECORDED: this row predates that field`
         : r.addressed
-          ? `ADDRESSED to ${agent}, so it woke this agent`
-          : `delivered but NOT addressed to ${agent}, so nothing woke: it was visible only to a sweep`;
+          ? `ADDRESSED to ${agent}, so it woke this agent.${why}`
+          : `delivered but NOT addressed to ${agent}, so nothing woke: it was visible only to a sweep.${why}`;
     const answer = r.answeredBy === undefined ? "no reply recorded" : `answered by ${r.answeredBy}`;
     return `  ${r.channel} from ${r.from} at ${r.at}: ${woke}, ${answer}\n    ${r.text}`;
   });

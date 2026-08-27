@@ -2041,6 +2041,12 @@ function emitDelivery(io: Io, agent: string, line: Record<string, unknown>, addr
       channel: String(line.channel ?? ""),
       from: String(line.from ?? ""),
       ...(typeof line.thread === "string" ? { thread: line.thread } : {}),
+      // THE NAMES THE LINE CARRIED, so `inbox trace` can say why this row is
+      // this agent's. The verdict without its evidence sent two agents guessing
+      // which mention opened six items (2026-08-27).
+      ...(Array.isArray(line.mentions)
+        ? { mentions: line.mentions.filter((m): m is string => typeof m === "string") }
+        : {}),
       text: String(line.text ?? "").slice(0, 120),
       at: new Date().toISOString(),
       addressed,

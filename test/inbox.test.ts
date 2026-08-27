@@ -348,6 +348,23 @@ describe("inbox trace: what happened to ONE message, without grepping a text log
     expect(said).toContain("answered by 555.5");
   });
 
+  test("a trace says WHICH names the line carried", () => {
+    // The verdict without its evidence sent two agents guessing which mention
+    // opened six items, and one guess reached the channel as a cause
+    // (2026-08-27).
+    const p = join(scratch(), "inbox", "dev.jsonl");
+    recordInboxItem(p, item({ id: "1.1", addressed: true, mentions: ["dev", "ana"] }));
+    recordInboxItem(p, item({ id: "2.2", addressed: false, mentions: [] }));
+    const named = traceReport(readInbox(p), "1.1", "dev", p);
+    expect(named).toContain("The line named @dev, @ana.");
+    const nobody = traceReport(readInbox(p), "2.2", "dev", p);
+    expect(nobody).toContain("The line named nobody");
+    // A row predating the field claims nothing about names.
+    const old = join(scratch(), "inbox", "old.jsonl");
+    recordInboxItem(old, item({ id: "3.3", addressed: true }));
+    expect(traceReport(readInbox(old), "3.3", "dev", old)).not.toContain("The line named");
+  });
+
   test("a row written before the addressed field existed still owes a reply", () => {
     // Back-compat, and it matters: the ledger only ever held addressed items, so
     // a missing field means addressed. Reading it as false would silently empty
