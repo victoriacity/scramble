@@ -1427,6 +1427,9 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     writeFileSync(join(share, "current", "src", "COMMIT"), "newer99\n");
     const mine = scratchDir("check-drift-mine");
     writeFileSync(join(mine, "COMMIT"), "older11\n");
+    // A READABLE PROCESS TABLE WITH NO LISTENER IN IT, so the dead-listener line
+    // fires for the reason under test.
+    const emptyProc = scratchDir("check-drift-proc");
     writeSlackConfig(cwd, {
       appToken: "xapp-1",
       token: "xoxb-1",
@@ -1441,6 +1444,7 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
       env: (n) =>
         n === "SCRAMBLE_SLACK_CONFIG" ? join(cwd, ".scramble", "slack.json")
         : n === "SCRAMBLE_HOME" ? share
+        : n === "SCRAMBLE_PROC" ? emptyProc
         : undefined,
       cwd: () => cwd,
       moduleDir: () => mine,
@@ -1450,6 +1454,11 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     };
     await main(["message", "check", "--as", "dev", "--backend", "slack"], io);
     expect(errs.join(" ")).toContain("this process runs older11 and newer99 is installed now");
+    // AND A DEAD LISTENER, which leaves no drift to report: the sweep's own
+    // process runs the installed copy, so the comparison above stays quiet while
+    // nothing delivers (model-failure-research, 2026-08-27).
+    expect(errs.join(" ")).toContain("NO listener is running for dev");
+    expect(errs.join(" ")).toContain("scramble listen --addressed --as dev");
     // On the installed commit the sweep says nothing about drift.
     writeFileSync(join(mine, "COMMIT"), "newer99\n");
     const quiet: string[] = [];

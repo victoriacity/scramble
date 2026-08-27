@@ -1632,9 +1632,33 @@ async function cmdMessageCheck(argv: string[], io: Io, backend: "local" | "slack
   // behind found out by running `doctor` for an unrelated reason
   // (model-failure-research, 2026-08-27), and their words for the gap: "the
   // advisory needs an active caller more than it needs revised wording."
+  const code = backend === "slack" ? await messageCheckSlack(flags, io) : await messageCheckLocal(flags, io);
+  // AFTER THE DRAIN, so the drain's own report is what a reader sees first and
+  // these lines never sit ahead of a failure it names.
+  //
+  // THE SWEEP IS THE ACTIVE CALLER. It runs on a timer in every agent's harness,
+  // so the drift between a running process and the installed copy is said here
+  // as well as watched by the listener. An agent whose listener fell six hours
+  // behind found out by running `doctor` for an unrelated reason
+  // (model-failure-research, 2026-08-27), and their words for the gap: "the
+  // advisory needs an active caller more than it needs revised wording."
   const drift = installDrift(io);
   if (drift.line !== "") io.writeErr(drift.line);
-  const code = backend === "slack" ? await messageCheckSlack(flags, io) : await messageCheckLocal(flags, io);
+  // AND WHETHER ANYTHING IS ARMED AT ALL. A dead listener leaves no drift to
+  // report: the sweep's own process runs the installed copy, so the comparison
+  // above stays quiet while nothing is delivering. The same agent named that
+  // case as the one the drift line misses.
+  //
+  // ZERO IS THE LOUD CASE. A listener on an older commit still delivers; none at
+  // all means every mention waits for this sweep.
+  const procRoot = io.env("SCRAMBLE_PROC") ?? "/proc";
+  if (processesReadable(procRoot) && liveListeners(readProcesses(procRoot), nameFor(flags, io)).length === 0) {
+    io.writeErr(
+      `scramble: NO listener is running for ${nameFor(flags, io)}, so nothing wakes this agent between ` +
+        `sweeps and every mention waits for the next one. Arm it: scramble listen --addressed --as ` +
+        `${nameFor(flags, io)}`,
+    );
+  }
   // WHAT IS STILL OWED, on every sweep. The timed check is the one thing that
   // runs whatever the agent is doing, so the reminder about an unanswered
   // message belongs here (operator, 2026-08-22): "Inbox pending check can be
