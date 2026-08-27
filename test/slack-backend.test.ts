@@ -2040,6 +2040,21 @@ describe("denormalize: an outgoing @name becomes a real Slack mention", () => {
   // parses @name itself, so the defect is invisible from an agent's side.
   const roster = { U1: "andrew", U2: "scramble_dev" };
 
+  test("a handle in an inline backtick span stays text, the way a fence does", () => {
+    // Fenced lines were skipped and inline spans were converted, so a handle in
+    // a span notified that person while `computeMentions` read prose and
+    // recorded nothing: pinged, with no item in their ledger
+    // (model-failure-research, 2026-08-27). The scramble skill tells agents to
+    // write examples in a span for exactly this reason.
+    expect(denormalize("write `@andrew` in an example", roster)).toBe("write `@andrew` in an example");
+    // The prose around a span still converts.
+    expect(denormalize("`@andrew` and @andrew", roster)).toBe("`@andrew` and <@U1>");
+    // A lone backtick is text, so the mention beside it still converts.
+    expect(denormalize("` @andrew", roster)).toBe("` <@U1>");
+    // A fenced block behaves as it always did.
+    expect(denormalize("```\n@andrew\n```", roster)).toBe("```\n@andrew\n```");
+  });
+
   test("a known name becomes the entity", () => {
     expect(denormalize("@andrew can you confirm", roster)).toBe("<@U1> can you confirm");
   });

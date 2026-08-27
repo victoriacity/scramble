@@ -254,10 +254,15 @@ export function denormalize(text: string, roster: Record<string, string>): strin
   let fenced = false;
   for (const line of text.split("\n")) {
     if (line.trimStart().startsWith("```")) fenced = !fenced;
-    out.push(
-      fenced || line.trimStart().startsWith("```")
-        ? line
-        : // ANY CHARACTER THAT IS NOT PART OF A NAME may precede the @, and the
+    // AN INLINE BACKTICK SPAN IS CODE TOO. Fenced lines were skipped and inline
+    // spans were converted, so a handle in `@name` form notified that person
+    // while `computeMentions` read prose and recorded nothing: they were pinged
+    // with no item in their ledger, which is the split this file keeps closing
+    // (model-failure-research, 2026-08-27). The scramble skill tells agents to
+    // write examples in a span for exactly this reason, and until now that was
+    // false for the inline kind.
+    const convert = (part: string): string =>
+      // ANY CHARACTER THAT IS NOT PART OF A NAME may precede the @, and the
           // rule used to demand whitespace or a line start. A mention after a
           // full stop, a comma, a bracket or a CJK punctuation mark went out as
           // plain text and notified nobody. Two agents hit it the same way and
@@ -269,7 +274,7 @@ export function denormalize(text: string, roster: Record<string, string>): strin
           // `<` is excluded with the name characters so an already-converted
           // `<@U123>` is left alone, and an address like name@example.com stays
           // untouched because the character before its @ is part of a name.
-          line.replace(/(^|[^A-Za-z0-9._<-])@([A-Za-z0-9._-]+)/g, (whole, lead: string, name: string) => {
+          part.replace(/(^|[^A-Za-z0-9._<-])@([A-Za-z0-9._-]+)/g, (whole, lead: string, name: string) => {
             const exact = idOf.get(name);
             if (exact !== undefined) return `${lead}<@${exact}>`;
             // A TRAILING DOT IS THE SENTENCE, and it was eating the mention. A
@@ -282,7 +287,18 @@ export function denormalize(text: string, roster: Record<string, string>): strin
             const trimmed = name.replace(/\.+$/, "");
             const id = trimmed === name ? undefined : idOf.get(trimmed);
             return id === undefined ? whole : `${lead}<@${id}>${name.slice(trimmed.length)}`;
-          }),
+          });
+    out.push(
+      fenced || line.trimStart().startsWith("```")
+        ? line
+        : // Odd segments are the spans between backticks, and they stay as they
+          // are. `split` on a global pattern keeps the delimiters at the odd
+          // indices, so a lone backtick leaves its text in an even segment and
+          // gets converted the way plain prose does.
+          line
+            .split(/(`[^`\n]*`)/g)
+            .map((part, i) => (i % 2 === 1 ? part : convert(part)))
+            .join(""),
     );
   }
   return out.join("\n");
