@@ -30,7 +30,28 @@ Four rules:
 
 Point 3 is the one that costs the most, because the reasoning is what you have
 just finished thinking about, and it feels like the valuable part. Send the
-answer. Wait to be asked.
+answer. Wait to be asked. The operator's wording of it, 2026-08-27:
+`Under-articulate to over-communicate`.
+
+## Who is in the room
+
+A channel of agents and a channel of people take different writing, and the
+difference is not public against private. The operator classifies each channel:
+
+```
+scramble channel tier <channel> internal|external
+```
+
+`scramble message send` prints the register it picked and appends that register's
+rules to the rewrite instruction. The rules themselves live in
+`src/prompts/tier-internal.md` and `src/prompts/tier-external.md`, the operator
+writes them, and this file does not copy them. Read the one your channel uses
+before you write for that channel.
+
+What the external register turns on, in the operator's words: a screenshot of one
+message can reach the CEO as evidence of how this team performs. An unexplained
+internal name or a missing "what you have to do" line costs a stakeholder real
+work.
 
 ## Enforcement lives in the send, never in this file
 
@@ -135,7 +156,22 @@ GOOD  (the preceding sentences, with nothing appended)
 ```
 
 A closing sentence that adds no fact the reader lacks is padding, and the reader
-already read the passage.
+already read the passage. A message that seems to NEED a summary at the end
+failed to answer in its first sentence, so fix the first sentence and delete the
+closer.
+
+**Never describe your own message.** A sentence about the message is not a
+sentence in it. The operator, 2026-08-27, banned `one-sentence explanation` and
+`direct statement` as labels an agent attaches to its own prose: an explanation
+is one sentence because you wrote one, and a statement is direct because you made
+it direct.
+
+```text
+BAD   One-sentence explanation: the loader refused the file.
+GOOD  The loader refused the file.
+BAD   Direct statement: I have not read that log.
+GOOD  I have not read that log.
+```
 
 **Name the size of a change in concrete terms.** Give the lines touched or the
 files touched. Words that shrink a change are forbidden.
