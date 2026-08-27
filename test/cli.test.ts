@@ -2658,6 +2658,81 @@ describe("message check under the slack backend", () => {
     expect(q.writes.join(" ")).toContain("No peers running in");
   });
 
+  test("THIS AGENT'S OWN ROW is written too, so a crash leaves it on disk", async () => {
+    // The operator: "Scramble should store the agent runtime, work dir and
+    // session ids for each agent in case of a system restart or crash." Every
+    // row came from a message a PEER sent, so the one agent whose runtime and
+    // session this process knows for certain was the one missing from the file:
+    // a host that crashed took its own record with it.
+    const cwd = scratchDir("peers-self");
+    const runtimeEnv = (base: (n: string) => string | undefined) => (n: string) =>
+      n === "CLAUDECODE"
+        ? "1"
+        : n === "CLAUDE_CODE_SESSION_ID"
+          ? "6a41d6cd-13fa-430a-954b-69132f9d5a5c"
+          : n === "CLAUDE_PID"
+            ? "14027"
+            : n === "AI_AGENT"
+              ? "claude-code_2-1-234_agent"
+              : base(n);
+    const s = stubIo(cwd, async (u) =>
+      String(u).includes("chat.postMessage")
+        ? new Response(JSON.stringify({ ok: true, ts: "7.7", message: {} }), { status: 200 })
+        : new Response(JSON.stringify({ ok: true, messages: [] }), { status: 200 }),
+    );
+    writeSlackConfig(cwd, {
+      appToken: "xapp-1",
+      token: "xoxb-1",
+      channels: { general: "C1" },
+      agents: { dev: { token: "T", handle: "dev" } },
+    });
+    s.io.readStdin = async () => "a line from an agent nobody has recorded yet";
+    expect(
+      await main(["message", "send", "--target", "general", "--as", "dev", "--no-verify", "--backend", "slack"], {
+        ...s.io,
+        hostname: () => "host-one",
+        env: runtimeEnv(s.io.env),
+      }),
+    ).toBe(0);
+    const p = stubIo(cwd, async () => new Response("{}", { status: 200 }));
+    expect(await main(["peers"], { ...p.io, hostname: () => "other-host", env: runtimeEnv(p.io.env) })).toBe(0);
+    const said = p.writes.join(" ");
+    expect(said).toContain("dev  host-one");
+    expect(said).toContain("claude-code 2.1.234 session 6a41d6cd-13fa-430a-954b-69132f9d5a5c pid 14027");
+  });
+
+  test("an unwritable own record REPORTS itself and still sends", async () => {
+    // The record is accounting; the message is the point. A directory that
+    // cannot be written must not swallow the send, and must not go quiet either.
+    const cwd = scratchDir("peers-self-locked");
+    writeSlackConfig(cwd, {
+      appToken: "xapp-1",
+      token: "xoxb-1",
+      channels: { general: "C1" },
+      agents: { dev: { token: "T", handle: "dev" } },
+    });
+    const s = stubIo(cwd, async (u) =>
+      String(u).includes("chat.postMessage")
+        ? new Response(JSON.stringify({ ok: true, ts: "8.8", message: {} }), { status: 200 })
+        : new Response(JSON.stringify({ ok: true, messages: [] }), { status: 200 }),
+    );
+    s.io.readStdin = async () => "a line sent while the record cannot be written";
+    // The directory holding the record is read-only, so appending the row throws.
+    chmodSync(join(cwd, ".scramble"), 0o500);
+    try {
+      expect(
+        await main(["message", "send", "--target", "general", "--as", "dev", "--no-verify", "--backend", "slack"], {
+          ...s.io,
+          hostname: () => "host-one",
+        }),
+      ).toBe(0);
+      expect(s.errs.join(" ")).toContain("own origin not recorded");
+      expect(s.errs.join(" ")).toContain("posted: general at ts 8.8");
+    } finally {
+      chmodSync(join(cwd, ".scramble"), 0o700);
+    }
+  });
+
   test("an unwritable peers record REPORTS itself and still delivers", async () => {
     // Knowing where a peer runs is accounting; the message is the point. A
     // record that cannot be written must not swallow the delivery, and must not

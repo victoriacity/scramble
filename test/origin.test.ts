@@ -18,11 +18,17 @@ import {
   readOrigin,
   readPeers,
   recordPeer,
+  runtimeOf,
+  sameOrigin,
   type Origin,
 } from "../src/origin";
 
 const scratch = (): string => mkdtempSync(join(tmpdir(), "scramble-origin-"));
 const HERE: Origin = { host: "host-two", dir: "/srv/dev-work", commit: "abc1234" };
+const RUNNING: Origin = {
+  ...HERE,
+  runtime: { name: "claude-code", version: "2.1.234", session: "6a41d6cd", pid: "14027" },
+};
 
 describe("an origin is built from what this process can read", () => {
   test("a commit is carried when the install knows one", () => {
@@ -34,6 +40,53 @@ describe("an origin is built from what this process can read", () => {
     // would be read by a peer as a fact about which code is running.
     expect(originOf("h1", "/w")).toEqual({ host: "h1", dir: "/w" });
     expect(originOf("h1", "/w", "")).toEqual({ host: "h1", dir: "/w" });
+  });
+
+  test("THE RUNTIME AND THE SESSION come out of the environment, and are never guessed", () => {
+    // The operator: "Scramble should store the agent runtime, work dir and
+    // session ids for each agent in case of a system restart or crash." A host
+    // and a directory survive a crash on their own. The session id says which
+    // conversation was interrupted, and nobody can reconstruct it once the
+    // process is gone.
+    const claude = runtimeOf((n) =>
+      ({
+        CLAUDECODE: "1",
+        CLAUDE_CODE_SESSION_ID: "6a41d6cd-13fa-430a-954b-69132f9d5a5c",
+        CLAUDE_PID: "14027",
+        AI_AGENT: "claude-code_2-1-234_agent",
+      })[n],
+    );
+    expect(claude).toEqual({
+      name: "claude-code",
+      version: "2.1.234",
+      session: "6a41d6cd-13fa-430a-954b-69132f9d5a5c",
+      pid: "14027",
+    });
+    // An akari worker names its instance.
+    expect(runtimeOf((n) => ({ AKARI_INSTANCE_ID: "lane-3", AKARI_BUILD_COMMIT: "9291bdd" })[n])).toEqual({
+      name: "akari",
+      version: "9291bdd",
+      session: "lane-3",
+    });
+    // A runtime this code has never heard of publishes itself through the
+    // override, so a new harness needs no change here.
+    expect(runtimeOf((n) => ({ SCRAMBLE_RUNTIME: "hark", SCRAMBLE_SESSION_ID: "s-9" })[n])).toEqual({
+      name: "hark",
+      session: "s-9",
+    });
+    // AN ENVIRONMENT THAT NAMES NOTHING YIELDS NOTHING. A guessed runtime would
+    // be read as fact by every peer and by whoever is restarting the fleet.
+    expect(runtimeOf(() => undefined)).toBeUndefined();
+    expect(runtimeOf(() => "")).toBeUndefined();
+    // A version that is not a version is left out, and the name still lands.
+    expect(runtimeOf((n) => ({ CLAUDECODE: "1", AI_AGENT: "claude-code_dev_agent" })[n])).toEqual({
+      name: "claude-code",
+    });
+    // NO SECRET IS RECORDED. The messaging token sits beside these variables.
+    const withToken = runtimeOf((n) =>
+      ({ CLAUDECODE: "1", CLAUDE_CODE_MESSAGING_TOKEN: "ced8f224523aa8846bccadaecd5a769f" })[n],
+    );
+    expect(JSON.stringify(withToken)).not.toContain("ced8f224");
   });
 });
 
@@ -77,6 +130,31 @@ describe("it rides on Slack message metadata", () => {
     }
   });
 
+  test("the runtime and the session round trip on the message", () => {
+    // A peer learns where an agent runs from a message that agent sent, so the
+    // session id has to ride the same way the host does. Slack's payload holds
+    // strings, and the runtime rides as flat keys.
+    expect(originMetadata(RUNNING).event_payload).toEqual({
+      host: "host-two",
+      dir: "/srv/dev-work",
+      commit: "abc1234",
+      runtime: "claude-code",
+      runtime_version: "2.1.234",
+      session: "6a41d6cd",
+      pid: "14027",
+    });
+    expect(readOrigin(originMetadata(RUNNING))).toEqual(RUNNING);
+    // A SESSION WITH NO RUNTIME NAME IS NO RUNTIME. Two runtimes' ids look alike
+    // and mean different things, so the name is what makes the id readable.
+    expect(
+      readOrigin({ event_type: ORIGIN_METADATA_TYPE, event_payload: { host: "h", dir: "/w", session: "s1" } }),
+    ).toEqual({ host: "h", dir: "/w" });
+    // A partial runtime keeps what it has.
+    expect(
+      readOrigin({ event_type: ORIGIN_METADATA_TYPE, event_payload: { host: "h", dir: "/w", runtime: "akari" } }),
+    ).toEqual({ host: "h", dir: "/w", runtime: { name: "akari" } });
+  });
+
   test("a commit of the wrong shape is dropped while the origin survives", () => {
     expect(readOrigin({ event_type: ORIGIN_METADATA_TYPE, event_payload: { host: "h", dir: "/w", commit: 7 } })).toEqual(
       { host: "h", dir: "/w" },
@@ -99,6 +177,31 @@ describe("the peers record", () => {
     expect(readPeers(p)).toHaveLength(3);
     expect(currentPeers(readPeers(p))).toHaveLength(1);
     expect(currentPeers(readPeers(p))[0]).toMatchObject({ dir: "/srv/other-work", commit: "def5678" });
+  });
+
+  test("A NEW SESSION IS NEWS, so a restart does not leave a dead session on the record", () => {
+    // The record exists for a crash: the row has to name the session that is
+    // alive now. A key of host, dir and commit kept the FIRST session an agent
+    // ever published and dropped every later one, so the file pointed at a
+    // session that had died.
+    const p = peersPath(join(scratch(), "slack.json"));
+    expect(recordPeer(p, "dev", RUNNING, "2026-08-28T10:00:00Z")).toBe(true);
+    expect(recordPeer(p, "dev", RUNNING, "2026-08-28T10:01:00Z")).toBe(false);
+    const restarted: Origin = { ...RUNNING, runtime: { ...RUNNING.runtime!, session: "b71d0e2", pid: "22110" } };
+    expect(recordPeer(p, "dev", restarted, "2026-08-28T10:02:00Z")).toBe(true);
+    expect(currentPeers(readPeers(p))[0]?.runtime).toEqual({
+      name: "claude-code",
+      version: "2.1.234",
+      session: "b71d0e2",
+      pid: "22110",
+    });
+    // The dead session stays on the record, which is what makes "which session
+    // was it before the crash" answerable.
+    expect(readPeers(p).map((r) => r.runtime?.session)).toEqual(["6a41d6cd", "b71d0e2"]);
+    // The comparison reads fields, and a row from disk lists its keys in another
+    // order than a fresh origin does.
+    expect(sameOrigin(readPeers(p)[1]!, restarted)).toBe(true);
+    expect(sameOrigin(readPeers(p)[0]!, restarted)).toBe(false);
   });
 
   test("an unreadable or damaged file is skipped, never fatal", () => {
@@ -125,6 +228,20 @@ describe("the peers report", () => {
     { agent: "ana", host: "host-two", dir: "/srv/dev-work", commit: "abc1234", at: "2026-08-22T10:00:00Z" },
     { agent: "bo", host: "DESKTOP-STBCRML", dir: "C:\\xingyu-agent", at: "2026-08-22T10:01:00Z" },
   ];
+
+  test("the report names the runtime and the session a restart needs", () => {
+    // A host and a directory say where to look. The session id says which
+    // conversation was interrupted, and it is the field nobody can reconstruct
+    // once the process is gone, so the surface an agent reads has to print it.
+    const said = peersReport(
+      [{ agent: "ana", ...RUNNING, at: "2026-08-28T10:00:00Z" }],
+      HERE,
+      false,
+    );
+    expect(said).toContain("claude-code 2.1.234 session 6a41d6cd pid 14027");
+    // A row from a build that published no runtime prints as it always did.
+    expect(peersReport(rows, HERE, false)).not.toContain("session");
+  });
 
   test("every peer is named with host, directory and commit", () => {
     const said = peersReport(rows, HERE, false);

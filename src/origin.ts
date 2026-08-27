@@ -19,6 +19,24 @@ import { dirname, join } from "node:path";
 /** The metadata event_type marking a message as carrying its sender's origin. */
 export const ORIGIN_METADATA_TYPE = "scramble_origin";
 
+/** WHAT RUNS AN AGENT, as its own runtime names it.
+ *
+ *  The operator: "Scramble should store the agent runtime, work dir and session
+ *  ids for each agent in case of a system restart or crash." A host and a
+ *  directory survive a crash on their own; the session an agent belonged to does
+ *  not, and it is the field that says which conversation to resume and which
+ *  transcript holds what the agent was doing. */
+export interface Runtime {
+  /** `claude-code`, `akari`, or whatever a runtime publishes for itself. */
+  name: string;
+  /** The runtime's own version, when it publishes one. */
+  version?: string;
+  /** The session this agent belongs to, in its runtime's own id space. */
+  session?: string;
+  /** The process id on the host that recorded it. */
+  pid?: string;
+}
+
 export interface Origin {
   /** The machine's hostname. */
   host: string;
@@ -26,6 +44,58 @@ export interface Origin {
   dir: string;
   /** The scramble commit it runs, when the install knows one. */
   commit?: string;
+  /** What runs the agent, absent when nothing in the environment says. */
+  runtime?: Runtime;
+}
+
+/** The runtime this process is running under, read from the environment.
+ *
+ *  NOTHING IS GUESSED. An environment naming no runtime yields undefined, since a
+ *  made-up runtime or an invented session id would be read as fact by every peer
+ *  and by whoever is restarting the fleet.
+ *
+ *  NO SECRET IS EVER RECORDED. `CLAUDE_CODE_MESSAGING_TOKEN` sits beside the
+ *  variables read here, this record is world-readable on the host, and its fields
+ *  ride out on a Slack message. Only identifiers go in. */
+export function runtimeOf(env: (name: string) => string | undefined): Runtime | undefined {
+  const value = (name: string): string | undefined => {
+    const v = env(name);
+    return v === undefined || v.trim() === "" ? undefined : v.trim();
+  };
+  // AN OVERRIDE FIRST, so a runtime this code has never heard of still publishes
+  // itself without a change here.
+  const named = value("SCRAMBLE_RUNTIME");
+  if (named !== undefined) {
+    return {
+      name: named,
+      ...(value("SCRAMBLE_RUNTIME_VERSION") === undefined ? {} : { version: value("SCRAMBLE_RUNTIME_VERSION")! }),
+      ...(value("SCRAMBLE_SESSION_ID") === undefined ? {} : { session: value("SCRAMBLE_SESSION_ID")! }),
+      ...(value("SCRAMBLE_RUNTIME_PID") === undefined ? {} : { pid: value("SCRAMBLE_RUNTIME_PID")! }),
+    };
+  }
+  const claudeSession = value("CLAUDE_CODE_SESSION_ID");
+  if (claudeSession !== undefined || value("CLAUDECODE") !== undefined) {
+    // `AI_AGENT` carries `claude-code_2-1-234_agent...`, so the version sits in
+    // the second underscore field with dashes where the dots belong.
+    const marker = value("AI_AGENT") ?? "";
+    const field = marker.split("_")[1] ?? "";
+    const version = /^[0-9]+(-[0-9]+)+$/.test(field) ? field.replace(/-/g, ".") : undefined;
+    return {
+      name: "claude-code",
+      ...(version === undefined ? {} : { version }),
+      ...(claudeSession === undefined ? {} : { session: claudeSession }),
+      ...(value("CLAUDE_PID") === undefined ? {} : { pid: value("CLAUDE_PID")! }),
+    };
+  }
+  const instance = value("AKARI_INSTANCE_ID");
+  if (instance !== undefined || value("AKARI_LANE_ROOT") !== undefined) {
+    return {
+      name: "akari",
+      ...(value("AKARI_BUILD_COMMIT") === undefined ? {} : { version: value("AKARI_BUILD_COMMIT")! }),
+      ...(instance === undefined ? {} : { session: instance }),
+    };
+  }
+  return undefined;
 }
 
 /** One peer, and where it was last seen running. */
@@ -38,15 +108,31 @@ export interface PeerRow extends Origin {
 /** Build the origin for THIS process. `commit` is omitted when the running copy
  *  is a checkout with no installed sha: an absent field says nothing, and a
  *  made-up one says something false. */
-export function originOf(host: string, dir: string, commit?: string): Origin {
-  return { host, dir, ...(commit === undefined || commit === "" ? {} : { commit }) };
+export function originOf(host: string, dir: string, commit?: string, runtime?: Runtime): Origin {
+  return {
+    host,
+    dir,
+    ...(commit === undefined || commit === "" ? {} : { commit }),
+    ...(runtime === undefined ? {} : { runtime }),
+  };
 }
 
-/** The metadata block to attach to an outbound message. */
+/** The metadata block to attach to an outbound message.
+ *
+ *  Slack's payload holds strings, so the runtime rides as flat keys. */
 export function originMetadata(o: Origin): { event_type: string; event_payload: Record<string, string> } {
+  const r = o.runtime;
   return {
     event_type: ORIGIN_METADATA_TYPE,
-    event_payload: { host: o.host, dir: o.dir, ...(o.commit === undefined ? {} : { commit: o.commit }) },
+    event_payload: {
+      host: o.host,
+      dir: o.dir,
+      ...(o.commit === undefined ? {} : { commit: o.commit }),
+      ...(r === undefined ? {} : { runtime: r.name }),
+      ...(r?.version === undefined ? {} : { runtime_version: r.version }),
+      ...(r?.session === undefined ? {} : { session: r.session }),
+      ...(r?.pid === undefined ? {} : { pid: r.pid }),
+    },
   };
 }
 
@@ -62,9 +148,44 @@ export function readOrigin(metadata: unknown): Origin | undefined {
   const m = metadata as { event_type?: unknown; event_payload?: unknown };
   if (m.event_type !== ORIGIN_METADATA_TYPE) return undefined;
   if (typeof m.event_payload !== "object" || m.event_payload === null) return undefined;
-  const p = m.event_payload as { host?: unknown; dir?: unknown; commit?: unknown };
+  const p = m.event_payload as Record<string, unknown>;
   if (typeof p.host !== "string" || p.host === "" || typeof p.dir !== "string" || p.dir === "") return undefined;
-  return { host: p.host, dir: p.dir, ...(typeof p.commit === "string" && p.commit !== "" ? { commit: p.commit } : {}) };
+  const str = (key: string): string | undefined => {
+    const v = p[key];
+    return typeof v === "string" && v !== "" ? v : undefined;
+  };
+  const name = str("runtime");
+  return {
+    host: p.host,
+    dir: p.dir,
+    ...(str("commit") === undefined ? {} : { commit: str("commit")! }),
+    // A PAYLOAD WITH A SESSION AND NO RUNTIME NAME carries no runtime: the name
+    // is what makes the session id readable, since two runtimes' ids look alike
+    // and mean different things.
+    ...(name === undefined
+      ? {}
+      : {
+          runtime: {
+            name,
+            ...(str("runtime_version") === undefined ? {} : { version: str("runtime_version")! }),
+            ...(str("session") === undefined ? {} : { session: str("session")! }),
+            ...(str("pid") === undefined ? {} : { pid: str("pid")! }),
+          },
+        }),
+  };
+}
+
+/** Whether two origins say the same thing, field by field in a fixed order.
+ *
+ *  A `JSON.stringify` of each side was tried and it compares KEY ORDER: a row
+ *  read back from disk lists `agent` first and a fresh origin does not, so every
+ *  origin looked new and the file grew a line per message. */
+export function sameOrigin(a: Origin, b: Origin): boolean {
+  const flat = (o: Origin): string =>
+    [o.host, o.dir, o.commit ?? "", o.runtime?.name ?? "", o.runtime?.version ?? "", o.runtime?.session ?? "", o.runtime?.pid ?? ""].join(
+      " ",
+    );
+  return flat(a) === flat(b);
 }
 
 export function peersPath(configPath: string): string {
@@ -102,7 +223,11 @@ export function readPeers(path: string): PeerRow[] {
 export function recordPeer(path: string, agent: string, o: Origin, at: string): boolean {
   const rows = readPeers(path);
   const last = rows.filter((r) => r.agent === agent).at(-1);
-  if (last !== undefined && last.host === o.host && last.dir === o.dir && last.commit === o.commit) return false;
+  // THE WHOLE ORIGIN DECIDES WHETHER THIS IS NEWS, runtime and session included.
+  // A key of host, dir and commit alone kept the first session id an agent ever
+  // published and dropped every later one, so a restart into a new session left
+  // the record pointing at a session that had died.
+  if (last !== undefined && sameOrigin(last, o)) return false;
   mkdirSync(dirname(path), { recursive: true });
   appendFileSync(path, `${JSON.stringify({ agent, ...o, at })}\n`);
   return true;
@@ -156,9 +281,18 @@ export function peersReport(rows: PeerRow[], self: Origin | undefined, sameDir: 
       `old to stamp it.`
     );
   }
-  const lines = shown.map(
-    (r) => `  ${r.agent}  ${r.host}  ${r.dir}${r.commit === undefined ? "" : `  (${r.commit})`}  seen ${r.at}`,
-  );
+  // THE RUNTIME AND THE SESSION ARE WHAT A RESTART NEEDS. A host and a directory
+  // say where to look; the session id says which conversation was interrupted,
+  // and it is the field nobody can reconstruct after the process is gone.
+  const lines = shown.map((r) => {
+    const rt = r.runtime;
+    const ran =
+      rt === undefined
+        ? ""
+        : `  ${rt.name}${rt.version === undefined ? "" : ` ${rt.version}`}` +
+          `${rt.session === undefined ? "" : ` session ${rt.session}`}${rt.pid === undefined ? "" : ` pid ${rt.pid}`}`;
+    return `  ${r.agent}  ${r.host}  ${r.dir}${r.commit === undefined ? "" : `  (${r.commit})`}${ran}  seen ${r.at}`;
+  });
   // WHAT TO TELL EACH OF THEM DEPENDS ON THEIR OWN COMMIT. I announced two
   // commits with "both changes touch src/cli.ts", which was the range I had
   // just written. An agent five commits back answered with their own range: 15

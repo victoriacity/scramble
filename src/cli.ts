@@ -67,6 +67,7 @@ import {
   peersReport,
   readPeers,
   recordPeer,
+  runtimeOf,
   type Origin,
 } from "./origin";
 import {
@@ -782,6 +783,9 @@ async function cmdListen(argv: string[], io: Io): Promise<number> {
   const status = statusTracker(io, "local");
   const stopTicker = status ? status.startExpiryTicker(2000, io.sleep) : undefined;
   const addressedOnly = flags.has("addressed");
+  // A LISTENER IS THE LONGEST-LIVED THING AN AGENT RUNS, so its start is where
+  // this agent's own runtime, directory and session reach the record.
+  recordSelf(io, name);
   const drift = watchForNewerInstall(io);
   let lastSeq = 0;
   let backoff = 100;
@@ -1169,7 +1173,29 @@ function readCommitFile(dir: string): string {
 export function agentOrigin(io: Io): Origin | undefined {
   const host = io.hostname === undefined ? "" : io.hostname();
   if (host === "") return undefined;
-  return originOf(host, io.cwd(), installedCommit(io));
+  return originOf(host, io.cwd(), installedCommit(io), runtimeOf(io.env));
+}
+
+/** WRITE THIS AGENT'S OWN ROW, so a crash leaves it on disk.
+ *
+ *  The operator: "Scramble should store the agent runtime, work dir and session
+ *  ids for each agent in case of a system restart or crash." Every row in this
+ *  file came from a message a PEER sent, so the one agent whose runtime and
+ *  session this process knows for certain was the one agent missing from it: a
+ *  host that crashed took its own record with it, and the agents that recovered
+ *  the file found everyone except themselves.
+ *
+ *  Called on the delivery verbs and on the send, which is every path an agent
+ *  runs. Best-effort and reported: a record that cannot be written must not fail
+ *  the work it describes. */
+export function recordSelf(io: Io, agent: string): void {
+  const mine = agentOrigin(io);
+  if (mine === undefined || agent === "") return;
+  try {
+    recordPeer(peersPath(slackConfigPath(io)), agent, mine, new Date().toISOString());
+  } catch (e) {
+    io.writeErr(`own origin not recorded: ${String(e)}`);
+  }
 }
 
 function slackBackend(io: Io): { backend?: SlackBackend; error?: string } {
@@ -1414,6 +1440,7 @@ async function slackCmdListen(argv: string[], io: Io): Promise<number> {
   }
   const status = statusTracker(io, "slack", name);
   const stopTicker = status ? status.startExpiryTicker(2000, io.sleep) : undefined;
+  recordSelf(io, name);
   const drift = watchForNewerInstall(io);
   try {
     return await s.backend.listen(
@@ -2220,6 +2247,10 @@ async function settleSend(
   draft?: { hash: string; channel: string; at: string },
 ): Promise<void> {
   const s = slackBackend(io);
+  // THE SEND IS THE OTHER PATH EVERY AGENT RUNS. An agent that speaks without
+  // ever starting a listener would be absent from the record it publishes to
+  // every peer.
+  recordSelf(io, from);
   try {
     if (s.backend !== undefined) await reportCrossings(io, s.backend, channel, from, ts);
     closeInboxItems(inboxPath(slackConfigPath(io), from), channel, ts ?? new Date().toISOString(), thread);

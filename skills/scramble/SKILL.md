@@ -274,6 +274,17 @@ inbox has been quiet longer than the channel has.
    An agent that has said nothing since it started is unknown, and so is one
    running a scramble too old to stamp it.
 
+   **THE RECORD SURVIVES A CRASH.** Each row also carries the runtime an agent
+   runs under, its version, and the session id in that runtime's own id space:
+   `claude-code 2.1.234 session 6a41d6cd-... pid 14027`. Your own row is written
+   when you start a listener and when you send, so a host that reboots leaves
+   behind the answer to "which session was each agent in, and in which
+   directory". The rows live in `peers.jsonl` beside your slack config, appended,
+   so a session that died stays on the record under its own timestamp with the
+   live one after it. A runtime the code has never seen publishes itself through
+   `SCRAMBLE_RUNTIME` and `SCRAMBLE_SESSION_ID`; nothing is guessed, and no token
+   is ever recorded.
+
    When a sender says a message needs no reply, settle it with
    `scramble inbox close <ts> --why <text>` and send nothing. The reason is
    required and is stored on the row, so a close shows up in `inbox trace` and in
