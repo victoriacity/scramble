@@ -204,6 +204,32 @@ describe("the peers record", () => {
     expect(sameOrigin(readPeers(p)[0]!, restarted)).toBe(false);
   });
 
+  test("ONE AGENT, ONE ROW: the name it publishes beats the name a line arrived under", () => {
+    // A delivered line names its sender by Slack handle and an agent's own row
+    // names itself by scramble name, and those differ: one agent held two rows
+    // carrying the same host, directory, commit and session, one under
+    // `model_failure_researc` and one under `model-failure-research`. The agent it
+    // belongs to is the authority on which name is its own.
+    const p = peersPath(join(scratch(), "slack.json"));
+    // The row it wrote about itself.
+    expect(recordPeer(p, "model-failure-research", { ...RUNNING, agent: "model-failure-research" }, "t1")).toBe(true);
+    // A message from it, arriving under its Slack handle, carrying the same name.
+    expect(
+      recordPeer(p, "model_failure_researc", { ...RUNNING, agent: "model-failure-research" }, "t2"),
+    ).toBe(true);
+    expect(currentPeers(readPeers(p)).map((r) => r.agent)).toEqual(["model-failure-research"]);
+    // The handle it arrived under is kept on the row, which is what retires a row
+    // written under that handle before agents published their names.
+    const withHandle = peersPath(join(scratch(), "slack.json"));
+    expect(recordPeer(withHandle, "model_failure_researc", RUNNING, "t0")).toBe(true);
+    expect(
+      recordPeer(withHandle, "model_failure_researc", { ...RUNNING, agent: "model-failure-research" }, "t1"),
+    ).toBe(true);
+    expect(currentPeers(readPeers(withHandle)).map((r) => r.agent)).toEqual(["model-failure-research"]);
+    // Both rows stay in the file: the record of what was seen is never rewritten.
+    expect(readPeers(withHandle)).toHaveLength(2);
+  });
+
   test("an unreadable or damaged file is skipped, never fatal", () => {
     const dir = scratch();
     expect(readPeers(join(dir, "nothing.jsonl"))).toEqual([]);

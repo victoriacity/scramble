@@ -1170,10 +1170,10 @@ function readCommitFile(dir: string): string {
  *  Undefined means this build publishes NO origin, which is what an Io with no
  *  hostname seam knows. A guessed host would be worse than none: a peer
  *  reading it would believe it. */
-export function agentOrigin(io: Io): Origin | undefined {
+export function agentOrigin(io: Io, agent?: string): Origin | undefined {
   const host = io.hostname === undefined ? "" : io.hostname();
   if (host === "") return undefined;
-  return originOf(host, io.cwd(), installedCommit(io), runtimeOf(io.env));
+  return originOf(host, io.cwd(), installedCommit(io), runtimeOf(io.env), agent);
 }
 
 /** WRITE THIS AGENT'S OWN ROW, so a crash leaves it on disk.
@@ -1189,7 +1189,7 @@ export function agentOrigin(io: Io): Origin | undefined {
  *  runs. Best-effort and reported: a record that cannot be written must not fail
  *  the work it describes. */
 export function recordSelf(io: Io, agent: string): void {
-  const mine = agentOrigin(io);
+  const mine = agentOrigin(io, agent);
   if (mine === undefined || agent === "") return;
   try {
     recordPeer(peersPath(slackConfigPath(io)), agent, mine, new Date().toISOString());

@@ -966,7 +966,10 @@ export class SlackBackend {
         // through history and through the socket, which is how a peer's status
         // line is already recognised, so this needs no app change from anyone
         // and works for an app owned by a different login.
-        ...(this.origin === undefined ? {} : { metadata: originMetadata(this.origin) }),
+        // THE SENDER NAMES ITSELF. `as` is the scramble name, and a receiver
+        // reading `from` off the delivered line sees the Slack handle instead, so
+        // one agent held two rows in the peer record under its two ids.
+        ...(this.origin === undefined ? {} : { metadata: originMetadata({ ...this.origin, agent: as }) }),
       }),
     });
     if (!r.ok) return { ok: false, error: r.error };

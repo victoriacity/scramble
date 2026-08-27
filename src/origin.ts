@@ -46,6 +46,15 @@ export interface Origin {
   commit?: string;
   /** What runs the agent, absent when nothing in the environment says. */
   runtime?: Runtime;
+  /** THE SENDER'S OWN NAME FOR ITSELF, which settles which id space this row
+   *  belongs to.
+   *
+   *  A delivered line carries the Slack handle in `from`, and an agent's own row
+   *  carries its scramble name. Those differ (`model-failure-research` is
+   *  `model_failure_researc` on Slack), so one agent appeared twice in the peer
+   *  list with the same host, directory and session on both rows. An agent
+   *  publishes its own name, and the receiver records it under that. */
+  agent?: string;
 }
 
 /** The runtime this process is running under, read from the environment.
@@ -103,17 +112,24 @@ export interface PeerRow extends Origin {
   agent: string;
   /** When this was recorded, ISO, so a stale row reads as stale. */
   at: string;
+  /** The name the message arrived under, when it differs from the agent's own.
+   *
+   *  This is what retires the rows written before an agent published its name:
+   *  a row keyed on a Slack handle is dropped from the current list once another
+   *  row claims that handle. */
+  handle?: string;
 }
 
 /** Build the origin for THIS process. `commit` is omitted when the running copy
  *  is a checkout with no installed sha: an absent field says nothing, and a
  *  made-up one says something false. */
-export function originOf(host: string, dir: string, commit?: string, runtime?: Runtime): Origin {
+export function originOf(host: string, dir: string, commit?: string, runtime?: Runtime, agent?: string): Origin {
   return {
     host,
     dir,
     ...(commit === undefined || commit === "" ? {} : { commit }),
     ...(runtime === undefined ? {} : { runtime }),
+    ...(agent === undefined || agent === "" ? {} : { agent }),
   };
 }
 
@@ -132,6 +148,7 @@ export function originMetadata(o: Origin): { event_type: string; event_payload: 
       ...(r?.version === undefined ? {} : { runtime_version: r.version }),
       ...(r?.session === undefined ? {} : { session: r.session }),
       ...(r?.pid === undefined ? {} : { pid: r.pid }),
+      ...(o.agent === undefined ? {} : { agent: o.agent }),
     },
   };
 }
@@ -159,6 +176,7 @@ export function readOrigin(metadata: unknown): Origin | undefined {
     host: p.host,
     dir: p.dir,
     ...(str("commit") === undefined ? {} : { commit: str("commit")! }),
+    ...(str("agent") === undefined ? {} : { agent: str("agent")! }),
     // A PAYLOAD WITH A SESSION AND NO RUNTIME NAME carries no runtime: the name
     // is what makes the session id readable, since two runtimes' ids look alike
     // and mean different things.
@@ -220,24 +238,41 @@ export function readPeers(path: string): PeerRow[] {
  *  directory has both facts on the record with their times, which is what makes
  *  "it used to run there" answerable. A repeat of what the newest row already
  *  says is not written, so a busy channel does not grow the file per message. */
-export function recordPeer(path: string, agent: string, o: Origin, at: string): boolean {
+export function recordPeer(path: string, arrivedAs: string, o: Origin, at: string): boolean {
+  // THE NAME THE AGENT PUBLISHES WINS. A delivered line names its sender by Slack
+  // handle, and an agent's own row names itself by scramble name, so one agent
+  // held two rows carrying the same host, directory and session under
+  // `model_failure_researc` and `model-failure-research`. The agent it belongs to
+  // is the authority on which it is; `arrivedAs` is the fallback for a message
+  // from a build that publishes no name.
+  const agent = o.agent === undefined || o.agent === "" ? arrivedAs : o.agent;
+  const handle = agent === arrivedAs ? undefined : arrivedAs;
   const rows = readPeers(path);
   const last = rows.filter((r) => r.agent === agent).at(-1);
   // THE WHOLE ORIGIN DECIDES WHETHER THIS IS NEWS, runtime and session included.
   // A key of host, dir and commit alone kept the first session id an agent ever
   // published and dropped every later one, so a restart into a new session left
   // the record pointing at a session that had died.
-  if (last !== undefined && sameOrigin(last, o)) return false;
+  if (last !== undefined && sameOrigin(last, o) && last.handle === handle) return false;
   mkdirSync(dirname(path), { recursive: true });
-  appendFileSync(path, `${JSON.stringify({ agent, ...o, at })}\n`);
+  appendFileSync(path, `${JSON.stringify({ agent, ...o, ...(handle === undefined ? {} : { handle }), at })}\n`);
   return true;
 }
 
-/** The newest row per agent. */
+/** The newest row per agent, with the handle-keyed rows an agent has since
+ *  claimed left out.
+ *
+ *  A row written before agents published their names is keyed on a Slack handle.
+ *  Once the same agent writes a row naming that handle as its own, the old row is
+ *  the same agent under its other id, and printing both says two agents run in
+ *  one directory in one session. */
 export function currentPeers(rows: PeerRow[]): PeerRow[] {
   const byAgent = new Map<string, PeerRow>();
   for (const r of rows) byAgent.set(r.agent, r);
-  return [...byAgent.values()].sort((a, b) => a.agent.localeCompare(b.agent));
+  const claimed = new Set([...byAgent.values()].map((r) => r.handle).filter((h): h is string => h !== undefined));
+  return [...byAgent.values()]
+    .filter((r) => !claimed.has(r.agent))
+    .sort((a, b) => a.agent.localeCompare(b.agent));
 }
 
 /** The line an agent reads. `sameDir` narrows to peers sharing a directory with
