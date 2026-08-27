@@ -2360,6 +2360,38 @@ describe("message check under the slack backend", () => {
     expect(said).toContain("/invite @dev");
     // And NOT one line per channel, which is what read as a fault.
     expect(said).not.toContain("slack: theirs: channel_not_found");
+
+    // A SECOND SWEEP WITH THE SAME SET IS SILENT. This line printed every tick,
+    // so a monitor guarding on `if [ -n "$out" ]` fired every time: 123 of 187
+    // ticks carried it and nothing else (alignment-benchmark, 2026-08-27).
+    const again: string[] = [];
+    expect(
+      await main(["message", "check", "--as", "dev", "--backend", "slack"], { ...io, writeErr: (l) => again.push(l) }),
+    ).toBe(0);
+    expect(again.join("\n")).not.toContain("is not a member of");
+
+    // A CHANGE SPEAKS. Losing one of them is news, and so is gaining one.
+    writeSlackConfig(cwd, {
+      appToken: "xapp-1",
+      token: "xoxb-1",
+      channels: { mine: "C1", theirs: "C2" },
+      agents: { dev: { token: "T", handle: "dev" } },
+    });
+    const moved: string[] = [];
+    expect(
+      await main(["message", "check", "--as", "dev", "--backend", "slack"], { ...io, writeErr: (l) => moved.push(l) }),
+    ).toBe(0);
+    expect(moved.join("\n")).toContain("skipped 1 channel(s) dev is not a member of: theirs");
+
+    // A CURSOR FILE THAT WILL NOT PARSE reads as no remembered set, so the
+    // advisory speaks. Silence there would hide a real change behind a corrupt
+    // file.
+    writeFileSync(join(cwd, ".scramble", "cursors", "dev.json"), "{ broken");
+    const broken: string[] = [];
+    expect(
+      await main(["message", "check", "--as", "dev", "--backend", "slack"], { ...io, writeErr: (l) => broken.push(l) }),
+    ).toBe(0);
+    expect(broken.join("\n")).toContain("is not a member of");
   });
 
   test("with the membership listing broken, every channel stays loud", async () => {
@@ -2482,7 +2514,9 @@ describe("message check under the slack backend", () => {
     // And alpha's cursor is untouched by beta's sweep: no read-modify-write race
     // over one file.
     const after = JSON.parse(readFileSync(alpha, "utf8")) as Record<string, unknown>;
-    expect(Object.keys(after)).toEqual(["slack:alpha"]);
+    // Each agent's own file carries its own cursor and its own skipped set, and
+    // nothing belonging to the other agent.
+    expect(Object.keys(after).sort()).toEqual(["slack-skipped:alpha", "slack:alpha"]);
   });
 
   test("the sweep covers channels this agent is IN, beyond what the config maps", async () => {

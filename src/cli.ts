@@ -1219,20 +1219,30 @@ async function settleStatus(p: Promise<unknown> | undefined, io: Io): Promise<vo
  *  no global sequence, so the resume point it can support is a conversation ts
  *  per channel, kept client-side like the local cursor. */
 const SLACK_CURSOR_PREFIX = "slack:";
+/** The channels this agent was outside of at the last sweep, kept beside the
+ *  cursor in the same file and read by the same reader. */
+const SLACK_SKIPPED_PREFIX = "slack-skipped:";
 
-function readSlackCursor(io: Io, name: string): Record<string, string> {
+function readSlackState(io: Io, name: string): { cursor: Record<string, string>; skipped: string[] } {
   try {
     const j = JSON.parse(readFileSync(cursorPath(io, name), "utf8")) as Record<string, unknown>;
     const v = j[`${SLACK_CURSOR_PREFIX}${name}`];
-    if (typeof v === "object" && v !== null && !Array.isArray(v))
-      return v as Record<string, string>;
+    const sk = j[`${SLACK_SKIPPED_PREFIX}${name}`];
+    return {
+      cursor: typeof v === "object" && v !== null && !Array.isArray(v) ? (v as Record<string, string>) : {},
+      skipped: Array.isArray(sk) ? sk.filter((x): x is string => typeof x === "string") : [],
+    };
   } catch {
     /* absent or corrupt cursor: a fresh per-channel ledger, drain from the start */
   }
-  return {};
+  return { cursor: {}, skipped: [] };
 }
 
-function writeSlackCursor(io: Io, name: string, perChannel: Record<string, string>): void {
+function readSlackCursor(io: Io, name: string): Record<string, string> {
+  return readSlackState(io, name).cursor;
+}
+
+function writeSlackCursor(io: Io, name: string, perChannel: Record<string, string>, skipped?: string[]): void {
   const p = cursorPath(io, name, true);
   let j: Record<string, unknown> = {};
   try {
@@ -1242,6 +1252,7 @@ function writeSlackCursor(io: Io, name: string, perChannel: Record<string, strin
     /* absent cursor file is a fresh ledger */
   }
   j[`${SLACK_CURSOR_PREFIX}${name}`] = perChannel;
+  if (skipped !== undefined) j[`${SLACK_SKIPPED_PREFIX}${name}`] = skipped;
   // THE DIRECTORY OF THE FILE BEING WRITTEN. This made the cwd `.scramble`
   // whatever path `p` resolved to, so on a host where the cursor lives beside
   // the config the write would fail for a directory that does not exist yet.
@@ -1393,7 +1404,9 @@ async function messageCheckSlack(flags: Map<string, string>, io: Io): Promise<nu
     io.writeErr(s.error ?? "slack backend unavailable");
     return 1;
   }
-  const started = readSlackCursor(io, name);
+  const startedState = readSlackState(io, name);
+  const started = startedState.cursor;
+  const startedSkipped = startedState.skipped;
   const next = { ...started };
   const ids = s.backend.identities(name);
   let unreachable = 0;
@@ -1505,7 +1518,9 @@ async function messageCheckSlack(flags: Map<string, string>, io: Io): Promise<nu
     }
     drained += 1;
   }
-  writeSlackCursor(io, name, next);
+  // THE SKIPPED SET RIDES WITH THE CURSOR, written by the same call, so the
+  // next sweep can tell a moved set from a standing one.
+  writeSlackCursor(io, name, next, [...notMine].sort());
   if (selfHits.length > 0) {
     io.writeErr(
       `${selfHits.length} message(s) you already sent would be refused by today's rules:\n` +
@@ -1514,10 +1529,19 @@ async function messageCheckSlack(flags: Map<string, string>, io: Io): Promise<nu
         `Correct them in the channel where they are still standing.`,
     );
   }
-  // ONE LINE FOR ALL OF THEM, and it says what they are. Silence here would be
-  // wrong too: a channel this agent expected to be in, and is not, has to be
-  // findable, and this is where someone looks.
-  if (notMine.length > 0) {
+  // ONE LINE FOR ALL OF THEM, AND ONLY WHEN THE SET CHANGES. This printed on
+  // every sweep, so a monitor guarding on `if [ -n "$out" ]` fired every tick:
+  // 123 of 187 ticks carried this line and nothing else (alignment-benchmark,
+  // 2026-08-27). A line that repeats identically every fifteen minutes teaches
+  // its reader to skip the whole stream, which is where a real report goes to
+  // die.
+  //
+  // The set is a standing fact about a shared config, so `doctor` prints it on
+  // every run and the sweep speaks when it MOVES: a channel this agent expected
+  // to be in stays findable, and the quiet ticks stay quiet.
+  const skippedNow = [...notMine].sort();
+  const setMoved = skippedNow.join("\u0000") !== startedSkipped.join("\u0000");
+  if (notMine.length > 0 && setMoved) {
     io.writeErr(
       `slack: skipped ${notMine.length} channel(s) ${name} is not a member of: ${notMine.join(", ")}. ` +
         `The config is shared by the agents on this host, so these belong to another one. ` +
