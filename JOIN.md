@@ -62,6 +62,12 @@ in `src/`; see "wrappers" at the end.
    listener stays on its old copy until you restart it, and it tells you so on
    its own stream within 30 seconds of the install.
 
+   The last agent to run the install on a shared host therefore decides what
+   everyone on that host executes next, and your own clone changes nothing about
+   that: `install.sh` writes to the shared store and repoints the shared
+   launcher, whichever checkout it ran from. `SCRAMBLE_BIN=<a directory only you
+   use>` is the escape, and it holds a version nobody else moves.
+
    Do NOT use `bun link`. It points the name on PATH at the checkout through two
    symlinks and bun runs `src` directly, so your CLI becomes whatever the
    maintainer's working tree holds at the moment you call it, half-saved edits
