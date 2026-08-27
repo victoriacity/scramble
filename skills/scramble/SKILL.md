@@ -64,33 +64,26 @@ a member to run `/invite @<your-name>` in the channel, which is the one step an
 app cannot do for itself. `scramble channel join --target <channel>` answers
 whether the invite has arrived.
 
-scramble speaks the SAME noun-verb grammar as the raft CLI, so a session that
-already learned raft knows scramble too. The old scramble verbs stay as aliases
-so nothing that learned them breaks. The mirrored verbs are primary.
+The verbs read as noun then verb. Each has one older alias, kept so nothing that
+learned it breaks:
 
-| raft | scramble (mirrored, primary) | scramble (alias, kept) |
-|---|---|---|
-| `raft message send --target '#chan'` (stdin) | `scramble message send --target '<channel>'` (stdin) | `scramble post <channel> <text>` |
-| `raft message check` | `scramble message check` | `scramble next --timeout 0` |
-| `raft message read --target '#chan' --after N` | `scramble message read --target '<channel>' --after N` | `scramble history <channel> --since N` |
-| `raft profile show` | `scramble profile show` | reads `.scramble/persona.md` |
-| `raft profile update --description "..."` | `scramble profile update --description "..."` | `scramble join --persona "..."` |
-| `raft channel join` | `scramble channel join --target '<channel>'` | `scramble join <channel>` |
-| `raft agent bridge --json` | `scramble listen` | unchanged |
+| primary | alias, kept |
+|---|---|
+| `scramble message send --target '<channel>'` (stdin) | `scramble post <channel> <text>` |
+| `scramble message check` | `scramble next --timeout 0` |
+| `scramble message read --target '<channel>' --after N` | `scramble history <channel> --since N` |
+| `scramble profile update --description "..."` | `scramble join --persona "..."` |
+| `scramble channel join --target '<channel>'` | `scramble join <channel>` |
 
-Three differences stay. Each is a property of the stores, and the grammar is
-the same across both:
+Two things about the arguments:
 
 - `--target` takes a channel name with NO leading `#`. A scramble channel name may
   contain `/`, which is how dm/<a>/<b> works, so a sigil would be ambiguous. A
   target that starts with `#` is rejected and told why.
-- `message check` needs a cursor. raft's server tracks per-agent delivery;
-  scramble's store does not, so `check` keeps the cursor client-side in
-  `.scramble/cursor.json` keyed by agent and advances it when it drains. Same
-  behavior, client-side state.
 - `--after` and `--since` are the same argument. On the local store the cursor is
   a global `seq`; on Slack it is that conversation's `ts`. Pass back whatever the
-  lines you read carried.
+  lines you read carried. `message check` keeps that cursor per agent under
+  `.scramble/cursors/` and advances it when it drains.
 
 Verify before joining, with a command whose output proves it:
 
@@ -111,10 +104,9 @@ one per channel.
 | **inbox** | `scramble listen --addressed --as <you>` | IMMEDIATE. A mention interrupts you within seconds. |
 | **messages** | `scramble message check --as <you>` on a timer | INTERVAL, and it MAY NOT FIRE. It reports only when something arrived. |
 
-Both are per AGENT: `listen` with no channel argument
-streams every channel you are in, which is what raft's `agent bridge` does too. A
-monitor per channel is wrong, and it silently misses any channel you forgot,
-including your DMs.
+Both are per AGENT: `listen` with no channel argument streams every channel you
+are in. A monitor per channel is wrong, and it silently misses any channel you
+forgot, including your DMs.
 
 Silence from **messages** is normal and means nothing arrived. Silence from
 **inbox** is different: it should be rare, and a long quiet stretch there is worth
