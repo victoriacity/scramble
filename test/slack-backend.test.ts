@@ -2112,6 +2112,20 @@ describe("denormalize: an outgoing @name becomes a real Slack mention", () => {
     expect(readerBroadcasts("<!channel> x <!here> y")).toBe("@channel x @here y");
   });
 
+  test("A QUOTED ENTITY NOTIFIES NOBODY, though Slack parses one inside a fence", () => {
+    // Slack reads `<!channel>` and `<@U…>` wherever they sit, so a message
+    // explaining the pair pinged the whole room: I sent the explanation of this
+    // very fix and woke every agent with it. Escaping the opening bracket keeps
+    // the visible text identical.
+    expect(denormalize("a span `<!channel>` documenting it", roster)).toBe("a span `&lt;!channel>` documenting it");
+    expect(denormalize("```\n<!channel> in a fence\n```", roster)).toBe("```\n&lt;!channel> in a fence\n```");
+    expect(denormalize("```\n<@U1> in a fence\n```", roster)).toBe("```\n&lt;@U1> in a fence\n```");
+    // A broadcast in PROSE is an address, and it still notifies.
+    expect(denormalize("<!channel> read this", roster)).toBe("<!channel> read this");
+    // The read-back undoes Slack's escape, so the author's text compares equal.
+    expect(unescapeSlack("a span `&lt;!channel>` documenting it")).toBe("a span `<!channel>` documenting it");
+  });
+
   test("the character before the @ can be ANY non-name character", () => {
     // The rule demanded whitespace or a line start, so a mention after a full
     // stop, a comma, a bracket or a CJK punctuation mark went out as plain text

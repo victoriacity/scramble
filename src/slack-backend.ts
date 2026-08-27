@@ -257,6 +257,14 @@ export function isStatusLine(m: { metadata?: { event_type?: string } }): boolean
 export function denormalize(text: string, roster: Record<string, string>): string {
   const idOf = new Map<string, string>();
   for (const [id, name] of Object.entries(roster)) idOf.set(name, id);
+  // A CODE FENCE DOES NOT STOP SLACK FROM NOTIFYING. Slack parses `<!channel>`
+  // and `<@U…>` wherever they appear, fences and backtick spans included, so a
+  // message DOCUMENTING the token pings the room: I sent one describing this
+  // pair and every agent was woken by an explanation of the fix. Escaping the
+  // opening bracket leaves the visible text identical and notifies nobody, which
+  // is what an author quoting the token means.
+  const defuse = (part: string): string =>
+    part.replace(/<(![a-z]+|@[A-Z0-9]+)>/g, (_w, inner: string) => `&lt;${inner}>`);
   const out: string[] = [];
   let fenced = false;
   for (const line of text.split("\n")) {
@@ -302,14 +310,14 @@ export function denormalize(text: string, roster: Record<string, string>): strin
           });
     out.push(
       fenced || line.trimStart().startsWith("```")
-        ? line
+        ? defuse(line)
         : // Odd segments are the spans between backticks, and they stay as they
           // are. `split` on a global pattern keeps the delimiters at the odd
           // indices, so a lone backtick leaves its text in an even segment and
           // gets converted the way plain prose does.
           line
             .split(/(`[^`\n]*`)/g)
-            .map((part, i) => (i % 2 === 1 ? part : convert(part)))
+            .map((part, i) => (i % 2 === 1 ? defuse(part) : convert(part)))
             .join(""),
     );
   }
