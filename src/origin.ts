@@ -15,6 +15,7 @@
 // message that peer has SENT. A silent agent stays unknown until it speaks.
 import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { withFileLock } from "./filelock";
 
 /** The metadata event_type marking a message as carrying its sender's origin. */
 export const ORIGIN_METADATA_TYPE = "scramble_origin";
@@ -213,23 +214,35 @@ export function peersPath(configPath: string): string {
 /** Every peer row, oldest first, skipping anything unparseable: a half-written
  *  line from a killed process must not take the whole record down. */
 export function readPeers(path: string): PeerRow[] {
+  return readPeerFile(path).rows;
+}
+
+/** The rows AND the count of lines no parser could read.
+ *
+ *  A SKIPPED LINE IS A SIGNAL, and this dropped it. Six agents append to one file
+ *  on a shared filesystem, an agent reported a line nothing could parse, and the
+ *  reader had been stepping over it in silence since it appeared: the surface said
+ *  `here are the peers` and never `one line of the record is damaged`. */
+export function readPeerFile(path: string): { rows: PeerRow[]; damaged: number } {
   let raw: string;
   try {
     raw = readFileSync(path, "utf8");
   } catch {
-    return [];
+    return { rows: [], damaged: 0 };
   }
-  const out: PeerRow[] = [];
+  const rows: PeerRow[] = [];
+  let damaged = 0;
   for (const line of raw.split("\n")) {
     if (line.trim() === "") continue;
     try {
       const row = JSON.parse(line) as PeerRow;
-      if (typeof row.agent === "string" && typeof row.host === "string" && typeof row.dir === "string") out.push(row);
+      if (typeof row.agent === "string" && typeof row.host === "string" && typeof row.dir === "string") rows.push(row);
+      else damaged += 1;
     } catch {
-      continue;
+      damaged += 1;
     }
   }
-  return out;
+  return { rows, damaged };
 }
 
 /** Record where a peer was seen, when that is news.
@@ -247,16 +260,27 @@ export function recordPeer(path: string, arrivedAs: string, o: Origin, at: strin
   // from a build that publishes no name.
   const agent = o.agent === undefined || o.agent === "" ? arrivedAs : o.agent;
   const handle = agent === arrivedAs ? undefined : arrivedAs;
-  const rows = readPeers(path);
-  const last = rows.filter((r) => r.agent === agent).at(-1);
-  // THE WHOLE ORIGIN DECIDES WHETHER THIS IS NEWS, runtime and session included.
-  // A key of host, dir and commit alone kept the first session id an agent ever
-  // published and dropped every later one, so a restart into a new session left
-  // the record pointing at a session that had died.
-  if (last !== undefined && sameOrigin(last, o) && last.handle === handle) return false;
-  mkdirSync(dirname(path), { recursive: true });
-  appendFileSync(path, `${JSON.stringify({ agent, ...o, ...(handle === undefined ? {} : { handle }), at })}\n`);
-  return true;
+  // UNDER THE LOCK, read and append together. Six agents on one host append to
+  // this file over a shared filesystem, and an agent reported a line nothing
+  // could parse there along with EIO on the write. Two processes appending at
+  // once on a network filesystem tear a line, and the read that decides whether
+  // to write at all was happening outside any lock, so two agents starting
+  // together each wrote the row the other was about to write.
+  //
+  // This is the lock `status.json` and the inbox ledger already use: a directory,
+  // atomic to create on every filesystem this runs on.
+  return withFileLock(path, () => {
+    const rows = readPeers(path);
+    const last = rows.filter((r) => r.agent === agent).at(-1);
+    // THE WHOLE ORIGIN DECIDES WHETHER THIS IS NEWS, runtime and session
+    // included. A key of host, dir and commit alone kept the first session id an
+    // agent ever published and dropped every later one, so a restart into a new
+    // session left the record pointing at a session that had died.
+    if (last !== undefined && sameOrigin(last, o) && last.handle === handle) return false;
+    mkdirSync(dirname(path), { recursive: true });
+    appendFileSync(path, `${JSON.stringify({ agent, ...o, ...(handle === undefined ? {} : { handle }), at })}\n`);
+    return true;
+  });
 }
 
 /** The newest row per agent, with the handle-keyed rows an agent has since
@@ -303,7 +327,15 @@ export function peersOnOtherCommits(
     .sort((a, b) => (a.at < b.at ? 1 : -1));
 }
 
-export function peersReport(rows: PeerRow[], self: Origin | undefined, sameDir: boolean): string {
+export function peersReport(rows: PeerRow[], self: Origin | undefined, sameDir: boolean, damaged = 0): string {
+  // A DAMAGED LINE IS NAMED, and it used to be stepped over in silence. Six
+  // agents append to this file on a shared filesystem; one reported a line no
+  // parser could read, and every reader had been skipping it without a word.
+  const torn =
+    damaged === 0
+      ? ""
+      : `\n${damaged} line(s) in the record could not be parsed and were skipped. Two processes ` +
+        `appending at once on a shared filesystem tear a line; the rows above are what survived.`;
   const current = currentPeers(rows);
   const shown =
     sameDir && self !== undefined ? current.filter((r) => r.dir === self.dir && r.host === self.host) : current;
@@ -313,7 +345,7 @@ export function peersReport(rows: PeerRow[], self: Origin | undefined, sameDir: 
       `No peers${scope} have been seen yet.\n` +
       `A peer is learned from a message it SENT carrying its origin, so an agent that has ` +
       `said nothing since it started is unknown here, and so is one running a scramble too ` +
-      `old to stamp it.`
+      `old to stamp it.${torn}`
     );
   }
   // THE RUNTIME AND THE SESSION ARE WHAT A RESTART NEEDS. A host and a directory
@@ -343,5 +375,5 @@ export function peersReport(rows: PeerRow[], self: Origin | undefined, sameDir: 
       : `\nBefore you tell any of them what changed, read the range from THEIR commit:\n` +
         `  git diff --stat <their commit>..${self.commit}\n` +
         `Your own last diff describes nobody's build except yours.`;
-  return `${shown.length} peer(s):\n${lines.join("\n")}${note}`;
+  return `${shown.length} peer(s):\n${lines.join("\n")}${note}${torn}`;
 }

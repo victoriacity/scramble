@@ -65,6 +65,7 @@ import {
   peersOnOtherCommits,
   peersPath,
   peersReport,
+  readPeerFile,
   readPeers,
   recordPeer,
   runtimeOf,
@@ -2088,8 +2089,8 @@ async function cmdRewrites(argv: string[], io: Io): Promise<number> {
 
 async function cmdPeers(argv: string[], io: Io): Promise<number> {
   const { flags } = parseArgs(argv);
-  const rows = readPeers(peersPath(slackConfigPath(io)));
-  io.write(peersReport(rows, agentOrigin(io), flags.has("same-dir")));
+  const rows = readPeerFile(peersPath(slackConfigPath(io)));
+  io.write(peersReport(rows.rows, agentOrigin(io), flags.has("same-dir"), rows.damaged));
   return 0;
 }
 

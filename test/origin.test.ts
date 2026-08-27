@@ -16,6 +16,7 @@ import {
   peersOnOtherCommits,
   peersReport,
   readOrigin,
+  readPeerFile,
   readPeers,
   recordPeer,
   runtimeOf,
@@ -228,6 +229,55 @@ describe("the peers record", () => {
     expect(currentPeers(readPeers(withHandle)).map((r) => r.agent)).toEqual(["model-failure-research"]);
     // Both rows stay in the file: the record of what was seen is never rewritten.
     expect(readPeers(withHandle)).toHaveLength(2);
+  });
+
+  test("A DAMAGED LINE IS COUNTED AND NAMED, and the rows around it survive", () => {
+    // Six agents append to one file on a shared filesystem. An agent reported a
+    // line no parser could read there, along with EIO on the write, and every
+    // reader had been stepping over that line in silence: the surface said "here
+    // are the peers" and never "one line of this file is damaged".
+    const dir = scratch();
+    const p = join(dir, "peers.jsonl");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      p,
+      `${JSON.stringify({ agent: "ana", host: "h", dir: "/w", at: "t1" })}\n` +
+        `{"agent":"bo","host":"h","di\n` +
+        `{"agent":"cy"}\n` +
+        `${JSON.stringify({ agent: "zed", host: "h", dir: "/w", at: "t2" })}\n`,
+    );
+    const read = readPeerFile(p);
+    expect(read.rows.map((r) => r.agent)).toEqual(["ana", "zed"]);
+    expect(read.damaged).toBe(2);
+    // The count reaches the reader, in both shapes of the report.
+    expect(peersReport(read.rows, HERE, false, read.damaged)).toContain("2 line(s) in the record could not be parsed");
+    expect(peersReport([], HERE, false, read.damaged)).toContain("2 line(s) in the record could not be parsed");
+    // A clean file says nothing about damage.
+    expect(peersReport(read.rows, HERE, false, 0)).not.toContain("could not be parsed");
+  });
+
+  test("CONCURRENT WRITERS EACH LAND ONE ROW, and no line is torn", async () => {
+    // The read that decides whether to write sat outside any lock, so two agents
+    // starting together each wrote the row the other was about to write, and two
+    // appends at once on a network filesystem tear a line. This is the lock
+    // status.json and the inbox ledger already use.
+    const p = peersPath(join(scratch(), "slack.json"));
+    const writers = Array.from({ length: 8 }, (_, i) =>
+      Promise.resolve().then(() =>
+        recordPeer(p, `agent-${i}`, { host: "h", dir: "/w", commit: "abc1234", agent: `agent-${i}` }, `t${i}`),
+      ),
+    );
+    expect((await Promise.all(writers)).filter(Boolean)).toHaveLength(8);
+    const read = readPeerFile(p);
+    expect(read.damaged).toBe(0);
+    expect(read.rows).toHaveLength(8);
+    // And a repeat from every one of them adds nothing.
+    for (let i = 0; i < 8; i += 1) {
+      expect(recordPeer(p, `agent-${i}`, { host: "h", dir: "/w", commit: "abc1234", agent: `agent-${i}` }, "t9")).toBe(
+        false,
+      );
+    }
+    expect(readPeerFile(p).rows).toHaveLength(8);
   });
 
   test("an unreadable or damaged file is skipped, never fatal", () => {
