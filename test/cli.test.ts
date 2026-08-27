@@ -2658,6 +2658,37 @@ describe("message check under the slack backend", () => {
     expect(q.writes.join(" ")).toContain("No peers running in");
   });
 
+  test("`peers --json` answers a WATCHER with no token and no network", async () => {
+    // The damage count went on `doctor` first, and the agent watching for a torn
+    // line refused it with the right reason: doctor reads the app manifest, the
+    // stored token on their host expired, so a watcher shelling out to doctor
+    // every ten minutes leans on a command that already fails there. A question
+    // about a local file is answerable from the local file.
+    const cwd = scratchDir("peers-json");
+    writeSlackConfig(cwd, { token: "xoxb-1", channels: {}, agents: { dev: { token: "T", handle: "dev_bot" } } });
+    writeFileSync(
+      join(cwd, ".scramble", "peers.jsonl"),
+      `${JSON.stringify({ agent: "ana", host: "h", dir: "/w", commit: "abc1234", at: "t1" })}\n` +
+        `{"agent":"bo","ho\n` +
+        `${JSON.stringify({ agent: "ana", host: "h", dir: "/w2", commit: "abc1234", at: "t2" })}\n`,
+    );
+    // NO FETCH SEAM IS TOUCHED: the responder throws if anything calls out.
+    const { io, writes } = stubIo(cwd, async () => {
+      throw new Error("peers --json must not reach the network");
+    });
+    expect(await main(["peers", "--json"], { ...io, hostname: () => "my-host" })).toBe(0);
+    const said = JSON.parse(writes[0]!) as {
+      peers: Array<{ agent: string; dir: string }>;
+      damaged: number;
+      self: { host: string };
+    };
+    // The newest row per agent, the damage count, and this process's own origin.
+    expect(said.peers).toHaveLength(1);
+    expect(said.peers[0]).toMatchObject({ agent: "ana", dir: "/w2" });
+    expect(said.damaged).toBe(1);
+    expect(said.self.host).toBe("my-host");
+  });
+
   test("THIS AGENT'S OWN ROW is written too, so a crash leaves it on disk", async () => {
     // The operator: "Scramble should store the agent runtime, work dir and
     // session ids for each agent in case of a system restart or crash." Every

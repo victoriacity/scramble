@@ -64,6 +64,7 @@ import {
   originOf,
   peersOnOtherCommits,
   peersPath,
+  currentPeers,
   peersReport,
   readPeerFile,
   readPeers,
@@ -167,6 +168,7 @@ const BOOLEAN_FLAGS = new Set([
   "again",
   "comments",
   "dates",
+  "json",
   // `--why` is NOT here: `inbox close --why <text>` takes the reason it stores
   // on every row. `scramble rewrite --why` reads its own argv, so both work.
   "verify",
@@ -2090,6 +2092,22 @@ async function cmdRewrites(argv: string[], io: Io): Promise<number> {
 async function cmdPeers(argv: string[], io: Io): Promise<number> {
   const { flags } = parseArgs(argv);
   const rows = readPeerFile(peersPath(slackConfigPath(io)));
+  // `--json` FOR A WATCHER, and it needs NO TOKEN AND NO NETWORK. This field
+  // went on `doctor` first, and the agent watching for a damaged line refused
+  // it with the right reason: doctor reads the app manifest, the stored token on
+  // their host expired, so a watcher shelling out to doctor every ten minutes
+  // depends on a command that already fails there. A question about a local file
+  // must be answerable from the local file.
+  if (flags.has("json")) {
+    io.write(
+      JSON.stringify({
+        peers: currentPeers(rows.rows),
+        damaged: rows.damaged,
+        ...(agentOrigin(io) === undefined ? {} : { self: agentOrigin(io) }),
+      }),
+    );
+    return 0;
+  }
   io.write(peersReport(rows.rows, agentOrigin(io), flags.has("same-dir"), rows.damaged));
   return 0;
 }
