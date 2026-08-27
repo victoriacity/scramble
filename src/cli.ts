@@ -121,6 +121,64 @@ export interface Io {
    *  A seam so a test is deterministic, and absent means this build publishes no
    *  origin at all. */
   hostname?(): string;
+  /** EVERY ENVIRONMENT NAME THIS PROCESS WAS GIVEN, so a misspelled override can
+   *  be reported. `io.env` answers one name at a time and can never notice a name
+   *  nothing asks for. Absent means the check stays quiet. */
+  envNames?(): string[];
+}
+
+/** Every `SCRAMBLE_` name this code reads. A name outside this list is a typo or
+ *  a leftover, and until now it was ignored in silence.
+ *
+ *  An agent pointed a check at a copy of a file with `SCRAMBLE_CONFIG`, which
+ *  nothing reads: the command read the production file, answered `damaged: 0`,
+ *  and that answer was true of the file it read. They nearly filed a bug saying
+ *  the field did not work, and reading `slackConfigPath` is what stopped them. An
+ *  override that misses reads exactly like a clean result. */
+export const KNOWN_ENV = [
+  "SCRAMBLE_BACKEND",
+  "SCRAMBLE_BIN",
+  "SCRAMBLE_BUN",
+  "SCRAMBLE_HOME",
+  "SCRAMBLE_PROC",
+  "SCRAMBLE_REWRITE_KEY",
+  "SCRAMBLE_REWRITE_MODEL",
+  "SCRAMBLE_REWRITE_PROVIDER",
+  "SCRAMBLE_REWRITE_TIMEOUT_MS",
+  "SCRAMBLE_REWRITE_URL",
+  "SCRAMBLE_RUNTIME",
+  "SCRAMBLE_RUNTIME_PID",
+  "SCRAMBLE_RUNTIME_VERSION",
+  "SCRAMBLE_SESSION_ID",
+  "SCRAMBLE_SLACK_CONFIG",
+  "SCRAMBLE_STATUS",
+  "SCRAMBLE_STATUS_TTL",
+  "SCRAMBLE_TOKEN",
+  "SCRAMBLE_URL",
+];
+
+/** The line to print for any `SCRAMBLE_` name this build does not read, with the
+ *  nearest name it does read. Empty when every name is known. */
+export function unknownEnvNote(names: string[], known: string[] = KNOWN_ENV): string {
+  const unknown = names.filter((n) => n.startsWith("SCRAMBLE_") && !known.includes(n)).sort();
+  if (unknown.length === 0) return "";
+  const nearest = (name: string): string => {
+    // The known name sharing the longest prefix, which catches a dropped or added
+    // word: SCRAMBLE_CONFIG against SCRAMBLE_SLACK_CONFIG, SCRAMBLE_KEY against
+    // SCRAMBLE_REWRITE_KEY.
+    const shared = (a: string): number => {
+      let i = 0;
+      while (i < a.length && i < name.length && a[i] === name[i]) i += 1;
+      return i;
+    };
+    const tail = name.slice("SCRAMBLE_".length);
+    const byTail = known.filter((k) => k.endsWith(`_${tail}`) || k === `SCRAMBLE_${tail}`);
+    const pick = byTail[0] ?? [...known].sort((a, b) => shared(b) - shared(a))[0];
+    return pick ?? "";
+  };
+  return unknown
+    .map((n) => `env: ${n} is set and this build reads no such name. Did you mean ${nearest(n)}?`)
+    .join("\n");
 }
 
 /** The CLI owns --bind string parsing. The one interpretation site: it turns a
@@ -3490,6 +3548,12 @@ export async function main(argv: string[], io: Io): Promise<number> {
   if (argv.length === 0 || argv.includes("--help") || argv.includes("-h")) {
     io.write(USAGE);
     return 0;
+  }
+  // A MISSPELLED OVERRIDE IS REPORTED, on every verb. An override that misses
+  // reads exactly like a clean result, and one agent nearly filed a bug on that.
+  {
+    const note = io.envNames === undefined ? "" : unknownEnvNote(io.envNames());
+    if (note !== "") io.writeErr(note);
   }
   const backend = selectBackend(argv, io);
   if (backend === null) return 1;

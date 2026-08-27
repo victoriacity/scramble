@@ -6,7 +6,7 @@ import type { ChannelStore } from "../src/store";
 import { createStore } from "../src/store";
 import { createHandler } from "../src/server";
 import { WORD_LIMIT } from "../src/language";
-import { main, parseBind, loadSlackConfig, slackConfigPath, staleConfigWarning, staleListeners, pickStale, staleListenerProblem, readProcesses, liveListeners, stillAlive, watchForNewerInstall, listenerCommit, listenersBehind, processesReadable, type Io } from "../src/cli";
+import { KNOWN_ENV, unknownEnvNote, main, parseBind, loadSlackConfig, slackConfigPath, staleConfigWarning, staleListeners, pickStale, staleListenerProblem, readProcesses, liveListeners, stillAlive, watchForNewerInstall, listenerCommit, listenersBehind, processesReadable, type Io } from "../src/cli";
 import { SCOPE_NAMES, BOT_EVENT_NAMES } from "../src/app-manifest";
 import { readTierBlock } from "../src/rewrite";
 
@@ -92,6 +92,40 @@ function stubIo(cwd: string, fetch: Io["fetch"]): { io: Io; writes: string[]; er
   };
   return { io, writes, errs, urls };
 }
+
+describe("an override that misses is REPORTED", () => {
+  // An agent pointed a check at a copy of a file with `SCRAMBLE_CONFIG`, which
+  // nothing reads. The command read the production file, answered `damaged: 0`,
+  // and that answer was true of the file it read. They nearly filed a bug saying
+  // the field did not work, and reading `slackConfigPath` is what stopped them.
+  // An override that misses reads exactly like a clean result.
+  test("a SCRAMBLE_ name this build never reads is named, with the nearest one it does", () => {
+    expect(unknownEnvNote(["SCRAMBLE_CONFIG"])).toContain("SCRAMBLE_CONFIG is set and this build reads no such name");
+    expect(unknownEnvNote(["SCRAMBLE_CONFIG"])).toContain("Did you mean SCRAMBLE_SLACK_CONFIG?");
+    expect(unknownEnvNote(["SCRAMBLE_KEY"])).toContain("Did you mean SCRAMBLE_REWRITE_KEY?");
+    // Every name this build reads stays quiet, and so does the rest of the
+    // environment.
+    expect(unknownEnvNote(KNOWN_ENV)).toBe("");
+    expect(unknownEnvNote(["HOME", "PATH", "CLAUDE_CODE_SESSION_ID"])).toBe("");
+    // Several at once, sorted, one line each.
+    expect(unknownEnvNote(["SCRAMBLE_ZZZ", "SCRAMBLE_AAA"]).split("\n")).toHaveLength(2);
+    expect(unknownEnvNote(["SCRAMBLE_ZZZ", "SCRAMBLE_AAA"]).split("\n")[0]).toContain("SCRAMBLE_AAA");
+  });
+
+  test("the note reaches stderr on any verb, and the verb still runs", async () => {
+    const cwd = scratchDir("env-typo");
+    const { io, writes, errs } = stubIo(cwd, async () => new Response("{}", { status: 200 }));
+    // `version` exits 1 from a checkout, which is its own signal; what matters
+    // here is that the note reached stderr and the verb still answered.
+    await main(["version"], { ...io, envNames: () => ["SCRAMBLE_CONFIG", "HOME"] });
+    expect(errs.join(" ")).toContain("SCRAMBLE_CONFIG is set");
+    expect(writes.join(" ")).toContain("scramble");
+    // A build with no way to list its environment stays silent.
+    const quiet = stubIo(cwd, async () => new Response("{}", { status: 200 }));
+    await main(["version"], quiet.io);
+    expect(quiet.errs.join(" ")).not.toContain("reads no such name");
+  });
+});
 
 describe("config resolution", () => {
   test("--url/--token beat env beat config.json beat localhost default", async () => {

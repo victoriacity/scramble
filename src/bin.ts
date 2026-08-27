@@ -41,6 +41,9 @@ const io = {
   env(name: string): string | undefined {
     return process.env[name];
   },
+  envNames(): string[] {
+    return Object.keys(process.env);
+  },
   cwd(): string {
     return process.cwd();
   },
