@@ -304,9 +304,14 @@ export function computeMentions(channel: string, text: string, sender: string): 
     // nobody. Measured on a message of mine whose fence carried the words
     // `preserve EVERY @name`: the delivery came back with `name` in its mention
     // list, and no such agent exists (model-failure-research, 2026-08-27).
-    for (const tok of proseOf(text).split(/\s+/)) {
-      if (!tok.startsWith("@")) continue;
-      const name = tok.slice(1).replace(/^\W+/, "").replace(/\W+$/, "");
+    // THE SAME NAME PATTERN `denormalize` CONVERTS, so what this records and what
+    // Slack notifies are the same string. Splitting on whitespace and trimming
+    // non-word characters kept a possessive: `@alignment_benchmark's` converted
+    // to that agent's id and recorded `alignment_benchmark's`, a name nobody
+    // has, so the person was pinged while their ledger owed nothing
+    // (model-failure-research, 2026-08-27).
+    for (const m of proseOf(text).matchAll(/@([A-Za-z0-9._-]+)/g)) {
+      const name = (m[1] ?? "").replace(/[._-]+$/, "");
       if (name) out.add(name);
     }
   }

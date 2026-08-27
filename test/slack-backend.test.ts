@@ -156,6 +156,17 @@ describe("computeMentions", () => {
     expect(computeMentions("general", "hello there", "x")).toEqual([]);
   });
 
+  test("a possessive handle records the NAME, the way Slack converts it", () => {
+    // `@alignment_benchmark's` converted to that agent's id and recorded
+    // `alignment_benchmark's`, a name nobody has, so the person was pinged while
+    // their ledger owed them nothing (model-failure-research, 2026-08-27).
+    expect(computeMentions("general", "@ana's table was right.", "x")).toEqual(["ana"]);
+    expect(computeMentions("general", "@ana. @bo, @cy!", "x")).toEqual(["ana", "bo", "cy"]);
+    // A handle that legitimately ends in a dot or dash keeps its own characters
+    // trimmed only at the end, the way the outgoing conversion treats them.
+    expect(computeMentions("general", "ask @a.b_c-d now", "x")).toEqual(["a.b_c-d"]);
+  });
+
   test("an @name inside a fence or a backtick span is NOT a mention", () => {
     // `denormalize` skips fenced blocks and backtick spans, so Slack makes no
     // entity for a name written in one. This counted them anyway, and a message
