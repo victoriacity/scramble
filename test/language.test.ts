@@ -9,7 +9,7 @@ describe("the language rules, checked where the message leaves", () => {
     // and told me the linting had failed.
     const hits = lintLanguage("Both are landed in the closing gate — controlled on six transcripts.");
     // Two hits, and the second was added hours later: the sentence also says
-    // "landed", which was my private word for committing until the operator
+    // `landed`, which was my private word for committing until the operator
     // asked what it meant.
     expect(hits).toEqual([
       { label: "coined jargon: 'land' for committing", match: "landed", index: 9 },
@@ -45,7 +45,7 @@ describe("the language rules, checked where the message leaves", () => {
       ["announcement scaffolding", "The measurement, restated in one sentence: we compared rolls."],
     ];
     // Every rule in the list has a case here, so a rule added without one fails
-    // this test rather than shipping unexercised.
+    // this test and never ships unexercised.
     expect(cases.map(([label]) => label).sort()).toEqual(LANGUAGE_RULES.map((r) => r.label).sort());
     for (const [label, text] of cases) {
       expect(lintLanguage(text).map((h) => h.label)).toContain(label);
@@ -53,10 +53,10 @@ describe("the language rules, checked where the message leaves", () => {
   });
 
   test("THE PHRASE THAT GOT THROUGH: the ban is the class, not two written-down phrasings", () => {
-    // , the operator reading a message I had sent: "One thing I should say
-    // plainly" is not acceptable language. The rule named "stated plainly" and
-    // "plainly put" and nothing else, so a third phrasing of the same preamble
-    // passed a check that existed precisely to stop it.
+    // The operator, reading a message I had sent, quoted its opening back at me:
+    // `One thing I should say plainly` is not acceptable language.
+    // The rule named `stated plainly` and `plainly put` and nothing else, so a
+    // third phrasing of the same preamble passed a check built to stop it.
     for (const said of [
       "One thing I should say plainly: it went out unchecked.",
       "To put it plainly, the lint never ran.",
@@ -67,8 +67,8 @@ describe("the language rules, checked where the message leaves", () => {
       expect(lintLanguage(said).length).toBeGreaterThan(0);
     }
     // THIRD PERSON IS NOT SPARED. I argued it should be, on the grounds that a
-    // document stating something plainly is a fact about the document rather
-    // than a preamble about the speaker. The operator refused the exemption:
+    // document describing itself that way states a fact about the document, with
+    // no speaker making a preamble. The operator refused the exemption:
     // "Third person should not be allowed either." The word is banned outright,
     // so there is no verb list to fall outside of.
     expect(lintLanguage("The manifest says plainly which events it subscribes to.").length).toBeGreaterThan(0);
@@ -79,9 +79,9 @@ describe("the language rules, checked where the message leaves", () => {
   });
 
   test("THE LINE THE ROOM COULD NOT READ: internal shorthand is refused", () => {
-    // Operator, on a message of mine: "Nobody else ever understands 'Gate green
-    // at 457, six live stages pass.'" A channel is a room of people who do not
-    // share my terminal.
+    // Operator, on a message of mine:
+    // `Nobody else ever understands 'Gate green at 457, six live stages pass.'`
+    // A channel is a room of people who do not share my terminal.
     for (const said of [
       "Gate green at 457, six live stages pass.",
       "gate red, looking now",
@@ -97,9 +97,10 @@ describe("the language rules, checked where the message leaves", () => {
   });
 
   test("COINED JARGON: 'landing' for committing, and the compounds that are English", () => {
-    // Operator: "What is 'landing'? How can we ensure that it is only used at
-    // proper places as 'landing page'?" It was my word for committing a change
-    // through scripts/land.sh, and it means nothing outside this session.
+    // Operator:
+    // `What is 'landing'? How can we ensure that it is only used at proper places as 'landing page'?`
+    // It was my word for committing a change through `scripts/land.sh`, and it
+    // means nothing outside this session.
     for (const said of [
       "Landed a44ac75.",
       "Both skills corrected and landed.",

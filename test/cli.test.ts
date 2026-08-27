@@ -50,7 +50,7 @@ function ndjs(lines: unknown[], mode: "close" | "error" = "close"): Response {
   // Two-phase pull: the first pull delivers the lines; the second ends the
   // stream (close -> clean stop, error -> dropped connection). Erroring a
   // stream discards anything enqueued in the same pull, so the terminate
-  // must be a separate pull to guarantee the lines are actually read first.
+  // must be a separate pull to guarantee the lines are read first.
   let phase = 0;
   const body = new ReadableStream<Uint8Array>({
     pull(controller) {
@@ -240,7 +240,7 @@ describe("listen", () => {
     expect(await main(["listen", "--as", "ana"], io)).toBe(0);
     const [prose, mention] = writes as [string, string];
     // NO SPACE AFTER THE COLON. A serialiser that adds one silently stops every
-    // external filter matching, so the assumption is pinned instead of assumed.
+    // external filter matching, so this test pins the assumption.
     expect(mention).toContain('"mentioned":true');
     expect(mention).not.toContain('"mentioned": true');
     // AND PROSE CANNOT FORGE THE FIELD: quoting it in a message body comes back
@@ -667,8 +667,8 @@ describe("unknown backend", () => {
     const { io } = stubIo(cwd, (u, init) => handler(new Request(u, init)));
     const local = await main(["post", "general", "hi", "--as", "dev", "--backend", "local"], io);
     expect(local).toBe(0);
-    // slack without a config: reported as a missing-config error, not an
-    // unknown-backend rejection.
+    // slack without a config: reported as a missing-config error, which names
+    // the repair. An unknown-backend rejection would name nothing.
     const io2 = stubIo(cwd, async () => new Response("[]", { status: 200 })).io;
     const slack = await main(["post", "general", "hi", "--as", "dev", "--backend", "slack"], io2);
     expect(slack).toBe(1);
@@ -711,7 +711,7 @@ describe("message send (mirrored)", () => {
     // The incident: the rules were checked by a separate script the sender ran
     // first, so piping text straight into `message send` skipped them and
     // messages went out unlinted for a day. The check moved to the send, and
-    // this asserts the part that matters — the send does not HAPPEN.
+    // this asserts the part that matters: the send does not HAPPEN.
     const cwd = scratchDir("msgsend-lint");
     const { io, errs } = stubIo(cwd, async () => {
       throw new Error("REFUSED means no request is made");
@@ -1468,7 +1468,7 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     ).toBe(1);
     expect(errs.join(" ")).toContain("needs the slack backend");
 
-    // Slack refusing the delete is reported, never swallowed.
+    // Slack refusing the delete is reported. Nothing swallows it.
     const nope = stubIo(cwd, async (u) =>
       String(u).includes("chat.delete")
         ? new Response(JSON.stringify({ ok: false, error: "cant_delete_message" }), { status: 200 })
@@ -1632,7 +1632,7 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     expect(await main(["channel", "tier", "general", "loud"], io)).toBe(1);
     expect(await main(["channel", "tier"], io)).toBe(1);
     expect(errs.join(" ")).toContain("scramble channel tier <channel> internal|external");
-    // An unreadable config is REPORTED, never a silent pass.
+    // An unreadable config is REPORTED. A silent pass would hide it.
     const bare = stubIo(scratchDir("channel-tier-noconfig"), async () => new Response("{}", { status: 200 }));
     expect(await main(["channel", "tier", "general", "internal"], bare.io)).toBe(1);
     expect(bare.errs.join(" ")).toContain("cannot read");
@@ -1703,7 +1703,7 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     ).toBe(0);
     // No tier set for this channel: the careful register, and the model is told.
     expect(errs.join(" ")).toContain("register: external for general (no tier set for general");
-    // DERIVED FROM THE SHIPPED FILE, never a copy of its wording. This assertion
+    // DERIVED FROM THE SHIPPED FILE. A copy of its wording would rot. This assertion
     // held a sentence from the register block, the operator rewrote both blocks
     // (9211482, 27be931), and the copy failed while the mechanism worked.
     expect(promptText(prompt)).toContain(shippedRegister("external"));
@@ -3078,7 +3078,7 @@ describe("message check under the slack backend", () => {
     expect(line.text).toBe("@dev check me");
     expect(line.channel).toBe("general");
     expect(line.mentioned).toBe(true);
-    // the per-channel cursor moved: the stored slack cursor is a map, not an integer
+    // the per-channel cursor moved: the stored slack cursor is a map of channel to ts
     const cursor = JSON.parse(readFileSync(join(cwd, ".scramble", "cursors", "dev.json"), "utf8"));
     expect(cursor["slack:dev"]).toEqual({ general: "5.5" });
   });
@@ -3109,8 +3109,8 @@ describe("message check under the slack backend", () => {
   test("message check drains a peer's line and does NOT drain a line from the draining agent", async () => {
     // The drain is a DELIVERY verb: it hands the agent what ARRIVED for it.
     // Its own line (resolved sender name == the draining agent) is left out,
-    // exactly by the same name comparison listen/next use — and the cursor
-    // still advances over the skipped own-line (the peer line is newest).
+    // by the same name comparison listen and next use. The cursor still advances
+    // over the skipped own-line, since the peer line is newest.
     const cwd = scratchDir("mslack-drain-noself");
     const writes: string[] = [];
     const io = slackCheckIo(cwd, {
@@ -3140,8 +3140,8 @@ describe("message check under the slack backend", () => {
     const line = JSON.parse(writes[0]!) as { text: string; from: string };
     expect(line.from).toBe("bob");
     expect(line.text).toBe("@dev a peer asks");
-    // the cursor is the NEWEST line — which is the skipped OWN line (9.9), so
-    // the very next sweep does not re-read it.
+    // the cursor is the NEWEST line, which is the skipped OWN line (9.9), so the
+    // very next sweep does not re-read it.
     const cursor = JSON.parse(readFileSync(join(cwd, ".scramble", "cursors", "dev.json"), "utf8"));
     expect(cursor["slack:dev"]).toEqual({ general: "9.9" });
   });
@@ -3175,7 +3175,7 @@ describe("message check under the slack backend", () => {
         return new Response(JSON.stringify({ ok: true, ts: "1.1" }), { status: 200 });
       },
     });
-    // sweep 1: own lines are held (NOT drained) but the cursor passes them.
+    // sweep 1: own lines are held back from the drain while the cursor passes them.
     const c1 = await main(["message", "check", "--as", "dev", "--backend", "slack"], first);
     expect(c1).toBe(0);
     expect(writes1).toHaveLength(0);
@@ -3297,7 +3297,7 @@ describe("message check under the slack backend", () => {
     const code = await main(["message", "check", "--as", "dev", "--backend", "slack"], io);
     expect(code).toBe(0);
     expect(writes).toHaveLength(2);
-    // cursor holds the newest ts for the channel, not the last-seen.
+    // cursor holds the newest ts for the channel, which the last-seen ts can trail.
     const cursor = JSON.parse(readFileSync(join(cwd, ".scramble", "cursors", "dev.json"), "utf8"));
     expect(cursor["slack:dev"]).toEqual({ general: "9.5" });
   });
@@ -3534,7 +3534,7 @@ describe("message check across a config several agents share", () => {
 
 
 describe("staleListeners", () => {
-  // A landed fix does not reach a running process, and twice that produced a
+  // A committed fix does not reach a running process, and twice that produced a
   // visible defect the code had already fixed. Nothing said so, which is what
   // this answers.
   const proc = (pid: string, cmd: string, startedMs: number) => ({ pid, cmd, startedMs });
@@ -3658,7 +3658,7 @@ describe("staleListeners", () => {
       { pid: "13", cmd: "bun src/bin.ts listen --as dev" },
     ];
     expect(listenersBehind(procs, "dev", "995edba")).toEqual([{ pid: "10", commit: "4f7b942" }]);
-    // Nothing installed means no comparison to make, never a false accusation.
+    // Nothing installed means no comparison to make. A false accusation would follow.
     expect(listenersBehind(procs, "dev", "")).toEqual([]);
   });
 
@@ -3682,7 +3682,7 @@ describe("staleListeners", () => {
     // told me to restart processes that were not mine.
     // A REAL cmdline: /proc holds the argv of the process, so the shell's `cd`
     // and `&&` are never in it. The checkout path carries the other agent's name,
-    // which is the whole point of the case.
+    // which is what this case exercises.
     const other = proc("104", "bun /srv/hark/scramble/src/bin.ts listen --as scramble-dev", 1_000);
     expect(pickStale([other], "hark", 5_000)).toEqual([]);
     expect(pickStale([other], "scramble-dev", 5_000)).toEqual([{ pid: "104", ageBehind: 4 }]);
@@ -3887,7 +3887,7 @@ describe("the automatic status posts as the ACTING agent", () => {
       createSocket: () => ({ send: () => {}, close: () => {}, onopen: null, onmessage: null, onclose: null, onerror: null }),
     };
     expect(await main(["message", "check", "--as", "dev", "--backend", "slack"], io)).toBe(0);
-    // The status post went out as dev, never as the default app.
+    // The status post went out under dev's own token.
     expect(auths).toContain("Bearer T_DEV");
     expect(auths).not.toContain("Bearer xoxb-DEFAULT");
     const ledger = JSON.parse(readFileSync(join(cwd, ".scramble", "status.json"), "utf8")) as {
@@ -3927,9 +3927,9 @@ describe("doctor, and the warning an agent gets without asking", () => {
     };
     return { io, writes, errs };
   }
-  // DERIVED, not retyped. This was a hand-kept copy and it fell behind the real
-  // list by two scopes, so "a healthy agent" was healthy against a list that no
-  // longer existed — the same drift that let the events go unchecked.
+  // DERIVED FROM THE SOURCE LIST. This was a hand-kept copy and it fell behind
+  // the real list by two scopes, so "a healthy agent" was healthy against a list
+  // that no longer existed, which is the drift that let the events go unchecked.
   const ALL = SCOPE_NAMES.join(",");
 
   test("a healthy agent reports ok with its handle", async () => {
@@ -4019,7 +4019,7 @@ describe("doctor, and the warning an agent gets without asking", () => {
   });
 
   test("a missing config, an unknown agent and a tokenless agent each name themselves", async () => {
-    // Three refusals rather than one, because "doctor said no" is useless: the
+    // Three refusals, since "doctor said no" is useless on its own: the
     // fix differs for a config that is not there, a name that is not in it, and
     // an entry with no token.
     const nowhere = scratchDir("doc-nocfg");
@@ -4131,11 +4131,11 @@ describe("doctor, and the warning an agent gets without asking", () => {
     // THE DEFECT THIS EXISTS FOR, measured live: the operator invited an agent
     // to a channel and nothing arrived. The app declared
     // org_deploy_enabled:true, held every scope, and its socket was delivering
-    // mentions the whole time — it was subscribed to three events and not to
+    // mentions the whole time. It was subscribed to three events, leaving out
     // member_joined_channel, and Slack sends nothing for an event an app has
     // not asked for. Everything else about the agent was healthy, which is why
-    // the wake path has to be checked field by field rather than by whether
-    // messages are arriving.
+    // the wake path has to be checked field by field. Arriving messages prove
+    // nothing about the fields.
     const home = scratchDir("doc-events");
     mkdirSync(join(home, ".slack"), { recursive: true });
     writeFileSync(join(home, ".slack", "credentials.json"), JSON.stringify({ E1: { token: "xoxe-cli" } }));
@@ -4812,8 +4812,8 @@ describe("doctor, and the warning an agent gets without asking", () => {
     expect(await main(["doctor", "--as", "dev", "--wake", "room", "--backend", "slack"], a2.io)).toBe(1);
     expect(a2.errs.join(" ")).toContain("invalid_auth");
     // The probe itself refused: a channel this agent was never invited to. This
-    // is the live shape (`channel_not_found`), and it must FAIL rather than pass
-    // quietly, since an unpostable probe proves nothing about the wake path.
+    // is the live shape (`channel_not_found`), and it must FAIL, since a quiet
+    // pass on an unpostable probe proves nothing about the wake path.
     const a3 = mk(async (u) =>
       u.includes("connections.open")
         ? new Response(JSON.stringify({ ok: true, url: "wss://x" }), { status: 200 })

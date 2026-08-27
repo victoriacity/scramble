@@ -324,8 +324,8 @@ describe("post", () => {
     expect(listed).toBe(1);
 
     // A name Slack does not have stays literal: it is no person here. And the
-    // lookup does not repeat, so an unknown name costs ONE page walk, not one
-    // per message.
+    // lookup does not repeat, so an unknown name costs ONE page walk for the
+    // whole run.
     await h.backend.post("general", "@nobody-here hello", "alice");
     expect(posted).toBe("@nobody-here hello");
     await h.backend.post("general", "@nobody-here again", "alice");
@@ -429,7 +429,7 @@ describe("post", () => {
     // closed an item. It recorded a wall-clock string before, which named
     // nothing anybody could look up, and `inbox trace` printed that. The ROOT
     // comes back beside it, so a read-back asks about the thread that holds the
-    // message rather than the ts the caller passed.
+    // message. The ts the caller passed can name a reply Slack hoisted.
     expect(r).toEqual({ ok: true, ts: "9.9", thread: "root-1" });
     // And an unthreaded post is never asked about threading.
     expect(await h.backend.post("general", "hi", "bob")).toEqual({ ok: true, ts: "9.9" });
@@ -848,8 +848,8 @@ describe("history", () => {
   // --- status filtering: the SEAM the defect is about --------------------
   // A living status is a MESSAGE drawn by chat.postMessage with the fixed text
   // "working" and its ts recorded in the status ledger. A read or a delivery
-  // must leave it out by the ledger's ts — never by matching text (a human
-  // saying "working" is a real message). The set of status ts is passed in by
+  // must leave it out by the ledger's ts. Matching the text would swallow a
+  // human saying `working`, which is a real message. The set of status ts comes
   // the caller (src/cli.ts), which reads the ledger; the backend itself holds no
   // notion of where the ledger lives.
 
@@ -1120,15 +1120,15 @@ describe("listen", () => {
 
   test("a connection that opened then drops RECONNECTS (backoff), staying alive", async () => {
     // Once a connection has worked, a drop is retried: listen opens a second
-    // socket instead of giving up. Reachable under test because the injected
-    // sleep resolves immediately.
+    // socket. Reachable under test because the injected sleep resolves
+    // immediately.
     const h = make();
     const lines: Delivery[] = [];
     const p = h.backend.listen([], "alice", (d) => lines.push(d), () => {});
     await pump();
     expect(h.sockets).toHaveLength(1);
-    // Deliver an event, then drop the socket: the stream must REOPEN rather than
-    // end, and keep delivering on the new connection.
+    // Deliver an event, then drop the socket: the stream must REOPEN and keep
+    // delivering on the new connection.
     emit(h, msg({ text: "before drop" }));
     await pump(8);
     expect(lines).toHaveLength(1);
@@ -1190,8 +1190,8 @@ describe("listen", () => {
   });
 
   test("the FIRST socket-open refusal fails listen with code 1 instead of retrying", async () => {
-    // A connection that has never once succeeded must FAIL OUT (code 1 —
-    // "scramble could not look"), not silently retry the same refusal into an
+    // A connection that has never once succeeded must FAIL OUT with code 1,
+    // `scramble could not look`. A silent retry of the same refusal turns into an
     // unattended loop. The report names both Slack's error and the appToken key.
     const h = make({}, async (url) => {
       if (url.includes(SOCKET_OPEN)) return new Response(JSON.stringify({ ok: false, error: "invalid_token" }), { status: 200 });
@@ -1235,7 +1235,7 @@ describe("next", () => {
     // A broken credential must not read as a silent channel: `next` against an
     // invalid app token fails nonzero with both Slack's error and the config key.
     // `make()` keeps the clock fixed so the open-refusal (a fast HTTP answer)
-    // settles before any timeout — exactly the ordering a real next() sees where
+    // settles before any timeout, which is the ordering a real next() sees when
     // the connection is refused in milliseconds against a seconds-long timeout.
     const h = make({}, async (url) => {
       if (url.includes(SOCKET_OPEN)) return new Response(JSON.stringify({ ok: false, error: "invalid_token" }), { status: 200 });
@@ -1250,7 +1250,7 @@ describe("next", () => {
 
   test("a live connection that then times out still exits 64 (quiet channel)", async () => {
     // With the socket OPENED (a working app token), a no-message timeout is the
-    // honest quiet-channel result and stays 64.
+    // quiet-channel result and stays 64.
     const h = makeTimed(); // socket open succeeds (okRouter)
     const p = h.backend.next([], "alice", 1, () => {});
     const r = await p;
@@ -1301,7 +1301,7 @@ describe("selectBackend", () => {
     // It used to default to local whatever was configured, which is not a
     // preference but a failure surface: the local backend answers from a store
     // the listener fills, so a Slack agent that forgot the variable got a
-    // TRANSCRIPT rather than an error. `message read` on the channel the
+    // TRANSCRIPT where an error belonged. `message read` on the channel the
     // operator had just invited it into printed nothing and exited 0 while
     // Slack held twenty messages in it.
     const dir = makeTmpDir("backend-default");
@@ -1361,7 +1361,7 @@ describe("slack commands through main", () => {
       join(dir, ".scramble", "inbox", "bob.jsonl"),
       `${JSON.stringify({ id: "1", channel: "general", from: "ana", text: "hi", at: "2026-08-22T00:00:00Z" })}\n`,
     );
-    // The FILE, not its directory: a directory's write bit governs creating and
+    // THE FILE ITSELF, since a directory's write bit governs creating and
     // unlinking, so an existing file inside a locked directory is still
     // writable and the test would prove nothing.
     chmodSync(join(dir, ".scramble", "inbox", "bob.jsonl"), 0o400);
@@ -1611,7 +1611,7 @@ function makeTmpDir(name: string): string {
 // Every network seam is injected, so the download of a Slack message's `files`
 // needs no token and no network. The fake fetch serves url_private from a
 // queue; the bytes are written into a temp filesDir and read back to prove the
-// download landed on the line.
+// download arrived on the line.
 
 describe("inbound file downloads", () => {
   function filesDir(): string {
