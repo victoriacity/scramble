@@ -241,17 +241,30 @@ export function tierPromptPath(moduleDir: string, tier: string): string {
   return join(moduleDir, "prompts", `tier-${tier}.md`);
 }
 
-export function readTierBlock(moduleDir: string, tier: string): { ok: true; text: string } | { ok: false; why: string } {
-  const path = tierPromptPath(moduleDir, tier);
+/** An instruction file, whole. An empty one yields a REASON.
+ *
+ *  THE WHOLE FILE IS THE INSTRUCTION. Both loaders used to keep only what
+ *  followed a `---` line, so the text above it could explain the file to a
+ *  person. The operator rewrote `prompts/rewrite.md` and dropped that line with
+ *  the note (228f53a), which left the loader refusing and every send posting
+ *  unrewritten with a reason. A prose edit that disarms the rewriter is a rule
+ *  hiding inside a file whose whole purpose is prose, and the person editing it
+ *  cannot see the rule. Reading the file whole keeps the one guarantee worth
+ *  having, that no rewrite runs on an empty instruction. */
+function readInstructionFile(path: string, label: string): { ok: true; text: string } | { ok: false; why: string } {
   let raw: string;
   try {
     raw = readFileSync(path, "utf8");
   } catch (e) {
-    return { ok: false, why: `the ${tier} register at ${path} could not be read: ${e instanceof Error ? e.message : String(e)}` };
+    return { ok: false, why: `${label} at ${path} could not be read: ${e instanceof Error ? e.message : String(e)}` };
   }
-  const body = raw.split(/\n---\n/).slice(1).join("\n---\n").trim();
-  if (body === "") return { ok: false, why: `the ${tier} register at ${path} carries no instruction below its first --- line` };
+  const body = raw.trim();
+  if (body === "") return { ok: false, why: `${label} at ${path} is empty, so no rewrite can run from it` };
   return { ok: true, text: body };
+}
+
+export function readTierBlock(moduleDir: string, tier: string): { ok: true; text: string } | { ok: false; why: string } {
+  return readInstructionFile(tierPromptPath(moduleDir, tier), `the ${tier} register`);
 }
 
 export function promptPath(moduleDir: string): string {
@@ -262,18 +275,7 @@ export function promptPath(moduleDir: string): string {
  *  a rewrite driven by no instruction is worse than no rewrite, since the model
  *  would be free to do anything to a claim. */
 export function readPromptTemplate(moduleDir: string): { ok: true; text: string } | { ok: false; why: string } {
-  const path = promptPath(moduleDir);
-  let raw: string;
-  try {
-    raw = readFileSync(path, "utf8");
-  } catch (e) {
-    return { ok: false, why: `the rewrite instruction at ${path} could not be read: ${e instanceof Error ? e.message : String(e)}` };
-  }
-  // Everything above the first `---` on its own line is the file explaining
-  // itself to a human. The model gets what follows.
-  const body = raw.split(/\n---\n/).slice(1).join("\n---\n").trim();
-  if (body === "") return { ok: false, why: `the rewrite instruction at ${path} carries no instruction below its first --- line` };
-  return { ok: true, text: body };
+  return readInstructionFile(promptPath(moduleDir), "the rewrite instruction");
 }
 
 /** The instruction with the message appended, which is what the model receives. */

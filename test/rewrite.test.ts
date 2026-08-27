@@ -30,6 +30,7 @@ import {
   composePrompt,
   promptPath,
   readPromptTemplate,
+  readTierBlock,
   rewriteWith,
 } from "../src/rewrite";
 
@@ -75,24 +76,25 @@ describe("the instruction", () => {
   // other document this repo ships.
   const here = join(import.meta.dir, "..", "src");
 
-  test("the shipped file protects the claim", () => {
-    const t = readPromptTemplate(here);
-    expect(t.ok).toBe(true);
-    const text = t.ok ? t.text : "";
-    // The operator removed the 140-token cap and the pinned claim-strength
-    // phrase (2026-08-25): the wording belongs to the prompt author, and the
-    // cap had no measured basis. What must hold: byte-exact preservation is
-    // still demanded, and the note above the first --- line is NOT sent.
-    expect(text).toContain("byte for byte");
-    // THE ROLE COMES FIRST, so the model is told who it is before what to do.
-    expect(text.startsWith("You are a very experienced Member of Technical Staff")).toBe(true);
-    // The check that forbade `because` and `since` here is GONE. The instruction
-    // has to name those words as connectives it must preserve: "never turn `A,
-    // because B` into `A. B`" (2026-08-25). A token check cannot tell a word
-    // being explained from a word being named, and the instruction needs to name
-    // them.
-    expect(text).toContain("Never turn `A, because B` into `A. B`");
-    expect(text).not.toContain("# Rewrite instruction");
+  test("EVERY SHIPPED INSTRUCTION FILE LOADS, whatever its prose", () => {
+    // THE POSITIVE CONTROL ON THE REAL ARTIFACT. The loader kept only what
+    // followed a `---` line, and this test asserted the wording above it was
+    // absent. The operator rewrote the file, dropped that line with the note it
+    // separated (228f53a), and the loader began refusing: every send posted
+    // unrewritten with a reason. The wording belongs to the operator, so the
+    // assertions here are the ones a rewording cannot break.
+    for (const load of [
+      () => readPromptTemplate(here),
+      () => readTierBlock(here, "internal"),
+      () => readTierBlock(here, "external"),
+    ]) {
+      const t = load();
+      expect(t.ok).toBe(true);
+      expect((t.ok ? t.text : "").length).toBeGreaterThan(0);
+    }
+    // The one rule whose loss costs a PERSON: a rewrite that drops `@name`
+    // leaves the message unaddressed and the reader unnotified.
+    expect(readPromptTemplate(here).ok && (readPromptTemplate(here) as { text: string }).text).toContain("@name");
   });
 
   test("a missing instruction is a REASON, never a default", () => {
@@ -103,13 +105,18 @@ describe("the instruction", () => {
     expect(!missing.ok && missing.why).toContain("could not be read");
   });
 
-  test("a file with no instruction below its marker is a REASON too", () => {
+  test("an empty instruction file is a REASON too", () => {
     const dir = scratch();
     mkdirSync(join(dir, "prompts"), { recursive: true });
-    writeFileSync(promptPath(dir), "# only a preamble\n\nnothing below a marker\n");
+    writeFileSync(promptPath(dir), "   \n\n");
     const empty = readPromptTemplate(dir);
     expect(empty.ok).toBe(false);
-    expect(!empty.ok && empty.why).toContain("carries no instruction");
+    expect(!empty.ok && empty.why).toContain("is empty");
+    // A file carrying prose and no marker is a whole instruction now, and the
+    // note at the top of it goes to the model with the rest.
+    writeFileSync(promptPath(dir), "# Rewrite instruction\n\nRewrite it.\n");
+    const whole = readPromptTemplate(dir);
+    expect(whole.ok && whole.text).toBe("# Rewrite instruction\n\nRewrite it.");
   });
 
   test("the message is appended after the marker", () => {

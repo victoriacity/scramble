@@ -15,7 +15,7 @@ numbers and paths stay verbatim.
 Preserve:
 
 - EVERY `@name` is a Slack mention and should be kept verbatim. Same as slack communication practices,
-  A leading `@name` is the ADDRESS of the message instead of a greeting, so it stays at the front.
+  A leading `@name` is the ADDRESS of the message and never a greeting, so it stays at the front.
   DO NOT put mentions in code blocks or backtick spans.
 - Keep the opinions in the original message at its original strength. Do not strengthen or hedge the opinions. Just improve the language use.
 - Keep all facts in the original message exactly as stated. Never substitute a different fact,
