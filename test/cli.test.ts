@@ -8,6 +8,22 @@ import { createHandler } from "../src/server";
 import { WORD_LIMIT } from "../src/language";
 import { main, parseBind, loadSlackConfig, slackConfigPath, staleConfigWarning, staleListeners, pickStale, staleListenerProblem, readProcesses, liveListeners, stillAlive, watchForNewerInstall, listenerCommit, listenersBehind, processesReadable, type Io } from "../src/cli";
 import { SCOPE_NAMES, BOT_EVENT_NAMES } from "../src/app-manifest";
+import { readTierBlock } from "../src/rewrite";
+
+/** The register block as the SHIPPED file holds it. A test that copies the
+ *  wording fails the day the operator rewords the file, and says nothing about
+ *  whether the send reached the model with it. */
+function shippedRegister(tier: string): string {
+  const r = readTierBlock(join(import.meta.dir, "..", "src"), tier);
+  if (!r.ok) throw new Error(r.why);
+  return r.text;
+}
+
+/** The prompt out of a captured Gemini request body. */
+function promptText(body: string): string {
+  const parsed = JSON.parse(body) as { contents?: { parts?: { text?: string }[] }[] };
+  return String(parsed.contents?.[0]?.parts?.[0]?.text ?? "");
+}
 
 function scratchDir(name: string): string {
   const d = join(tmpdir(), `zz-${name}-${process.pid}-${Math.random().toString(36).slice(2)}`);
@@ -1572,7 +1588,10 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     ).toBe(0);
     // No tier set for this channel: the careful register, and the model is told.
     expect(errs.join(" ")).toContain("register: external for general (no tier set for general");
-    expect(prompt).toContain("This channel holds people who do not read this repository");
+    // DERIVED FROM THE SHIPPED FILE, never a copy of its wording. This assertion
+    // held a sentence from the register block, the operator rewrote both blocks
+    // (9211482, 27be931), and the copy failed while the mechanism worked.
+    expect(promptText(prompt)).toContain(shippedRegister("external"));
   });
 
   test("an internal channel gets the dense register, and a change of entry moves it", async () => {
@@ -1625,7 +1644,7 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
       await main(["message", "send", "--target", "general", "--as", "dev", "--no-verify", "--backend", "slack"], withKey),
     ).toBe(0);
     expect(errs.join(" ")).toContain("register: internal for general (set to internal by the operator)");
-    expect(prompt).toContain("This channel is where agents work");
+    expect(promptText(prompt)).toContain(shippedRegister("internal"));
 
     // THE CONFIG WINS. A room of agents can still be where a customer reads.
     writeSlackConfig(cwd, {
@@ -1654,7 +1673,7 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
       }),
     ).toBe(0);
     expect(second.errs.join(" ")).toContain("register: external for general (set to external by the operator)");
-    expect(prompt).toContain("This channel holds people who do not read this repository");
+    expect(promptText(prompt)).toContain(shippedRegister("external"));
   });
 
   test("the send says POSTED with the ts before it says anything else", async () => {
