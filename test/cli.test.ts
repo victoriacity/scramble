@@ -2684,7 +2684,9 @@ describe("message check under the slack backend", () => {
       appToken: "xapp-1",
       token: "xoxb-1",
       channels: { general: "C1" },
-      agents: { dev: { token: "T", handle: "dev" } },
+      // THE HANDLE DIFFERS FROM THE NAME, which is the live shape:
+      // `model-failure-research` is `model_failure_researc` on Slack.
+      agents: { dev: { token: "T", handle: "dev_bot" } },
     });
     s.io.readStdin = async () => "a line from an agent nobody has recorded yet";
     expect(
@@ -2699,6 +2701,12 @@ describe("message check under the slack backend", () => {
     const said = p.writes.join(" ");
     expect(said).toContain("dev  host-one");
     expect(said).toContain("claude-code 2.1.234 session 6a41d6cd-13fa-430a-954b-69132f9d5a5c pid 14027");
+    // THE OWN ROW CLAIMS THIS AGENT'S SLACK HANDLE, so a row somebody wrote under
+    // that handle retires without waiting for this agent to send again. The
+    // config already holds the mapping, and an agent that upgrades and stays
+    // quiet would otherwise keep two identities on one host in one session.
+    const rows = readFileSync(join(cwd, ".scramble", "peers.jsonl"), "utf8").trim().split("\n");
+    expect(JSON.parse(rows[rows.length - 1]!)).toMatchObject({ agent: "dev", handle: "dev_bot" });
   });
 
   test("an unwritable own record REPORTS itself and still sends", async () => {

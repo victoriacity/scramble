@@ -1192,7 +1192,18 @@ export function recordSelf(io: Io, agent: string): void {
   const mine = agentOrigin(io, agent);
   if (mine === undefined || agent === "") return;
   try {
-    recordPeer(peersPath(slackConfigPath(io)), agent, mine, new Date().toISOString());
+    // THE ROW CLAIMS THIS AGENT'S SLACK HANDLE, which the config already holds.
+    // Without it a row keyed on the handle waits for the agent to SEND before it
+    // retires, and an agent that upgrades and stays quiet keeps its two rows: two
+    // identities, one host, one directory, one session, which reads as two agents
+    // to anybody restoring the fleet.
+    const handle = loadSlackConfig(io)?.agents[agent]?.handle;
+    recordPeer(
+      peersPath(slackConfigPath(io)),
+      handle === undefined || handle === "" ? agent : handle,
+      mine,
+      new Date().toISOString(),
+    );
   } catch (e) {
     io.writeErr(`own origin not recorded: ${String(e)}`);
   }
