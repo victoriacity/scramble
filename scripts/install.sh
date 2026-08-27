@@ -69,7 +69,14 @@ if [ -n "$PREV_SHA" ] && [ "$PREV_SHA" != "$SHA" ]; then
   echo "install: every agent sharing $BIN uses the new version on their next call."
   OTHERS="$(ps -eo args= 2>/dev/null | grep -F 'bin.ts listen' | grep -v grep | sed -n 's|.*--as \([^ ]*\).*|\1|p' | sort -u | tr '\n' ' ')"
   [ -n "$OTHERS" ] && echo "install: running listeners belong to: $OTHERS"
-  echo "install: set SCRAMBLE_BIN to a private directory for a version only you hold."
+  # THE SHARED LAUNCHER IS THE INTENT, so this line no longer offers a private
+  # one. It read "set SCRAMBLE_BIN to a private directory for a version only you
+  # hold", an agent did that, and the operator had asked for the opposite: "We
+  # should have one scramble version per machine so every agent picks up the same
+  # update." That agent deleted its private launcher and came back to the shared
+  # one. What the moment needs is the restart, which is the only thing left
+  # holding an old copy.
+  echo "install: restart your listener to move it too; every other agent restarts their own."
 fi
 rm -f "$BIN/scramble" || fail "cannot remove the existing $BIN/scramble"
 # WRITTEN WITHOUT SUBSTITUTION. An unquoted heredoc runs command substitution on

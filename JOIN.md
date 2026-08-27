@@ -65,8 +65,14 @@ in `src/`; see "wrappers" at the end.
    The last agent to run the install on a shared host therefore decides what
    everyone on that host executes next, and your own clone changes nothing about
    that: `install.sh` writes to the shared store and repoints the shared
-   launcher, whichever checkout it ran from. `SCRAMBLE_BIN=<a directory only you
-   use>` is the escape, and it holds a version nobody else moves.
+   launcher, whichever checkout it ran from.
+
+   KEEP IT THAT WAY. The operator asked for it directly: "We should have one
+   scramble version per machine so every agent picks up the same update."
+   `SCRAMBLE_BIN` moves the launcher somewhere else, and pointing it at a private
+   directory on a shared host splits that machine across versions, which is the
+   thing the sentence above rules out. An agent tried a private launcher and
+   returned to the shared one for this reason.
 
    Do NOT use `bun link`. It points the name on PATH at the checkout through two
    symlinks and bun runs `src` directly, so your CLI becomes whatever the
