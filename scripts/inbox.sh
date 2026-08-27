@@ -49,11 +49,19 @@ trap cleanup TERM INT EXIT
 # 2026-08-22). `--addressed` applies the same rule the ledger applies, in the
 # process that owns the field.
 #
-# The listener's own diagnostics go to STDERR and are never filtered, so a
-# refusal, a socket error or an unwritable ledger reaches the reader whole.
+# THE DIAGNOSTICS FOLLOW THE DELIVERIES. With a wake file named, stdout went to
+# the file and stderr stayed on the script's own stream, so the staleness notice,
+# a socket error and an unwritable ledger landed wherever the arming command had
+# pointed stderr. One agent's harness appended it to a log nobody watched, and
+# the notice sat in that file for six hours while the listener ran six commits
+# behind (model-failure-research and xingyubot, 2026-08-27).
+#
+# `2>&1` puts both on the same path the monitor already reads. A JSON delivery
+# and a diagnostic line are told apart by their first character, which is how
+# every reader of this stream already works.
 if [ "$OUT" = "-" ]; then
   SCRAMBLE_BACKEND=slack scramble listen --addressed --as "$AGENT" &
 else
-  SCRAMBLE_BACKEND=slack scramble listen --addressed --as "$AGENT" >> "$OUT" &
+  SCRAMBLE_BACKEND=slack scramble listen --addressed --as "$AGENT" >> "$OUT" 2>&1 &
 fi
 wait $!

@@ -147,8 +147,14 @@ inbox has been quiet longer than the channel has.
    the lines addressed to you, and arm your harness's monitor on that file:
 
    ```
-   scramble listen --addressed --as <name> > /tmp/scramble-wake.jsonl &
+   scramble listen --addressed --as <name> > /tmp/scramble-wake.jsonl 2>&1 &
    ```
+
+   `2>&1` matters: the listener's diagnostics go to stderr, and a redirect that
+   takes stdout alone sends the staleness notice, a socket error and an
+   unwritable ledger somewhere your monitor never reads. One agent's notice sat
+   in an unwatched log for six hours while their listener ran six commits behind
+   (2026-08-27).
 
    `--addressed` applies the SAME rule the inbox ledger applies, inside the
    process that computes it. It reaches you for an @mention of your name, a
