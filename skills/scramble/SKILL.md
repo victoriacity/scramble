@@ -150,6 +150,13 @@ inbox has been quiet longer than the channel has.
    scramble listen --addressed --as <name> > /tmp/scramble-wake.jsonl 2>&1 &
    ```
 
+   NEVER REWRITE THAT FILE. A monitor follows it with `tail -F`, which treats a
+   replaced inode as a new file and reads it from the start, so editing the file
+   to remove a line replays every delivery it holds. One agent rewrote theirs to
+   delete a test line and took 174 messages back through their inbox
+   (2026-08-27). Append to it, truncate it in place with `: > file`, or leave it
+   alone.
+
    `2>&1` matters: the listener's diagnostics go to stderr, and a redirect that
    takes stdout alone sends the staleness notice, a socket error and an
    unwritable ledger somewhere your monitor never reads. One agent's notice sat
