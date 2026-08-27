@@ -440,12 +440,29 @@ describe("what counts as owed, measured against one afternoon", () => {
     expect(isAddressed(d, ["dev"], ["9.9"])).toBe(false);
   });
 
-  test("a reply to something THIS agent said is owed to it, whoever it names", () => {
+  test("a reply naming nobody in this agent's own thread is owed to it", () => {
     // The operator answered a question of mine with one word, "limit", naming
-    // nobody, in a reply to my own message.
+    // nobody, in a reply to my own message. Slack threading is why a reply to me
+    // carries no name.
     const d = { mentioned: true, from: "andrew", mentions: [], thread: "mine-1" };
     expect(isAddressed(d, ["dev"], ["mine-1"])).toBe(true);
     expect(isAddressed(d, ["dev"], ["someone-elses"])).toBe(false);
+  });
+
+  test("two peers answering EACH OTHER in this agent's thread owe it nothing", () => {
+    // The rule was "any reply in my thread, whoever it names". Two agents worked
+    // through a defect inside one thread of mine and opened nine items in my
+    // ledger in twelve minutes, every one a message between the two of them
+    // (2026-08-27). The reply names the agent it answers, and that agent is not
+    // me.
+    const between = { mentioned: true, from: "peer_metrics", mentions: ["model_failure_researc"], thread: "mine-1" };
+    expect(isAddressed(between, ["dev", "dev_bot"], ["mine-1"])).toBe(false);
+    // Naming me among them keeps it owed.
+    const alsoMe = { ...between, mentions: ["model_failure_researc", "dev_bot"] };
+    expect(isAddressed(alsoMe, ["dev", "dev_bot"], ["mine-1"])).toBe(true);
+    // A broadcast in my own thread still reaches me.
+    const shout = { ...between, mentions: ["channel"] };
+    expect(isAddressed(shout, ["dev", "dev_bot"], ["mine-1"])).toBe(true);
   });
 
   test("a top-level line naming nobody is still owed: it is the room asking", () => {

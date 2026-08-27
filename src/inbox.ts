@@ -454,11 +454,25 @@ export function isAddressed(
 ): boolean {
   if (d.mentioned !== true || typeof d.from !== "string") return false;
   if (names.includes(d.from)) return false;
-  // A REPLY TO SOMETHING THIS AGENT SAID is for this agent, whoever it names.
-  // The operator answered a question of mine with one word, "limit", naming
-  // nobody, in a reply to my own message (2026-08-22).
-  if (typeof d.thread === "string" && ownSent.includes(d.thread)) return true;
   const mentions = Array.isArray(d.mentions) ? d.mentions.filter((m): m is string => typeof m === "string") : [];
+  // A BROADCAST NAMES NO ONE AND ADDRESSES EVERYONE. Without this the
+  // naming-nobody rule below reads `@channel` as somebody else's name and drops
+  // it, so the operator's "<!channel> ..." would reach no agent's ledger even
+  // once delivery carries it.
+  if (mentions.some((m) => BROADCAST_NAMES.includes(m))) return true;
+  if (mentions.some((m) => names.includes(m))) return true;
+  // A REPLY TO SOMETHING THIS AGENT SAID is for this agent WHEN IT NAMES NOBODY.
+  // The operator answered a question of mine with one word, "limit", naming
+  // nobody, in a reply to my own message (2026-08-22), and Slack threading is
+  // why such a reply carries no name.
+  //
+  // A reply that names ANOTHER agent answers that agent, and my thread is where
+  // the conversation happens to sit. The rule was "any reply in my thread, whoever
+  // it names", and one thread of two agents working through a defect opened nine
+  // items in my ledger inside twelve minutes, every one of them a message between
+  // the two of them (2026-08-27). Nine debts I did not owe cost the list its
+  // meaning, which is the same harm the 18-message case below names.
+  if (mentions.length === 0 && typeof d.thread === "string" && ownSent.includes(d.thread)) return true;
   // NAMING NOBODY IN SOMEONE ELSE'S THREAD IS NOT AN OBLIGATION. The rule was
   // "named here, or naming nobody", and measured against one afternoon it put 18
   // messages from another team's task thread into my list, none of them for me,
@@ -469,9 +483,5 @@ export function isAddressed(
   // Such a line is still DELIVERED and still shows in a drain. What it stops
   // being is a debt.
   if (mentions.length === 0) return typeof d.thread !== "string" || d.thread === "";
-  // A BROADCAST NAMES NO ONE AND ADDRESSES EVERYONE. Without this the rule above
-  // reads `@channel` as somebody else's name and drops it, so the operator's
-  // "<!channel> ..." would reach no agent's ledger even once delivery carries it.
-  if (mentions.some((m) => BROADCAST_NAMES.includes(m))) return true;
-  return mentions.some((m) => names.includes(m));
+  return false;
 }
