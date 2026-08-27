@@ -5,8 +5,8 @@
 //                                 [--description "…"] [--long-description "…"]
 //                                 [--icon <file.png>] [--team <T…>] [--print-manifest]
 //
-// Run it AGAIN for an agent that already has an app and it updates that app
-// rather than creating a second one, so an agent can rewrite its own description
+// Run it AGAIN for an agent that already has an app and it updates that same
+// app, so an agent can rewrite its own description
 // or change its own avatar whenever it wants to.
 //
 // <agent-name> is what the agent is called in scramble (`--as`). `--app-name` is
@@ -52,8 +52,8 @@ import { SCOPES, SCOPE_NAMES, BOT_EVENT_NAMES } from "../src/app-manifest";
 
 /** Slack's own constraint, measured: a `long_description` under 175 characters
  *  is rejected with
- *  `failed_constraint … min_length expected 175`, so a short one is padded out
- *  by the caller rather than silently dropped. */
+ *  `failed_constraint … min_length expected 175`, so the caller pads a short one
+ *  out. A silent drop would leave the app without a description. */
 const LONG_DESCRIPTION_MIN = 175;
 
 /** The name Slack shows BESIDE MESSAGES, which has to convert to a username.
@@ -120,8 +120,8 @@ function die(msg: string): never {
 }
 
 /** The Slack CLI's stored credential. `slack login` writes it, and any `slack`
- *  command refreshes it, which is why an expired one is reported with that fix
- *  rather than worked around here. */
+ *  command refreshes it, so an expired one is reported with that fix. A
+ *  workaround here would hide the one command that repairs it. */
 function configToken(): { token: string; enterpriseId: string } {
   const fromEnv = process.env.SLACK_CONFIG_TOKEN;
   if (fromEnv !== undefined && fromEnv !== "") return { token: fromEnv, enterpriseId: "" };
@@ -264,8 +264,8 @@ const flag = (n: string): string | undefined => {
   const i = argv.indexOf(`--${n}`);
   return i >= 0 ? argv[i + 1] : undefined;
 };
-// A positional that is not some flag's value. Written out rather than clever,
-// because a wrong guess here creates a real Slack app under the wrong name.
+// A positional that is not some flag's value. Written out the long way, since a
+// wrong guess here creates a real Slack app under the wrong name.
 const VALUED_FLAGS = new Set(["--channel", "--team", "--app-name", "--description", "--long-description", "--icon"]);
 const agent = (() => {
   for (let i = 0; i < argv.length; i++) {
@@ -333,8 +333,8 @@ if (adoptToken !== undefined && adoptToken !== "") {
     token: adoptToken,
     ...(appTok !== undefined && appTok !== "" ? { appToken: appTok } : {}),
     appId,
-    // READ FROM SLACK, never typed. The handle is what mention detection keys on,
-    // and a wrong one fails silently.
+    // READ FROM SLACK. A typed handle can be wrong, mention detection keys on it,
+    // and the failure is silent.
     handle: handleFor,
   };
   existing2.agents = agents2;
@@ -401,16 +401,17 @@ const existingCfg: { agents?: Record<string, { appId?: string; token?: string }>
 
 /** The app behind a bot TOKEN. auth.test names the bot's user, and that user's
  *  profile carries `api_app_id`, so an agent whose config predates the appId
- *  field can still find its own app instead of being read as a new agent.
+ *  field can still find its own app, where a fresh read would call it a new
+ *  agent.
  *
  *  THIS EXISTS BECAUSE THE ABSENCE OF ONE FIELD MEANT "CREATE". Two agents in
  *  this config were made by hand before appId was recorded, and running onboard
  *  on them built two NEW Slack apps: `akari` became @akari2, a bot in no
  *  channel, and the config's copy of the working token was overwritten with the
- *  new one. Everything was recoverable — the original apps still existed and
- *  users.info gave their ids back — but nothing about the run said a second app
- *  was about to be born. A missing record is a question to answer, not a licence
- *  to create. */
+ *  new one. Everything was recoverable, since the original apps still existed
+ *  and users.info gave their ids back, and nothing about the run said a second
+ *  app was about to be born. A missing record is a question to answer, and it is
+ *  no licence to create. */
 async function appIdBehindToken(botToken: string): Promise<string> {
   const who = await get(botToken, "auth.test");
   if (who.ok !== true) return "";
@@ -481,7 +482,7 @@ if (existingAppId !== undefined && existingAppId !== "") {
   // THE WHOLE DECLARATION IS RECONCILED EVERY RUN, with no flag: scopes, events
   // and org deployment, compared against src/app-manifest.ts in ONE pass. An app
   // created before any of them was added is behind, and its owner cannot tell
-  // from the outside — a missing scope shows up as a one-word error from an
+  // from the outside: a missing scope shows up as a one-word error from an
   // unrelated call, and a missing EVENT shows up as nothing at all. This was
   // three separate branches and the third was never written, which is how
   // member_joined_channel reached the manifest that CREATES an app while every
@@ -509,8 +510,8 @@ if (existingAppId !== undefined && existingAppId !== "") {
     drift.push("declares org_deploy_enabled:false, which silently kills its event delivery");
   }
 
-  // ADD, NEVER REPLACE. This list is what scramble needs, not the whole of what
-  // the app is allowed to be: an app can hold scopes for features scramble knows
+  // ADD TO WHAT IS THERE. This list is what scramble needs, and an app is
+  // allowed more than that: an app can hold scopes for features scramble knows
   // nothing about, and sending `want` as the entire list REMOVES them. Measured:
   // reconciling an older app whose manifest declares slash commands was rejected
   // outright, `requires_commands_bot_scope … pointer /features/slash_commands`,
@@ -627,7 +628,7 @@ console.log(`onboard: the bot is @${String(who.user)} (${String(who.bot_id)})`);
 
 // The channel. AN AGENT DOES NOT JOIN A CHANNEL, whether it is public or
 // private: a member invites it. The channel mapping is written either way, so
-// the agent works the moment the invite lands, with nothing to re-run.
+// the agent works the moment the invite arrives, with nothing to re-run.
 let channelName: string | undefined;
 let channelId: string | undefined;
 const wanted = flag("channel");
@@ -692,7 +693,7 @@ async function verb(args: string[]): Promise<{ code: number; out: string; err: s
   return { code: await proc.exited, out: o, err: e };
 }
 
-// VERIFY THE WAKE PATH, NOT THE READ PATH.
+// VERIFY THE WAKE PATH. A read proves a different thing.
 //
 // This ended on a `message read` and called that verification. A fourth agent
 // onboarded, got 14 lines from a read, reported success, and could receive

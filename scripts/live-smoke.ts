@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 // The LIVE smoke: every stage runs the real CLI against the real Slack
-// workspace. It exists because `bun test --coverage` was green at 296 tests and
+// workspace. It exists because the unit suite passed all 296 of its tests at
 // 100% coverage while four defects were live in the Slack path, each one
 // visible in the first minute of hand-testing: a read that hid every agent's
 // messages, a file upload Slack rejects, a `message check` that reported
@@ -60,8 +60,8 @@ const stamp = process.env.SMOKE_STAMP ?? String(Math.floor(Date.now() / 1000));
 //
 // bun also loads `.env` from the checkout into every process it starts, so
 // clearing these by name is what makes the run independent of the machine.
-// EMPTIED, never deleted. bun loads `.env` from the checkout into every process
-// it starts, and a deleted name is simply absent, so the child reads it back out
+// EMPTIED IN PLACE. bun loads `.env` from the checkout into every process it
+// starts, and a deleted name is absent, so the child reads it back out
 // of the file. An already-set name wins over the file, and rewriteConfig treats
 // an empty key as no key.
 const env: Record<string, string> = {
@@ -127,7 +127,7 @@ async function stageRead(): Promise<void> {
   check("read/peer", r.out.includes(peer), `peer agent's line present in read: ${r.out.includes(peer)}`);
 }
 
-/** A reply sent with --thread must land INSIDE the thread, and the line that
+/** A reply sent with --thread must arrive INSIDE the thread, and the line that
  *  comes back must carry `thread` naming the root. */
 async function stageThread(): Promise<void> {
   const root = `smoke ${stamp} thread root`;
@@ -169,8 +169,8 @@ async function stageAttach(): Promise<void> {
 
   // READ IT BACK. A file can be carried on a message and be unopenable: a raw
   // PUT upload gets a 200 from Slack, stores a file that shares with nothing and
-  // serves a sign-in page instead of bytes, and every surface short of this one
-  // reports success. This stage asserted only that the file was LISTED, so it
+  // serves a sign-in page where the bytes belong, and every surface short of
+  // this one reports success. This stage asserted only that the file was LISTED, so it
   // passed through that defect for hours and I read the symptom as an org-wide
   // block on files. The round trip is the only thing that proves an attachment.
   const f = (withFile!.files as Array<{ id?: string }>)[0];
@@ -297,8 +297,8 @@ async function stageCheck(): Promise<void> {
 }
 
 /** Inbound file BYTES, which this workspace refuses to serve to a bot token.
- *  Kept OUT of the default run so the default stays a regression detector
- *  rather than a permanent red, and kept here so the day the app's install
+ *  Kept OUT of the default run, which keeps the default a regression detector
+ *  and never a permanent red, and kept here so the day the app's install
  *  changes, `bun scripts/live-smoke.ts inbound` answers whether it worked.
  *  Slack's three refusals, all recorded: a sign-in page when the auth header is
  *  dropped across the redirect, `Error serving file.` when it is kept, and a 404
@@ -321,8 +321,8 @@ async function stageInbound(): Promise<void> {
   );
 }
 
-/** RESOLVING A CHANNEL BY NAME when the config does not map it — the path an
- *  agent takes the moment it is invited somewhere new, and the one nothing
+/** RESOLVING A CHANNEL BY NAME when the config does not map it, which is the
+ *  path an agent takes the moment it is invited somewhere new, and the one nothing
  *  covered. It ran through conversations.list without a team_id, which on an org
  *  install answers `missing_argument`; the code swallowed that and reported "no
  *  Slack channel for <name>", so a channel the operator had just added the agent
@@ -406,7 +406,7 @@ async function stageAttachUnmapped(): Promise<void> {
  *  next sweep re-delivered whole channels: hundreds of lines into a channel of
  *  people, until the harness suppressed it for rate.
  *
- *  This asserts the shape rather than a count: a first sweep may legitimately
+ *  This asserts the shape and never a count: a first sweep may legitimately
  *  return a lot, and the SECOND must return nothing, because the cursor it wrote
  *  has to be the one it reads back. */
 async function stageFreshCursor(): Promise<void> {
@@ -435,15 +435,15 @@ async function stageFreshCursor(): Promise<void> {
 
 /** A LISTENER RUNNING A COMMIT BEHIND THE INSTALL, which doctor has to name.
  *
- *  This is the shape that wasted the most time today. A landed fix does not reach
- *  a running process, so a listener keeps the code it started with, and every
+ *  This is the shape that wasted the most time today. A committed fix does not
+ *  reach a running process, so a listener keeps the code it started with, and every
  *  surface an agent looks at describes the REPOSITORY: the log, the tests, the
  *  version. Three times I chased a defect that was already fixed, in a listener
  *  that had never loaded the fix.
  *
  *  Started from an older installed copy, which is what makes the check
  *  meaningful: the process names its own commit in its command line, so doctor
- *  compares two facts instead of guessing from file times. */
+ *  compares two facts, with no guess from file times. */
 async function stageStaleListener(): Promise<void> {
   const root = `${process.env.HOME ?? ""}/.local/share/scramble`;
   const installed = (await Bun.file(`${root}/current/src/COMMIT`).text()).trim();
@@ -510,8 +510,9 @@ for (const name of run) {
   }
 }
 // WRITE THE RECORD, naming the commit it ran against. A claim that the Slack
-// path works is checkable against this file instead of against memory: if the
-// commit here is not HEAD, the claim is about code that no longer exists.
+// path works is checkable against this file, where memory would answer from
+// nothing: a commit here that differs from HEAD means the claim is about code
+// that no longer exists.
 const head = await (async () => {
   const p = Bun.spawn(["git", "rev-parse", "--short", "HEAD"], { stdout: "pipe", stderr: "ignore" });
   const out = (await new Response(p.stdout).text()).trim();
