@@ -310,7 +310,13 @@ export function computeMentions(channel: string, text: string, sender: string): 
     // to that agent's id and recorded `alignment_benchmark's`, a name nobody
     // has, so the person was pinged while their ledger owed nothing
     // (model-failure-research, 2026-08-27).
-    for (const m of proseOf(text).matchAll(/@([A-Za-z0-9._-]+)/g)) {
+    // THE WHOLE PATTERN `denormalize` USES, its leading boundary included. I
+    // took the name half and dropped the boundary, so `ret@4096` recorded 4096
+    // and an email address recorded its domain: mentions of things that are no
+    // handle, in the same ledger that holds a real one (model-failure-research,
+    // 2026-08-27). `<` sits with the name characters so an already-converted
+    // `<@U123>` is left to the entity reader.
+    for (const m of proseOf(text).matchAll(/(?:^|[^A-Za-z0-9._<-])@([A-Za-z0-9._-]+)/g)) {
       const name = (m[1] ?? "").replace(/[._-]+$/, "");
       if (name) out.add(name);
     }

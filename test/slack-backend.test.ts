@@ -156,6 +156,17 @@ describe("computeMentions", () => {
     expect(computeMentions("general", "hello there", "x")).toEqual([]);
   });
 
+  test("an @ in the middle of a word is no mention", () => {
+    // I took the name half of `denormalize`'s pattern and dropped its leading
+    // boundary, so `ret@4096` recorded 4096 and an email recorded its domain
+    // (model-failure-research, 2026-08-27).
+    expect(computeMentions("general", "@andrew DQ@4096 beats ret@4096 here.", "x")).toEqual(["andrew"]);
+    expect(computeMentions("general", "mail me at name@example.com", "x")).toEqual([]);
+    // A mention after punctuation still counts, which is what the boundary
+    // allows and a whitespace rule refused.
+    expect(computeMentions("general", "(@ana) and,@bo", "x")).toEqual(["ana", "bo"]);
+  });
+
   test("a possessive handle records the NAME, the way Slack converts it", () => {
     // `@alignment_benchmark's` converted to that agent's id and recorded
     // `alignment_benchmark's`, a name nobody has, so the person was pinged while
