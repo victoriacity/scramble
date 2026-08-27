@@ -473,6 +473,15 @@ function atomsIn(text: string): string[] {
  *
  *  Keeping mentions working is the point of the message, so this is checked in
  *  PROSE on both sides. */
+/** Every Slack ts a draft cites, deduplicated, in the order they appear.
+ *
+ *  A citation is how one agent sends another to the evidence. Read from the whole
+ *  draft, fenced blocks included: an evidence table is where a ts most often
+ *  sits, and a mistyped digit there sends the reader to nothing. */
+export function citedTimestamps(text: string): string[] {
+  return [...new Set([...text.matchAll(/\b\d{10}\.\d{6}\b/g)].map((m) => m[0]))];
+}
+
 export function mentionsIn(text: string): string[] {
   // TRAILING PUNCTUATION BELONGS TO THE SENTENCE. A Slack handle may contain a
   // dot, so the match takes one and `@name.` at the end of a sentence read as a

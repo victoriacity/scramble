@@ -19,6 +19,7 @@ import {
   causalIn,
   connectivesIn,
   factsIn,
+  citedTimestamps,
   mentionsIn,
   proseRatio,
   strengthDrift,
@@ -460,6 +461,22 @@ describe("choosing what to send", () => {
 
   test("mentions are counted in prose only", () => {
     expect(mentionsIn("hi @dev and `@notme` here")).toEqual(["@dev"]);
+  });
+
+  test("a cited ts is read from the WHOLE draft, fences included", () => {
+    // A citation sends the reader to the evidence, and an evidence table inside
+    // a fence is where most of them sit. An agent cited 1787656658.009669 for a
+    // line Slack holds at 1787656658.009699, hand-copied from a preview, and the
+    // reader had to search the channel for what was meant.
+    expect(citedTimestamps("see 1787656658.009669 for the wording")).toEqual(["1787656658.009669"]);
+    expect(citedTimestamps("```\nts 1787656658.009699 andrew\n```")).toEqual(["1787656658.009699"]);
+    // Deduplicated, in the order they appear.
+    expect(citedTimestamps("1787839008.802689 then 1787841031.091999 then 1787839008.802689")).toEqual([
+      "1787839008.802689",
+      "1787841031.091999",
+    ]);
+    // A number that is not a Slack ts is not a citation.
+    expect(citedTimestamps("commit 4e7bd9e, 340 lines, 39 files, 1787.55")).toEqual([]);
   });
 
   test("trailing punctuation belongs to the sentence, never to the name", () => {

@@ -39,9 +39,15 @@ import { credentialsPath, firstCredential, freshCliToken } from "./slack-credent
  *  agent makes after reading a warning as a failure, and it is short enough that
  *  saying the same thing again in a later conversation goes through. */
 const DUPLICATE_WINDOW_MS = 10 * 60 * 1000;
+
+/** How many cited timestamps one send checks. A message carrying an evidence
+ *  table cites a handful; a cap keeps a long one from spending twenty API calls
+ *  after the message has already gone out. What it skips is printed. */
+const CITED_TS_CAP = 6;
 import {
   chooseText,
   composePrompt,
+  citedTimestamps,
   critiquePrompt,
   readTierBlock,
   mentionsIn,
@@ -682,6 +688,30 @@ async function postText(
                 : `Every mention survived: ${storedProse.join(", ") || "none"}\n`),
           );
         }
+      }
+      // A CITATION THAT POINTS AT NOTHING, reported while the sender is still
+      // here. An agent cited `1787656658.009669` for a line Slack holds at
+      // `1787656658.009699`, hand-copied from a notification preview, and the
+      // reader spent a search finding what was meant. Four investigations in one
+      // day turned on an exact ts.
+      //
+      // A NOTE, never a refusal: the message is already in the channel, and a ts
+      // from another channel is a legitimate citation this cannot check. The
+      // detector is the whole second, which no correct citation trips.
+      const cites = citedTimestamps(text).filter((c) => c !== r.ts);
+      // THE CAP SAYS WHAT IT DROPPED. A bound nobody prints reads as full
+      // coverage, which is how a `tail -1` on a smoke diagnostic hid a failure in
+      // this workspace.
+      if (cites.length > CITED_TS_CAP) {
+        io.writeErr(`cite: checked the first ${CITED_TS_CAP} of ${cites.length} cited ts, and left ${cites.slice(CITED_TS_CAP).join(", ")} unchecked.`);
+      }
+      for (const cited of cites.slice(0, CITED_TS_CAP)) {
+        const look = await s.backend.citedMessage(channel, cited, from);
+        if (look.error !== undefined || look.exact || look.near === undefined) continue;
+        io.writeErr(
+          `cite: ${channel} holds no message at ${cited}, and it holds ${look.near} in that same second. ` +
+            `Check the digits, and read a ts from the delivered line instead of a preview.`,
+        );
       }
     }
     await settleSend(io, channel, from, r.ts, thread, {

@@ -1024,6 +1024,46 @@ export class SlackBackend {
     };
   }
 
+  /** WHETHER THIS CHANNEL HOLDS A MESSAGE AT THIS ts, and what sits beside it.
+   *
+   *  A citation is how one agent sends another to the evidence, and a mistyped
+   *  digit sends them to a message that does not exist. An agent cited
+   *  `1787656658.009669` for a line Slack holds at `1787656658.009699`, copied by
+   *  hand from a notification preview, and the reader had to search the channel
+   *  to find what was meant. Four investigations in one day turned on an exact
+   *  ts.
+   *
+   *  THE SAME SECOND IS THE DETECTOR. A ts whose whole-second part matches a real
+   *  message while the fraction differs is a transcription slip, and nothing else
+   *  produces that shape. A ts belonging to some other channel falls in no second
+   *  this channel holds, so it stays quiet: a check that fires on a correct
+   *  citation is one agents learn to skip. */
+  async citedMessage(
+    channel: string,
+    ts: string,
+    as: string,
+  ): Promise<{ exact: boolean; near?: string; error?: string }> {
+    const second = ts.split(".")[0] ?? "";
+    if (!/^\d{10}$/.test(second)) return { exact: false, error: `${ts} is not a Slack ts` };
+    const resolved = await this.slackChannelFor(this.tokenOrDefault(as), channel);
+    if (resolved.id === undefined) return { exact: false, error: resolved.error };
+    const t = this.agentToken(as);
+    if (!t.ok) return { exact: false, error: t.error };
+    // The whole second around the citation, both ends inclusive.
+    const url =
+      `${HISTORY_URL}?channel=${encodeURIComponent(resolved.id)}` +
+      `&oldest=${encodeURIComponent(`${second}.000000`)}&latest=${encodeURIComponent(`${second}.999999`)}` +
+      `&inclusive=true&limit=20`;
+    const r = await readOk<{ messages?: Array<{ ts?: string }> }>(this.fetch, url, {
+      headers: { authorization: `Bearer ${t.token}` },
+    });
+    if (!r.ok) return { exact: false, error: r.error };
+    const found = (r.data.messages ?? []).map((m) => m.ts ?? "").filter((x) => x !== "");
+    if (found.includes(ts)) return { exact: true };
+    const near = found[0];
+    return near === undefined ? { exact: false } : { exact: false, near };
+  }
+
   /** READ ONE MESSAGE BACK FROM SLACK BY ITS ts, as Slack stored it.
    *
    * A send's exit code says Slack accepted something. It says nothing about

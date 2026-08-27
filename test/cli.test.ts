@@ -1292,6 +1292,66 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     expect(errs.join(" ")).not.toContain("DIFFERS");
   });
 
+  test("a MISTYPED CITATION is reported, and a correct one says nothing", async () => {
+    // An agent cited 1787656658.009669 for a line Slack holds at
+    // 1787656658.009699, hand-copied from a notification preview, and the reader
+    // spent a search finding what was meant. Four investigations in one day
+    // turned on an exact ts. The detector is the whole second: a correct
+    // citation, and a ts belonging to another channel, trip nothing.
+    const cwd = scratchDir("send-cite-check");
+    const asked: string[] = [];
+    const responder = async (u: string | URL): Promise<Response> => {
+      const url = String(u);
+      asked.push(url);
+      if (url.includes("chat.postMessage")) return new Response(JSON.stringify({ ok: true, ts: "99.9", message: {} }), { status: 200 });
+      // The window around 1787656658: Slack holds the ...699 line.
+      if (url.includes("oldest=1787656658.000000"))
+        return new Response(JSON.stringify({ ok: true, messages: [{ ts: "1787656658.009699" }] }), { status: 200 });
+      // The window around a ts from some other channel: nothing here.
+      if (url.includes("oldest=1700000000.000000")) return new Response(JSON.stringify({ ok: true, messages: [] }), { status: 200 });
+      if (url.includes("conversations.history"))
+        return new Response(JSON.stringify({ ok: true, messages: [{ ts: "99.9", text: "see 1787656658.009669 and 1700000000.000001" }] }), {
+          status: 200,
+        });
+      return new Response(JSON.stringify({ ok: true, messages: [] }), { status: 200 });
+    };
+    const { io, errs } = stubIo(cwd, async (u) => responder(u));
+    writeSlackConfig(cwd, {
+      appToken: "xapp-1",
+      token: "xoxb-1",
+      channels: { general: "C1" },
+      agents: { dev: { token: "T", handle: "dev" } },
+    });
+    io.readStdin = async () => "see 1787656658.009669 and 1700000000.000001";
+    expect(await main(["message", "send", "--target", "general", "--as", "dev", "--verify", "--backend", "slack"], io)).toBe(0);
+    const said = errs.join("\n");
+    expect(said).toContain("cite: general holds no message at 1787656658.009669, and it holds 1787656658.009699");
+    // The ts with nothing in its second is a citation from elsewhere, and it is
+    // left alone. A check that fires on a correct citation is one agents skip.
+    expect(said).not.toContain("1700000000.000001, and it holds");
+    // The message still went out, and the note never changes that.
+    expect(said).toContain("posted: general at ts 99.9");
+
+    // THE CAP SAYS WHAT IT DROPPED. Seven citations, six checked, and the note
+    // names the one it never looked at. A bound nobody prints reads as full
+    // coverage.
+    const many = stubIo(cwd, async (u) => responder(u));
+    const seven = [
+      "1700000001.000001",
+      "1700000002.000002",
+      "1700000003.000003",
+      "1700000004.000004",
+      "1700000005.000005",
+      "1700000006.000006",
+      "1700000007.000007",
+    ].join(" ");
+    many.io.readStdin = async () => `the evidence: ${seven}`;
+    expect(
+      await main(["message", "send", "--target", "general", "--as", "dev", "--verify", "--backend", "slack"], many.io),
+    ).toBe(0);
+    expect(many.errs.join("\n")).toContain("cite: checked the first 6 of 7 cited ts, and left 1700000007.000007 unchecked.");
+  });
+
   test("`--verify` reads a THREAD REPLY, which history never returns", async () => {
     // Measured by the agent it happened to: verify answered "slack has no
     // message at <ts>" for its own threaded reply, while `message read` found
