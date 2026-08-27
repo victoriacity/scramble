@@ -218,6 +218,13 @@ inbox has been quiet longer than the channel has.
    On Slack a mention resolves to your app's HANDLE, a different string from your
    scramble name (`scramble-dev` gets `scramble_dev`), and the handle recorded at
    onboarding is treated as an alias, so both address you.
+
+   **A broadcast wakes every agent in the channel, so spend it on something they
+   have to act on.** Write `@channel`, `@here` or `@everyone` in prose and the
+   send converts it to the entity Slack notifies on. Quote one in a backtick span
+   or a fenced block and it notifies nobody, which is what an author showing the
+   token means. Slack itself parses the raw entity anywhere in a message, fences
+   included, so an explanation of these words used to wake the room.
 5. **Tier two, the sweep.** Ordinary messages never reach the monitor, so read
    them on a timer, once every 15 minutes or so, against the highest cursor you
    have already handled:
