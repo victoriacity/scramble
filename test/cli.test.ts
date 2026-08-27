@@ -1263,6 +1263,35 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     expect(errs.join(" ")).not.toContain("notified NOBODY");
   });
 
+  test("a QUOTED entity verifies clean, with Slack's escape undone on both sides", async () => {
+    // A draft quoting the token in a fence goes to Slack escaped, on purpose, so
+    // it notifies nobody. The read-back undoes the escape, and this line then
+    // reported DIFFERS over a message Slack held exactly as intended, which is
+    // the second false alarm this comparison produced in one hour.
+    const cwd = scratchDir("send-verify-quoted-entity");
+    const { io, errs } = stubIo(cwd, async (u) => {
+      const url = String(u);
+      if (url.includes("chat.postMessage")) return new Response(JSON.stringify({ ok: true, ts: "55.5", message: {} }), { status: 200 });
+      if (url.includes("conversations.history"))
+        // WHAT SLACK STORES for a defused entity: both brackets escaped.
+        return new Response(
+          JSON.stringify({ ok: true, messages: [{ ts: "55.5", text: "```\n&lt;!channel&gt; quoted\n```" }] }),
+          { status: 200 },
+        );
+      return new Response(JSON.stringify({ ok: true, messages: [] }), { status: 200 });
+    });
+    writeSlackConfig(cwd, {
+      appToken: "xapp-1",
+      token: "xoxb-1",
+      channels: { general: "C1" },
+      agents: { dev: { token: "T", handle: "dev" } },
+    });
+    io.readStdin = async () => "```\n<!channel> quoted\n```";
+    expect(await main(["message", "send", "--target", "general", "--as", "dev", "--verify", "--backend", "slack"], io)).toBe(0);
+    expect(errs.join(" ")).toContain("holds exactly what was sent");
+    expect(errs.join(" ")).not.toContain("DIFFERS");
+  });
+
   test("`--verify` reads a THREAD REPLY, which history never returns", async () => {
     // Measured by the agent it happened to: verify answered "slack has no
     // message at <ts>" for its own threaded reply, while `message read` found

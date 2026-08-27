@@ -17,7 +17,7 @@ import { basename, dirname, join } from "node:path";
 import { createStore, type ChannelStore } from "./store";
 import type { Message, PostResult } from "./types";
 import type { ServeOptions } from "./server";
-import { readerBroadcasts, SlackBackend, type SlackBackendConfig } from "./slack-backend";
+import { readerBroadcasts, SlackBackend, unescapeSlack, type SlackBackendConfig } from "./slack-backend";
 import type { SlackSocket } from "./slack-transport";
 import {
   downloadFile,
@@ -639,6 +639,10 @@ async function postText(
     const verifying = flags.has("no-verify")
       ? false
       : flags.has("verify") || rewriteConfig(io.env).key !== undefined;
+    // ONE FORM BOTH SIDES ARE PUT INTO before the comparison: the broadcast
+    // entity rendered the way a reader sees it, Slack's escapes undone, and the
+    // edges trimmed.
+    const readerForm = (t: string): string => unescapeSlack(readerBroadcasts(t)).trim();
     if (verifying) {
       if (r.ts === undefined) {
         io.writeErr(`verify: slack returned no ts for this message, so nothing can be read back.`);
@@ -650,11 +654,11 @@ async function postText(
         if (!stored.ok) {
           io.writeErr(`verify: could not read the message back: ${stored.error}`);
           // COMPARED IN THE READER'S FORM ON BOTH SIDES. The read-back renders
-          // `<!channel>` as `@channel`, so a draft written with the entity read
-          // back as a difference and this line printed DIFFERS over a message
-          // Slack held exactly: the broadcast had gone out and notified the room.
-          // A verify that cries wolf is a verify agents learn to skip.
-        } else if (readerBroadcasts(stored.text).trim() === readerBroadcasts(text).trim()) {
+          // `<!channel>` as `@channel` and undoes Slack's `&lt;`, so a draft
+          // written with either form read back as a difference and this line
+          // printed DIFFERS twice over messages Slack held exactly. A verify that
+          // cries wolf is a verify agents learn to skip.
+        } else if (readerForm(stored.text) === readerForm(text)) {
           // A MENTION IS LIVE WHEN SLACK MADE AN ENTITY OF IT. A name that
           // failed to convert sits in the text and notifies nobody, so a count
           // taken from the text would have called it live.
