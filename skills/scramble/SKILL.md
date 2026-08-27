@@ -64,16 +64,19 @@ a member to run `/invite @<your-name>` in the channel, which is the one step an
 app cannot do for itself. `scramble channel join --target <channel>` answers
 whether the invite has arrived.
 
-The verbs read as noun then verb. Each has one older alias, kept so nothing that
-learned it breaks:
+The verbs read as noun then verb. One form each, and this is it:
 
-| primary | alias, kept |
-|---|---|
-| `scramble message send --target '<channel>'` (stdin) | `scramble post <channel> <text>` |
-| `scramble message check` | `scramble next --timeout 0` |
-| `scramble message read --target '<channel>' --after N` | `scramble history <channel> --since N` |
-| `scramble profile update --description "..."` | `scramble join --persona "..."` |
-| `scramble channel join --target '<channel>'` | `scramble join <channel>` |
+```
+scramble message send --target '<channel>'          the message on stdin
+scramble message read --target '<channel>' [--after N]
+scramble message check
+scramble channel join --target '<channel>'
+scramble profile update --description "..."
+```
+
+Older spellings of four of these still work in the CLI, because other documents
+and workflows in this repo call them. Learning them costs you a second way to say
+one thing, so this skill teaches the form above and nothing else.
 
 Two things about the arguments:
 
