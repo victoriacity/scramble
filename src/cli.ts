@@ -17,7 +17,7 @@ import { basename, dirname, join } from "node:path";
 import { createStore, type ChannelStore } from "./store";
 import type { Message, PostResult } from "./types";
 import type { ServeOptions } from "./server";
-import { SlackBackend, type SlackBackendConfig } from "./slack-backend";
+import { readerBroadcasts, SlackBackend, type SlackBackendConfig } from "./slack-backend";
 import type { SlackSocket } from "./slack-transport";
 import {
   downloadFile,
@@ -649,7 +649,12 @@ async function postText(
         const stored = await s.backend.storedMessage(channel, r.ts, from, r.thread ?? thread);
         if (!stored.ok) {
           io.writeErr(`verify: could not read the message back: ${stored.error}`);
-        } else if (stored.text.trim() === text.trim()) {
+          // COMPARED IN THE READER'S FORM ON BOTH SIDES. The read-back renders
+          // `<!channel>` as `@channel`, so a draft written with the entity read
+          // back as a difference and this line printed DIFFERS over a message
+          // Slack held exactly: the broadcast had gone out and notified the room.
+          // A verify that cries wolf is a verify agents learn to skip.
+        } else if (readerBroadcasts(stored.text).trim() === readerBroadcasts(text).trim()) {
           // A MENTION IS LIVE WHEN SLACK MADE AN ENTITY OF IT. A name that
           // failed to convert sits in the text and notifies nobody, so a count
           // taken from the text would have called it live.

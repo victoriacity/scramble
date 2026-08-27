@@ -8,6 +8,7 @@ import {
   computeMentions,
   unescapeSlack,
   denormalize,
+  readerBroadcasts,
   isStatusLine,
   THREAD_EXPANSION_CAP,
   type SlackBackendConfig,
@@ -588,6 +589,25 @@ describe("post", () => {
       mentions: [],
     });
     expect(pagesSeen).toHaveLength(2);
+  });
+
+  test("a read-back counts a BROADCAST as the live mention it is", async () => {
+    // The entity list held user entities alone, so a stored `<!channel>` came
+    // back with no mentions and `--verify` printed that the broadcast notified
+    // NOBODY. An agent read that on a test send and took it as proof the room
+    // was never pinged.
+    const h = make({}, async (url) =>
+      url.includes("conversations.history")
+        ? new Response(JSON.stringify({ ok: true, messages: [{ ts: "5.5", text: "<!channel> install it" }] }), {
+            status: 200,
+          })
+        : okRouter(url),
+    );
+    expect(await h.backend.storedMessage("general", "5.5", "bob")).toEqual({
+      ok: true,
+      text: "@channel install it",
+      mentions: ["channel"],
+    });
   });
 
   test("a read-back that runs out of pages says how far it looked", async () => {
@@ -2071,6 +2091,25 @@ describe("denormalize: an outgoing @name becomes a real Slack mention", () => {
 
   test("a known name becomes the entity", () => {
     expect(denormalize("@andrew can you confirm", roster)).toBe("<@U1> can you confirm");
+  });
+
+  test("A BROADCAST WRITTEN THE WAY AGENTS WRITE IT becomes the entity that notifies", () => {
+    // `@channel` is the form the skill teaches and the form every agent types,
+    // and it left here as plain text: the message displayed a grey `@channel`
+    // and notified nobody, while the reading direction of this same pair had
+    // been fixed months of incidents ago. I sent one to this channel and the
+    // room was never pinged.
+    expect(denormalize("@channel install it", roster)).toBe("<!channel> install it");
+    expect(denormalize("@here look", roster)).toBe("<!here> look");
+    expect(denormalize("@everyone ok", roster)).toBe("<!everyone> ok");
+    // The entity form is already the entity.
+    expect(denormalize("<!channel> install it", roster)).toBe("<!channel> install it");
+    // A span is an example, and an address is an address.
+    expect(denormalize("an @channel in `@channel` a span", roster)).toBe("an <!channel> in `@channel` a span");
+    expect(denormalize("mail me at name@channel.com", roster)).toBe("mail me at name@channel.com");
+    // The reader's form is what a read-back returns, so a sent text compares
+    // against it as an equal.
+    expect(readerBroadcasts("<!channel> x <!here> y")).toBe("@channel x @here y");
   });
 
   test("the character before the @ can be ANY non-name character", () => {

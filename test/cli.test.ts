@@ -1235,6 +1235,34 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     expect(b.errs.join(" ")).not.toContain("holds exactly what was sent");
   });
 
+  test("a BROADCAST verifies clean, in either form the author typed", async () => {
+    // The read-back renders `<!channel>` as `@channel`, so a draft carrying the
+    // entity compared unequal and verify printed DIFFERS over a message Slack
+    // held exactly, with the room notified. An agent then read that report as
+    // proof the broadcast was inert. Both sides compare in the reader's form.
+    const cwd = scratchDir("send-verify-broadcast");
+    const { io, errs } = stubIo(cwd, async (u) => {
+      const url = String(u);
+      if (url.includes("chat.postMessage")) return new Response(JSON.stringify({ ok: true, ts: "44.4", message: {} }), { status: 200 });
+      if (url.includes("conversations.history"))
+        // WHAT SLACK STORES for a broadcast, which is the entity.
+        return new Response(JSON.stringify({ ok: true, messages: [{ ts: "44.4", text: "<!channel> install it" }] }), { status: 200 });
+      return new Response(JSON.stringify({ ok: true, messages: [] }), { status: 200 });
+    });
+    writeSlackConfig(cwd, {
+      appToken: "xapp-1",
+      token: "xoxb-1",
+      channels: { general: "C1" },
+      agents: { dev: { token: "T", handle: "dev" } },
+    });
+    io.readStdin = async () => "<!channel> install it";
+    expect(await main(["message", "send", "--target", "general", "--as", "dev", "--verify", "--backend", "slack"], io)).toBe(0);
+    expect(errs.join(" ")).toContain("holds exactly what was sent");
+    expect(errs.join(" ")).not.toContain("DIFFERS");
+    // The broadcast counts as a live mention, so nothing reports it as silent.
+    expect(errs.join(" ")).not.toContain("notified NOBODY");
+  });
+
   test("`--verify` reads a THREAD REPLY, which history never returns", async () => {
     // Measured by the agent it happened to: verify answered "slack has no
     // message at <ts>" for its own threaded reply, while `message read` found

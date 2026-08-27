@@ -281,6 +281,12 @@ export function denormalize(text: string, roster: Record<string, string>): strin
           // `<@U123>` is left alone, and an address like name@example.com stays
           // untouched because the character before its @ is part of a name.
           part.replace(/(^|[^A-Za-z0-9._<-])@([A-Za-z0-9._-]+)/g, (whole, lead: string, name: string) => {
+            // A BROADCAST IS AN ENTITY TOO. `@channel` in a draft is the form the
+            // skill teaches and the form every agent writes, and it went to Slack
+            // as plain text: the message displayed a grey `@channel` and notified
+            // nobody, which is the failure this file already fixed in the reading
+            // direction and never fixed in the writing one.
+            if ((BROADCAST_KINDS as readonly string[]).includes(name)) return `${lead}<!${name}>`;
             const exact = idOf.get(name);
             if (exact !== undefined) return `${lead}<@${exact}>`;
             // A TRAILING DOT IS THE SENTENCE, and it was eating the mention. A
@@ -324,6 +330,21 @@ export function denormalize(text: string, roster: Record<string, string>): strin
  *  then into `<`, inventing a bracket the author never typed. */
 export function unescapeSlack(text: string): string {
   return text.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+}
+
+/** The three broadcasts, in the form a reader sees.
+ *
+ *  ONE PAIR, TWO DIRECTIONS. `normalize` turns `<!channel>` into `@channel` for
+ *  the reader and the ledger; `denormalize` turns `@channel` back into the entity
+ *  that notifies. A draft written the way the skill teaches, `@channel`, went out
+ *  as literal text and notified nobody, and a draft written with the raw entity
+ *  read back in the other form and made `--verify` print DIFFERS over an intact
+ *  message. Both directions come from this one list. */
+export const BROADCAST_KINDS = ["channel", "here", "everyone"] as const;
+
+/** A sent text in the form the read-back returns, so the two compare as equals. */
+export function readerBroadcasts(text: string): string {
+  return text.replace(/<!(channel|here|everyone)>/g, (_w, kind: string) => `@${kind}`);
 }
 
 export function computeMentions(channel: string, text: string, sender: string): string[] {
@@ -1068,6 +1089,11 @@ export class SlackBackend {
     // shipped this evening, so the check would have reported a live mention for
     // a name notifying nobody.
     const entities = [...stored.matchAll(/<@([A-Z0-9]+)>/g)].map((m) => this.roster[m[1] ?? ""] ?? (m[1] ?? ""));
+    // A BROADCAST ENTITY NOTIFIES THE ROOM, and this list held user entities
+    // alone, so `--verify` reported a live `<!channel>` as a mention that
+    // notified NOBODY. An agent read that on a test send and took it as proof the
+    // broadcast was inert.
+    for (const m of stored.matchAll(/<!(channel|here|everyone)>/g)) entities.push(m[1] ?? "");
     const text = await this.normalize(t.token, stored);
     return { ok: true, text, mentions: [...new Set(entities)] };
   }
@@ -1166,7 +1192,7 @@ export class SlackBackend {
     // Rendered as `@channel`, `@here`, `@everyone`, which computeMentions then
     // picks up like any other name, so one normalization makes the existing
     // machinery do the rest.
-    let out = text.replace(/<!(channel|here|everyone)>/g, (_w, kind: string) => `@${kind}`);
+    let out = readerBroadcasts(text);
     for (const m of out.matchAll(/<@([A-Z0-9]+)>/g)) {
       const uid = m[1]!;
       const name = await this.resolveName(token, uid);
