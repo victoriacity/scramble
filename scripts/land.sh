@@ -151,6 +151,19 @@ if ! "${SCRAMBLE_BUN:-bun}" "$(git rev-parse --show-toplevel)/src/bin.ts" lint "
   fail "the commit message breaks the language rules above. Rewrite it and run again."
 fi
 
+# ONE SENTENCE. The operator, 2026-08-27: "commit message should be 1 SENTENCE".
+# Every message in this repo's history was a subject line plus paragraphs of
+# reasoning, and `git log` is the wrong place for that: the reasoning belongs in
+# the code comment beside the change, where a reader meets it.
+#
+# The check counts lines with any text on them, and counts sentence ends inside
+# the line. A trailing full stop is fine; one in the middle means two sentences.
+MSG_LINES="$(grep -c '[^[:space:]]' "$LINT_INPUT" || true)"
+[ "$MSG_LINES" -le 1 ] || fail "the commit message must be ONE sentence on one line, and this has $MSG_LINES lines with text."
+if grep -Eq '[.!?]["'"'"'\)]*[[:space:]]+[^[:space:]]' "$LINT_INPUT"; then
+  fail "the commit message must be ONE sentence, and this carries a sentence end with more text after it."
+fi
+
 if [ -n "$MSG_FILE" ]; then
   git -c user.email=victoriacity74@gmail.com -c user.name="Andrew Sun" commit -q -F "$MSG_FILE" -- "${PATHS[@]}" || fail "git commit failed"
 else
