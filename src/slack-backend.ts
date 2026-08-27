@@ -17,7 +17,6 @@ import type { SlackSocket } from "./slack-transport";
 import { STATUS_METADATA_TYPE } from "./status";
 import { proseOf } from "./language";
 import { originMetadata, readOrigin, type Origin } from "./origin";
-import type { Composition } from "./tier";
 import { downloadFile, uploadToSlack, type SlackFileMeta } from "./attachments";
 
 // --- slack endpoint URLs ------------------------------------------------
@@ -43,7 +42,6 @@ const UPDATE_URL = "https://slack.com/api/chat.update";
 const DELETE_URL = "https://slack.com/api/chat.delete";
 const CONV_INFO_URL = "https://slack.com/api/conversations.info";
 const USERS_CONVERSATIONS_URL = "https://slack.com/api/users.conversations";
-const MEMBERS_URL = "https://slack.com/api/conversations.members";
 
 /** Cap on the number of threaded ROOTS expanded per history call. The fan-out
  *  is bounded: one extra conversations.replies request per expanded root.
@@ -824,64 +822,6 @@ export class SlackBackend {
     const own = this.agents[as]?.token;
     const via = own !== undefined && own !== "" ? `${as}'s own token` : "the config default token";
     return `${error} (channel ${channel} resolved to ${id}, ts ${ts}, under ${via})`;
-  }
-
-  /** WHO IS IN THIS CHANNEL, counted as people and agents.
-   *
-   *  The operator, 2026-08-27, asking for a tiered register: an `external`
-   *  channel has lots of humans in it, an `internal` one is where agents talk,
-   *  and neither follows from a channel being public or private. Membership is
-   *  the fact underneath that description, and Slack marks every member as a bot
-   *  or a person.
-   *
-   *  A MEMBER THIS HOST CANNOT CLASSIFY IS COUNTED AS UNKNOWN, never as an
-   *  agent: `tierOf` adds those to the people, because putting internal
-   *  shorthand in front of somebody who cannot read it is the failure worth
-   *  avoiding. */
-  async composition(
-    channel: string,
-    as: string,
-  ): Promise<{ ok: true; composition: Composition } | { ok: false; error: string }> {
-    const resolved = await this.slackChannelFor(this.tokenOrDefault(as), channel);
-    if (resolved.id === undefined) return { ok: false, error: resolved.error };
-    const t = this.agentToken(as);
-    if (!t.ok) return { ok: false, error: t.error };
-    const ids: string[] = [];
-    let cursor = "";
-    for (let page = 0; page < 10; page++) {
-      const r = await readOk<{ members?: string[]; response_metadata?: { next_cursor?: string } }>(
-        this.fetch,
-        `${MEMBERS_URL}?channel=${encodeURIComponent(resolved.id)}&limit=200` +
-          (cursor === "" ? "" : `&cursor=${encodeURIComponent(cursor)}`),
-        { headers: { authorization: `Bearer ${t.token}` } },
-      );
-      if (!r.ok) return { ok: false, error: r.error };
-      ids.push(...(r.data.members ?? []));
-      cursor = r.data.response_metadata?.next_cursor ?? "";
-      if (cursor === "") break;
-    }
-    // ONE users.list PAGE ANSWERS MOST OF THEM, and it is the page the roster
-    // already pays for. An id it never carried is asked for by name.
-    if (ids.some((id) => !this.botById.has(id))) await this.learnNames(t.token, "@__tier__");
-    let humans = 0;
-    let agents = 0;
-    let unknown = 0;
-    for (const id of ids) {
-      let isBot = this.botById.get(id);
-      if (isBot === undefined) {
-        const who = await readOk<{ user?: { is_bot?: boolean } }>(
-          this.fetch,
-          `${USERS_INFO_URL}?user=${encodeURIComponent(id)}`,
-          { headers: { authorization: `Bearer ${t.token}` } },
-        );
-        isBot = who.ok ? who.data.user?.is_bot : undefined;
-        if (typeof isBot === "boolean") this.botById.set(id, isBot);
-      }
-      if (isBot === true) agents += 1;
-      else if (isBot === false) humans += 1;
-      else unknown += 1;
-    }
-    return { ok: true, composition: { humans, agents, unknown } };
   }
 
   /** Every channel this agent is a MEMBER of, by name.

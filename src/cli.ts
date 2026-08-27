@@ -32,7 +32,7 @@ import { StatusManager } from "./status";
 import { SCOPE_NAMES, BOT_EVENT_NAMES } from "./app-manifest";
 import { languageRefusal, lengthRefusal, lineOf, lintLanguage, wordCount } from "./language";
 import { createHash } from "node:crypto";
-import { tierFor, type Tier } from "./tier";
+import { tierFor, unclassified, type Tier } from "./tier";
 import { credentialsPath, firstCredential, freshCliToken } from "./slack-credential";
 
 /** How long a draft counts as already sent. Ten minutes covers the retry an
@@ -408,31 +408,14 @@ async function postLocalCore(
  *  store's message when `message send --attach` produced them; the slack
  *  backend attaches by its own upload flow (files are uploaded to the target
  *  before the text send). */
-/** The register a channel calls for, and why.
+/** The register a channel calls for, set by the operator.
  *
- *  A configured entry wins, since a room full of agents can still be where a
- *  customer reads and nothing derives that. Otherwise the membership answers:
- *  people against agents, counted from Slack's own marking of each member. A
- *  membership this host cannot read gives the careful register, which costs a
- *  reader nothing. */
-async function channelTier(
-  channel: string,
-  as: string,
-  io: Io,
-  backend: "local" | "slack",
-): Promise<{ tier: Tier; why: string }> {
-  const configured = loadSlackConfig(io)?.tiers;
-  const set = tierFor(channel, configured, undefined);
-  if (set.why.startsWith("set to")) return set;
-  if (backend !== "slack") return { tier: "internal", why: "" };
-  const s = slackBackend(io);
-  // NO BACKEND MEANS THE SEND IS ABOUT TO FAIL AND SAY SO, so this stays quiet:
-  // a register line ahead of that error buries it.
-  if (s.backend === undefined) return { tier: "external", why: "" };
-  const c = await s.backend.composition(channel, as);
-  return c.ok
-    ? tierFor(channel, configured, c.composition)
-    : { tier: "external", why: `the membership could not be read (${c.error}), so the careful register applies` };
+ *  The operator, 2026-08-27: "Channel classification should be manually done by
+ *  the operator." I had built this from the membership, counting people against
+ *  agents, and the ruling came the same hour. A channel with no entry gets the
+ *  careful register and a line naming the command that sets one. */
+function channelTier(channel: string, io: Io): { tier: Tier; why: string } {
+  return tierFor(channel, loadSlackConfig(io)?.tiers);
 }
 
 /** The rewrite attempt, with its one retry: the model's answer put through the
@@ -554,16 +537,20 @@ async function postText(
   // rewrite. Nothing changes silently: when a rewrite is sent, the sender's own
   // words are printed beside it. And the rewrite passes the same rules the
   // sender's words did, or it is dropped in favour of the words that passed.
-  // WHO IS IN THE ROOM DECIDES THE REGISTER. The operator, 2026-08-27: agents
-  // speak differently in a channel full of people from the way they speak where
-  // agents work, and neither follows from the channel being public or private.
-  //
-  // The tier is read from the membership, with a config entry overriding it,
-  // and the matching block rides on the instruction the model already gets.
-  const decided = await channelTier(channel, nameFor(flags, io), io, backend);
-  if (decided.why !== "") io.writeErr(`register: ${decided.tier} for ${channel} (${decided.why}).`);
-  const registerBlock = readTierBlock(io.moduleDir ? io.moduleDir() : "src", decided.tier);
-  if (!registerBlock.ok) io.writeErr(`register: ${registerBlock.why}`);
+  // THE CHANNEL DECIDES THE REGISTER, and the operator decides the channel:
+  // "Channel classification should be manually done by the operator"
+  // (2026-08-27). The matching block rides on the instruction the model already
+  // gets, and a channel with no tier gets the careful one.
+  // SAID ONLY WHERE IT ACTS. With no model configured there is no rewrite to
+  // carry a register, and the line would sit ahead of whatever the send reports
+  // next, including a failure.
+  const rewriteOn = rewriteConfig(io.env).key !== undefined;
+  const decided = channelTier(channel, io);
+  if (rewriteOn) io.writeErr(`register: ${decided.tier} for ${channel} (${decided.why}).`);
+  const registerBlock = rewriteOn
+    ? readTierBlock(io.moduleDir ? io.moduleDir() : "src", decided.tier)
+    : ({ ok: false, why: "" } as const);
+  if (!registerBlock.ok && registerBlock.why !== "") io.writeErr(`register: ${registerBlock.why}`);
   const { chosen, retried, retriedWhy, configured } = await attemptRewrite(
     text,
     io,
@@ -2697,6 +2684,20 @@ async function cmdDoctor(argv: string[], io: Io): Promise<number> {
     );
   }
 
+  // WHAT IS WAITING ON THE OPERATOR. Classification is theirs to make
+  // (2026-08-27), so the surface they read names the channels with no tier and
+  // the command that sets one. An unclassified channel still sends, in the
+  // careful register.
+  const cfgTiers = loadSlackConfig(io);
+  const waiting = unclassified(Object.keys(cfgTiers?.channels ?? {}), cfgTiers?.tiers);
+  if (waiting.length > 0) {
+    advisories.push(
+      `${waiting.length} channel(s) have no register set: ${waiting.join(", ")}. Each one sends in the ` +
+        `careful register until somebody runs \`scramble channel tier <channel> internal|external\`, and ` +
+        `that call is the operator's to make.`,
+    );
+  }
+
   const missing = SCOPE_NAMES.filter((sc) => !granted.has(sc));
   if (missing.length > 0) {
     problems.push(
@@ -3161,6 +3162,11 @@ async function declaredManifest(
 async function cmdChannel(argv: string[], io: Io): Promise<number> {
   const { flags, positionals } = parseArgs(argv);
   const sub = positionals[0];
+  // `channel tier <channel> internal|external` writes the classification the
+  // operator makes. Asked for in those terms: "Channel classification should be
+  // manually done by the operator" (2026-08-27). Hand-editing the shared JSON is
+  // how a config gets a stray comma at midnight.
+  if (sub === "tier") return setChannelTier(positionals[1], positionals[2], io);
   if (sub !== "join") {
     io.writeErr(`unknown channel verb: ${sub ?? "(none)"}`);
     return 1;
@@ -3171,6 +3177,41 @@ async function cmdChannel(argv: string[], io: Io): Promise<number> {
   if (backend === null) return 1;
   if (backend === "slack") return joinChannelSlack(req.channel, flags, io);
   return joinChannel(req.channel, flags, io);
+}
+
+/** Write one channel's register into the config the agents on this host share.
+ *
+ *  It reads the file, changes the one key, and writes it back, so every other
+ *  entry survives. Printing the whole map afterwards is the read-back: the
+ *  operator sees what the file now says about every channel, from the file. */
+function setChannelTier(channel: string | undefined, tier: string | undefined, io: Io): number {
+  if (channel === undefined || (tier !== "internal" && tier !== "external")) {
+    io.writeErr(`usage: scramble channel tier <channel> internal|external`);
+    return 1;
+  }
+  const path = slackConfigPath(io);
+  let raw: Record<string, unknown>;
+  try {
+    raw = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+  } catch (e) {
+    io.writeErr(`channel tier: cannot read ${path}: ${String(e)}`);
+    return 1;
+  }
+  const tiers =
+    typeof raw.tiers === "object" && raw.tiers !== null && !Array.isArray(raw.tiers)
+      ? { ...(raw.tiers as Record<string, string>) }
+      : {};
+  tiers[channel] = tier;
+  raw.tiers = tiers;
+  try {
+    writeFileSync(path, `${JSON.stringify(raw, null, 2)}\n`);
+  } catch (e) {
+    io.writeErr(`channel tier: cannot write ${path}: ${String(e)}`);
+    return 1;
+  }
+  io.write(JSON.stringify({ channel, tier, tiers }));
+  io.writeErr(`channel tier: ${channel} is ${tier} in ${path}, and every agent on this host reads it.`);
+  return 0;
 }
 
 /** `channel join` on the Slack backend. Joining is not something an app can do:
@@ -3266,6 +3307,7 @@ const USAGE = [
   "  doctor            [--wake <channel>]            is this agent's wiring real",
   "  version                                         which copy is running",
   "  channel join      --target <channel>            has the invite landed",
+  "  channel tier <channel> internal|external        which register agents use there",
   "  profile show | profile update --description <text>",
   "  attachment view   --id <file-id>",
   "  serve             [--bind <addr>]               the local daemon",

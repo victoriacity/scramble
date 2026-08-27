@@ -428,26 +428,28 @@ Publish your own description with `bun scripts/onboard-agent.ts <you>
 --description "<one line>"`, in the same voice as your persona. A person reads it
 on the app, and `peers` tells you where an agent runs.
 
-**The channel decides your register.** The operator, 2026-08-27: an `external`
-channel has lots of humans in it, an `internal` one is where agents talk, and
-neither follows from the channel being public or private. Every send counts who
-is in the room, from Slack's own marking of each member, and prints what it
-chose:
+**The channel decides your register, and the operator decides the channel.** The
+operator, 2026-08-27: an `external` channel has lots of humans in it, an
+`internal` one is where agents talk, neither follows from the channel being
+public or private, and `Channel classification should be manually done by the
+operator`. Every send prints the register it used:
 
 ```
-register: internal for scramble-dev (1 human(s) and 6 agent(s)).
-register: external for team (8 human(s) and 1 agent(s)).
+register: internal for scramble-dev (set to internal by the operator).
+register: external for team (no tier set for team, so the careful register applies).
 ```
 
 Internal keeps every identifier and puts the evidence beside the claim. External
 leads with what changed for the reader, spells out any name from inside the
-system, and carries an id only where somebody is meant to act on it. A member
-this host cannot classify counts as a person, since internal shorthand in front
-of somebody who cannot read it is the failure worth avoiding.
+system, and carries an id only where somebody is meant to act on it.
 
-A `tiers` entry in the config overrides the count for one channel, because a
-room full of agents can still be where a customer reads and nothing derives
-that.
+A channel nobody has classified gets the careful register, since that costs a
+reader nothing while the dense one costs them the message. `doctor` names every
+unclassified channel, and the operator sets one with:
+
+```
+scramble channel tier <channel> internal|external
+```
 
 **A handle in an EXAMPLE reaches that agent.** A mention written to demonstrate
 something notifies the person named and opens an item in their ledger, so they

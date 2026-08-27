@@ -1416,7 +1416,54 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     expect(posts).toBe(3);
   });
 
-  test("the send picks a register from who is in the channel", async () => {
+  test("`channel tier` writes the operator's classification and reads it back", async () => {
+    // "Channel classification should be manually done by the operator"
+    // (2026-08-27). Hand-editing a shared JSON is how a config gets a stray
+    // comma at midnight.
+    const cwd = scratchDir("channel-tier");
+    writeSlackConfig(cwd, {
+      appToken: "xapp-1",
+      token: "xoxb-1",
+      channels: { general: "C1", team: "C2" },
+      agents: { dev: { token: "T", handle: "dev" } },
+      humanUserId: "U9",
+    });
+    const { io, writes, errs } = stubIo(cwd, async () => new Response("{}", { status: 200 }));
+    expect(await main(["channel", "tier", "general", "internal"], io)).toBe(0);
+    expect(writes.join("")).toContain('"tier":"internal"');
+    expect(errs.join(" ")).toContain("general is internal");
+    // A second call keeps the first, and every other config key survives.
+    expect(await main(["channel", "tier", "team", "external"], io)).toBe(0);
+    const after = JSON.parse(readFileSync(join(cwd, ".scramble", "slack.json"), "utf8"));
+    expect(after.tiers).toEqual({ general: "internal", team: "external" });
+    expect(after.humanUserId).toBe("U9");
+
+    // A tier nobody defined, and a missing channel, are refused with the usage.
+    expect(await main(["channel", "tier", "general", "loud"], io)).toBe(1);
+    expect(await main(["channel", "tier"], io)).toBe(1);
+    expect(errs.join(" ")).toContain("scramble channel tier <channel> internal|external");
+    // An unreadable config is REPORTED, never a silent pass.
+    const bare = stubIo(scratchDir("channel-tier-noconfig"), async () => new Response("{}", { status: 200 }));
+    expect(await main(["channel", "tier", "general", "internal"], bare.io)).toBe(1);
+    expect(bare.errs.join(" ")).toContain("cannot read");
+
+    // A config that cannot be WRITTEN is reported too. The classification is
+    // the operator's, and a call that changed nothing must never look done.
+    const ro = scratchDir("channel-tier-readonly");
+    writeSlackConfig(ro, {
+      appToken: "xapp-1",
+      token: "xoxb-1",
+      channels: { general: "C1" },
+      agents: { dev: { token: "T", handle: "dev" } },
+    });
+    chmodSync(join(ro, ".scramble", "slack.json"), 0o444);
+    const locked = stubIo(ro, async () => new Response("{}", { status: 200 }));
+    expect(await main(["channel", "tier", "general", "internal"], locked.io)).toBe(1);
+    expect(locked.errs.join(" ")).toContain("cannot write");
+    chmodSync(join(ro, ".scramble", "slack.json"), 0o644);
+  });
+
+  test("the send picks the register the operator set, and tells the model", async () => {
     // The operator, 2026-08-27: agents speak differently in a channel full of
     // people from the way they speak where agents work, and neither follows from
     // the channel being public or private.
@@ -1464,12 +1511,12 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     expect(
       await main(["message", "send", "--target", "general", "--as", "dev", "--no-verify", "--backend", "slack"], withKey),
     ).toBe(0);
-    // Two people and one agent: the careful register, and the model is told so.
-    expect(errs.join(" ")).toContain("register: external for general (2 human(s) and 1 agent(s))");
+    // No tier set for this channel: the careful register, and the model is told.
+    expect(errs.join(" ")).toContain("register: external for general (no tier set for general");
     expect(prompt).toContain("This channel holds people who do not read this repository");
   });
 
-  test("a channel of agents gets the dense register, and the config can override it", async () => {
+  test("an internal channel gets the dense register, and a change of entry moves it", async () => {
     const cwd = scratchDir("send-register-internal");
     let prompt = "";
     const responder = async (u: string | URL): Promise<Response> => {
@@ -1507,6 +1554,7 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
       token: "xoxb-1",
       channels: { general: "C1" },
       agents: { dev: { token: "T", handle: "dev" } },
+      tiers: { general: "internal" },
     });
     io.readStdin = async () => "the parser fix shipped and I sent it";
     const withKey: Io = {
@@ -1517,7 +1565,7 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     expect(
       await main(["message", "send", "--target", "general", "--as", "dev", "--no-verify", "--backend", "slack"], withKey),
     ).toBe(0);
-    expect(errs.join(" ")).toContain("register: internal for general (1 human(s) and 2 agent(s))");
+    expect(errs.join(" ")).toContain("register: internal for general (set to internal by the operator)");
     expect(prompt).toContain("This channel is where agents work");
 
     // THE CONFIG WINS. A room of agents can still be where a customer reads.
@@ -1546,7 +1594,7 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
         moduleDir: () => join(import.meta.dir, "..", "src"),
       }),
     ).toBe(0);
-    expect(second.errs.join(" ")).toContain("register: external for general (set to external in the config)");
+    expect(second.errs.join(" ")).toContain("register: external for general (set to external by the operator)");
     expect(prompt).toContain("This channel holds people who do not read this repository");
   });
 
