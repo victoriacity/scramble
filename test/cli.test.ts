@@ -3431,9 +3431,10 @@ describe("staleListeners", () => {
     mkdirSync(join(home, "mine"), { recursive: true });
     writeFileSync(join(home, "mine", "COMMIT"), "aaaaaaa\n");
     writeFileSync(join(store, "current", "src", "COMMIT"), "aaaaaaa\n");
+    const outs: string[] = [];
     const errs: string[] = [];
     const io: Io = {
-      write: () => {},
+      write: (l) => outs.push(l),
       writeErr: (l) => errs.push(l),
       fetch: async () => new Response("{}", { status: 200 }),
       env: (n) => (n === "HOME" ? home : undefined),
@@ -3447,14 +3448,23 @@ describe("staleListeners", () => {
     try {
       // Same commit: nothing to say.
       drift.tick();
-      expect(errs).toEqual([]);
+      expect(outs).toEqual([]);
       // Somebody installs.
       writeFileSync(join(store, "current", "src", "COMMIT"), "bbbbbbb\n");
       drift.tick();
-      expect(errs.join(" ")).toContain("this listener runs aaaaaaa and bbbbbbb is installed now");
+      expect(outs.join(" ")).toContain("this listener runs aaaaaaa and bbbbbbb is installed now");
+      // ON THE DELIVERY STREAM, AS JSON. One agent's launcher sent stderr to a
+      // file its monitor never read, so 58 of these notices reached nobody, and
+      // merging that host's streams would have fed prose to a reader that parses
+      // every line (2026-08-27). A reader consuming deliveries consumes this.
+      expect(errs).toEqual([]);
+      const parsed = JSON.parse(outs[0] ?? "null") as Record<string, unknown>;
+      expect(parsed.scramble).toBe("stale-listener");
+      expect(parsed.running).toBe("aaaaaaa");
+      expect(parsed.installed).toBe("bbbbbbb");
       // ONCE per change: a line every 30 seconds would teach the agent to skip it.
       drift.tick();
-      expect(errs).toHaveLength(1);
+      expect(outs).toHaveLength(1);
     } finally {
       drift.stop();
     }

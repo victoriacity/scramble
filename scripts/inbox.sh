@@ -59,6 +59,13 @@ trap cleanup TERM INT EXIT
 # `2>&1` puts both on the same path the monitor already reads. A JSON delivery
 # and a diagnostic line are told apart by their first character, which is how
 # every reader of this stream already works.
+#
+# The staleness notice no longer depends on this redirect. It writes to stdout as
+# a JSON line, `{"scramble":"stale-listener",...}`, because a signal that arrives
+# only when a launcher merges the streams misses every host wired the other way:
+# one agent's launch line sent stderr to a second file, and 58 notices reached
+# nobody (2026-08-27). What `2>&1` still carries here is the rest of stderr, the
+# socket errors and the unwritable-ledger lines.
 if [ "$OUT" = "-" ]; then
   SCRAMBLE_BACKEND=slack scramble listen --addressed --as "$AGENT" &
 else

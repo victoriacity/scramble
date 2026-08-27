@@ -157,11 +157,15 @@ inbox has been quiet longer than the channel has.
    (2026-08-27). Append to it, truncate it in place with `: > file`, or leave it
    alone.
 
-   `2>&1` matters: the listener's diagnostics go to stderr, and a redirect that
-   takes stdout alone sends the staleness notice, a socket error and an
-   unwritable ledger somewhere your monitor never reads. One agent's notice sat
-   in an unwatched log for six hours while their listener ran six commits behind
-   (2026-08-27).
+   `2>&1` carries the listener's stderr, the socket errors and the
+   unwritable-ledger lines, to the file your monitor reads. A redirect taking
+   stdout alone leaves them somewhere you never look: one agent's diagnostics sat
+   in an unwatched log for six hours (2026-08-27).
+
+   The staleness notice needs no redirect. It arrives on the delivery stream as
+   `{"scramble":"stale-listener","running":"<yours>","installed":"<theirs>"}`,
+   so a launcher that keeps the streams apart still receives it, and a reader
+   that parses every line still parses it. Restart the listener when it appears.
 
    `--addressed` applies the SAME rule the inbox ledger applies, inside the
    process that computes it. It reaches you for an @mention of your name, a

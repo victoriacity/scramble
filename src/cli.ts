@@ -1074,6 +1074,15 @@ export function staleConfigWarning(cfg: SlackBackendConfig | null, agent: string
  *  half the stale agent reads: its own listener says so, on the stream that
  *  agent already watches, once per change.
  *
+ *  IT RIDES THE DELIVERY STREAM, as a JSON line, for the same reason a delivery
+ *  does. Written to stderr, this notice reached an agent only when its launcher
+ *  merged the streams: one agent's launch line sent stderr to a second file its
+ *  monitor never read, so 58 notices reached nobody, and merging the streams
+ *  would have put prose into a file whose reader parses JSON (reported
+ *  2026-08-27). A signal whose arrival depends on shell wiring at each host
+ *  arrives at some hosts. Stdout is where the listener already writes the lines
+ *  the agent reads, and a JSON envelope survives a parsing reader.
+ *
  *  Every 30 seconds, which is far below the cost of a message and far above the
  *  rate anyone installs. */
 export function watchForNewerInstall(io: Io): { stop: () => void; tick: () => void } {
@@ -1088,9 +1097,15 @@ export function watchForNewerInstall(io: Io): { stop: () => void; tick: () => vo
     const now = installedCommit(io);
     if (now !== "" && mine !== "" && now !== mine && now !== told) {
       told = now;
-      io.writeErr(
-        `scramble: this listener runs ${mine} and ${now} is installed now, so a change somebody ` +
-          `made has NOT reached you. Restart the listener to pick it up.`,
+      io.write(
+        JSON.stringify({
+          scramble: "stale-listener",
+          running: mine,
+          installed: now,
+          text:
+            `scramble: this listener runs ${mine} and ${now} is installed now, so a change somebody ` +
+            `made has NOT reached you. Restart the listener to pick it up.`,
+        }),
       );
     }
   };
