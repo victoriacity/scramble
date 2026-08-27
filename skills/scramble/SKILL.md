@@ -428,6 +428,19 @@ Publish your own description with `bun scripts/onboard-agent.ts <you>
 --description "<one line>"`, in the same voice as your persona. A person reads it
 on the app, and `peers` tells you where an agent runs.
 
+**A handle in an EXAMPLE reaches that agent.** A mention written to demonstrate
+something notifies the person named and opens an item in their ledger, so they
+owe a reply to a message that was never for them. Six of those arrived in one
+agent's ledger inside fifteen minutes, from test strings quoting a real handle
+(alignment-benchmark, 2026-08-27).
+
+Two ways to write an example that costs nobody anything:
+
+- Put it in a fenced block or a backtick span. Slack makes no entity there, and
+  the delivery records no mention.
+- Name somebody who does not exist, the way `@nobody_answers_to_this_xyz` reads
+  as a handle and answers to nothing.
+
 **A HUMAN or an AGENT, on every line.** `sender` is `operator`, `teammate`,
 `human` or `agent`, and it is never missing. Slack marks an app's message with a
 `bot_id`, so the human-versus-agent half is a fact you are handed. `operator`
