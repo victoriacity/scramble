@@ -3,10 +3,10 @@ import { LANGUAGE_RULES, WORD_LIMIT, languageRefusal, lengthRefusal, lintLanguag
 
 describe("the language rules, checked where the message leaves", () => {
   test("THE MESSAGE THAT GOT THROUGH: a long dash is refused", () => {
-    // The incident, 2026-08-22. The rule existed and the check was a separate
-    // script the sender had to run first; I piped text straight into
-    // `message send` all day, so it ran on nothing, and the operator read this
-    // shape in a message and told me the linting had failed.
+    // The incident. The rule existed and the check was a separate script the
+    // sender had to run first; I piped text straight into `message send` all
+    // day, so it ran on nothing, and the operator read this shape in a message
+    // and told me the linting had failed.
     const hits = lintLanguage("Both are landed in the closing gate — controlled on six transcripts.");
     // Two hits, and the second was added hours later: the sentence also says
     // "landed", which was my private word for committing until the operator
@@ -53,10 +53,10 @@ describe("the language rules, checked where the message leaves", () => {
   });
 
   test("THE PHRASE THAT GOT THROUGH: the ban is the class, not two written-down phrasings", () => {
-    // 2026-08-22, the operator reading a message I had sent: "One thing I should
-    // say plainly" is not acceptable language. The rule named "stated plainly"
-    // and "plainly put" and nothing else, so a third phrasing of the same
-    // preamble passed a check that existed precisely to stop it.
+    // , the operator reading a message I had sent: "One thing I should say
+    // plainly" is not acceptable language. The rule named "stated plainly" and
+    // "plainly put" and nothing else, so a third phrasing of the same preamble
+    // passed a check that existed precisely to stop it.
     for (const said of [
       "One thing I should say plainly: it went out unchecked.",
       "To put it plainly, the lint never ran.",
@@ -79,9 +79,9 @@ describe("the language rules, checked where the message leaves", () => {
   });
 
   test("THE LINE THE ROOM COULD NOT READ: internal shorthand is refused", () => {
-    // Operator, 2026-08-22, on a message of mine: "Nobody else ever understands
-    // 'Gate green at 457, six live stages pass.'" A channel is a room of people
-    // who do not share my terminal.
+    // Operator, on a message of mine: "Nobody else ever understands 'Gate green
+    // at 457, six live stages pass.'" A channel is a room of people who do not
+    // share my terminal.
     for (const said of [
       "Gate green at 457, six live stages pass.",
       "gate red, looking now",
@@ -97,9 +97,9 @@ describe("the language rules, checked where the message leaves", () => {
   });
 
   test("COINED JARGON: 'landing' for committing, and the compounds that are English", () => {
-    // Operator, 2026-08-22: "What is 'landing'? How can we ensure that it is only
-    // used at proper places as 'landing page'?" It was my word for committing a
-    // change through scripts/land.sh, and it means nothing outside this session.
+    // Operator: "What is 'landing'? How can we ensure that it is only used at
+    // proper places as 'landing page'?" It was my word for committing a change
+    // through scripts/land.sh, and it means nothing outside this session.
     for (const said of [
       "Landed a44ac75.",
       "Both skills corrected and landed.",
@@ -167,10 +167,10 @@ describe("announcement scaffolding", () => {
   });
 
   test("the bare verb is NOT the rule, so prose about restating passes", () => {
-    // Written as a bare word it matched four lines across three files, every one
-    // of them an instruction NOT to restate. A rule written as a bare word
+    // Written as a bare word it matched four lines across three files, every
+    // one of them an instruction NOT to restate. A rule written as a bare word
     // matches prose ABOUT the rule, which is the trap taken out of the wake
-    // filter on 2026-08-22.
+    // filter.
     for (const fine of [
       "Do not restate what the channel settled without you.",
       "Do not end a passage by restating it.",
@@ -182,9 +182,9 @@ describe("announcement scaffolding", () => {
 });
 
 describe("the word limit on one message", () => {
-  // The operator, 2026-08-22: "We need to impose a message length limit in
-  // words. Maybe 200", with the reason in the same instruction: "nobody cares
-  // about the way you get your answer unless they explicitly ask for it."
+  // The operator: "We need to impose a message length limit in words. Maybe
+  // 200", with the reason in the same instruction: "nobody cares about the way
+  // you get your answer unless they explicitly ask for it."
 
   test("a message within the limit passes", () => {
     expect(lengthRefusal("a short answer")).toBe("");

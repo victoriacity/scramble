@@ -1,8 +1,8 @@
 // THE LANGUAGE RULES, AND THE ONLY PLACE THEY LIVE.
 //
 // They are checked in `message send`, where the message leaves, and there is no
-// separate linter to run first (operator, 2026-08-22: "for scramble there should
-// not be a separate linter. Linter is part of send message").
+// separate linter to run first (operator: "for scramble there should not be a
+// separate linter. Linter is part of send message").
 //
 // It used to be a chain the sender had to remember: write a draft file, run
 // lint_language.py on it, send only if it passed. I piped text straight into
@@ -66,11 +66,11 @@ export const LANGUAGE_RULES: LanguageRule[] = [
     label: "minimization of work",
     rx: /\b(quick|simple|simplest|easy|easiest|minimal|trivial|small|tiny|cheap|fast)\s+(fix|patch|approach|path|solution|change|edit|commit|tweak|update|win|hack)\b/gi,
   },
-  // INTERNAL SHORTHAND (operator 2026-08-22, on a message of mine ending with a
-  // status token and a stage count): `Nobody else ever understands` it. A
-  // channel is a room of people who do not share my terminal, so a token that
-  // means something only to the person who built the check carries nothing and
-  // takes up a line.
+  // INTERNAL SHORTHAND (operator, on a message of mine ending with a status
+  // token and a stage count): `Nobody else ever understands` it. A channel is a
+  // room of people who do not share my terminal, so a token that means
+  // something only to the person who built the check carries nothing and takes
+  // up a line.
   //
   // Say what was checked and what it showed: `the test suite passes, and the
   // checks that talk to the real workspace pass too`. This rule sits on the SEND
@@ -81,10 +81,9 @@ export const LANGUAGE_RULES: LanguageRule[] = [
     rx: /\bgates?\s+(green|red)\b|\bgreen\s+at\s+\d+\b|\blive\s+stages?\b|\b\d+\s+stages?\s+pass\w*\b|\bsmoke\s+(green|passes|passed)\b|\ball\s+\d+\s+stage/gi,
   },
   // COINED JARGON: a word this project gave a private meaning. The L word below
-  // is mine for committing a change, and the operator asked what it meant
-  // (2026-08-22): `What is 'landing'? How can we ensure that it is only used at`
-  // `proper places as 'landing page'?` Say `committed`, or
-  // `pushed`, or name the commit.
+  // is mine for committing a change, and the operator asked what it meant:
+  // `What is 'landing'? How can we ensure that it is only used at proper places as 'landing page'?`
+  // Say `committed`, or `pushed`, or name the commit.
   //
   // The ordinary English senses are spared by what FOLLOWS the word, since those
   // are compounds: a page, a zone, a strip. `\b` already spares England, Iceland
@@ -93,8 +92,8 @@ export const LANGUAGE_RULES: LanguageRule[] = [
     label: "coined jargon: 'land' for committing",
     rx: /\bland(s|ed|ing)?\b(?!\s+(page|pages|zone|zones|strip|strips))/gi,
   },
-  // HUMAN ORGANISATION VOCABULARY, applied to a fleet of agents. The operator,
-  // 2026-08-26: `this system is where agents collaborate. Agents are not humans.`
+  // HUMAN ORGANISATION VOCABULARY, applied to a fleet of agents. The operator: `this system is
+  // where agents collaborate. Agents are not humans.`
   // `There is no such thing as "staffing" or "headcount". Agent systems does not`
   // `need human team norms. Staffing, scheduling, and escalating human for`
   // `management decisions should not exist.`
@@ -116,9 +115,9 @@ export const LANGUAGE_RULES: LanguageRule[] = [
     label: "adverb parked between commas",
     rx: /,\s*(honestly|frankly|basically|essentially|actually|candidly|truthfully|plainly|clearly|simply|obviously)\s*,/gi,
   },
-  // ANTITHESIS (operator 2026-08-22): `A not B or A rather than B or anything`
-  // `else like this is AI slop`. The construction spends two clauses defining a
-  // thing by its opposite, where one clause states the thing.
+  // ANTITHESIS (operator): `A not B or A rather than B or anything` `else like
+  // this is AI slop`. The construction spends two clauses defining a thing by
+  // its opposite, where one clause states the thing.
   //
   // This rule OWNS the construction, so the trailing-aside rule below dropped
   // its `not` clause. Two rules matching one move would report it twice, and
@@ -127,15 +126,15 @@ export const LANGUAGE_RULES: LanguageRule[] = [
     label: "antithesis (A not B / A rather than B)",
     rx: /\brather than\b|\binstead of\b|,\s*not\b|\bnot\b[^.\n]{0,40}\bbut\b/gi,
   },
-  // TRAILING ASIDE (operator 2026-08-21, on the heading "the wake path, before
-  // you speak"): a qualification tacked on after a comma belongs inside the
+  // TRAILING ASIDE (operator, on the heading "the wake path, before you
+  // speak"): a qualification tacked on after a comma belongs inside the
   // sentence or in its own sentence.
   {
     label: "contrast tail at sentence end",
     rx: /,\s+(never|worse|better|only|just|less|more)\b[^.!?\n]{0,30}[.!?]/gi,
   },
-  // REDUNDANT CLOSER (operator 2026-08-21, on a closing sentence of mine that
-  // began `This is the whole memory story:` and then repeated the paragraph): a
+  // REDUNDANT CLOSER (operator, on a closing sentence of mine that opened with
+  // `This is the whole memory story:` and then repeated the paragraph): a
   // sentence restating the passage, or commenting on the message itself, is
   // padding.
   {
@@ -150,13 +149,32 @@ export const LANGUAGE_RULES: LanguageRule[] = [
   // The bare word `restate` was an alternative here and it matched four lines
   // across three files, every one of them an instruction against restating. A
   // rule written as a bare word matches prose ABOUT the rule, which is the trap
-  // this repo took out of its wake filter on 2026-08-22. The announcing forms
-  // are covered by the sentence clause and the `let me` clause.
+  // this repo took out of its wake filter. The announcing forms are covered by
+  // the sentence clause and the `let me` clause.
   {
     label: "announcement scaffolding",
     rx: /\bin (one|a single) sentence\b|\bin a nutshell\b|\b(stated|said) differently\b|\bto put it (simply|differently|plainly|another way)\b|\b(simply|plainly) put\b|\bput simply\b|\bin other words\b|\blet me (explain|be clear|rephrase|restate|put)\b|\bin plain (terms|language|english)\b|\bworth noting\b|\bit should be noted\b|\bneedless to say\b/gi,
   },
 ];
+
+/** The rules for this repository's OWN text, which is every source comment and
+ *  every tracked markdown file. Everything the message rules ban, plus the log
+ *  line.
+ *
+ *  A DATE IN THE REPO'S OWN TEXT IS A LOG ENTRY. The comments here carried 340
+ *  stamps across 39 files, in the shapes `The operator, 2026-08-27:` and
+ *  `(2026-08-26)`, each recording when somebody said a thing. The operator ruled
+ *  them out of the code. A reader of a comment needs the rule and the failure it
+ *  prevents; `git log` holds when, and `git blame` holds who.
+ *
+ *  Messages keep their dates, so this rule stays out of `LANGUAGE_RULES`: a date
+ *  in a channel message is evidence the reader can check. A path that carries a
+ *  date in its name goes in backticks, which `proseOf` blanks. */
+export const DATE_RULES: LanguageRule[] = [
+  { label: "dated log line in the repo's own text", rx: /\b\d{4}-\d{2}-\d{2}\b/g },
+];
+
+export const CODE_RULES: LanguageRule[] = [...LANGUAGE_RULES, ...DATE_RULES];
 
 /** Prose only: fenced blocks and inline backtick spans become blanks, so a quoted
  *  banned token is not a hit and every other offset is unchanged. */
@@ -185,19 +203,18 @@ export function lintLanguage(text: string, rules: LanguageRule[] = LANGUAGE_RULE
 /** The refusal an agent reads, naming every hit. Empty when the text is clean. */
 /** The word limit on one message.
  *
- *  The operator, 2026-08-22: "We need to impose a message length limit in words.
- *  Maybe 200", after a day of messages from three agents that buried their
- *  answer in the reasoning behind it. From the same instruction: "nobody cares
- *  about the way you get your answer unless they explicitly ask for it. Even if a
- *  detailed explanation is communicated, the only allowed way for it to be done
- *  is multiple rounds of back and forth conversation."
+ * The operator: "We need to impose a message length limit in words. Maybe 200",
+ * after a day of messages from three agents that buried their answer in the
+ * reasoning behind it. From the same instruction: "nobody cares about the way
+ * you get your answer unless they explicitly ask for it. Even if a detailed
+ * explanation is communicated, the only allowed way for it to be done is
+ * multiple rounds of back and forth conversation."
  *
  *  So the limit is a REFUSAL and not a warning: the long version is meant to
  *  become several short turns, and a warning would leave that to the sender who
  *  just wrote 900 words.
  *
- *  RAISED TO 300 by the operator, 2026-08-27: `Increase slack message word count`
- *  `cap to 300`. */
+ * RAISED TO 300 by the operator: `Increase slack message word count` `cap to 300`. */
 export const WORD_LIMIT = 300;
 
 /** WHERE THE RULES ARE WRITTEN, printed on every refusal.
@@ -228,13 +245,13 @@ export function wordCount(text: string): number {
   return cjk + latin;
 }
 
-// WHAT A REFUSAL SAYS, AND WHAT IT LEAVES OUT. The operator, 2026-08-26, reading
-// the language refusal: "this is very bad language ... you DO NOT need the exact
+// WHAT A REFUSAL SAYS, AND WHAT IT LEAVES OUT. The operator, reading the
+// language refusal: "this is very bad language... you DO NOT need the exact
 // example quote in code." The text carried an incident from the day before,
-// which is history a reader hits while blocked on their own send. Run through the
-// model for a diagnosis, the same five faults came back: an anecdote burying the
-// fix, an exemption written obscurely, a verbless pointer, an edge case ahead of
-// the fix, and a count in developer syntax.
+// which is history a reader hits while blocked on their own send. Run through
+// the model for a diagnosis, the same five faults came back: an anecdote
+// burying the fix, an exemption written obscurely, a verbless pointer, an edge
+// case ahead of the fix, and a count in developer syntax.
 //
 // A refusal names the rule, shows the words, says what to do. The reasons live
 // in the skill.

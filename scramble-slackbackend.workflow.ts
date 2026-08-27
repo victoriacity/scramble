@@ -10,7 +10,7 @@ running in. Read DESIGN.md, PLAN.md ("The CLI contract", "Coverage rules"),
 src/cli.ts, src/raft.ts (the pattern to copy) and src/slack.ts + src/slack-transport.ts
 (existing Slack code you may reuse) first.
 
-THE DIRECTION (operator, 2026-08-21): stop mirroring Slack into a local store and let
+THE DIRECTION (operator): stop mirroring Slack into a local store and let
 SLACK BE THE SOURCE OF TRUTH. Slack becomes a third backend behind the SAME verbs, the
 way src/raft.ts already is. The bridge shape (two stores reconciled by a relay) produced
 both defects found today: an echo loop, because a Slack-origin message could be

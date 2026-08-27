@@ -1,8 +1,8 @@
 // THE INBOX LEDGER: one row per addressed line handed to this agent, and whether
 // anything has been said back.
 //
-// The operator, 2026-08-22: "how do you 100% ensure that you guarantee to reply
-// when you are addressed? Each of your inbox item must be addressed by at least 1
+// The operator: "how do you 100% ensure that you guarantee to reply when you
+// are addressed? Each of your inbox item must be addressed by at least 1
 // reply."
 //
 // The check that existed was per TURN, where a turn woken by someone addressing
@@ -36,9 +36,9 @@ export interface InboxItem {
   /** The id of the message that answered it, once one has. */
   answeredBy?: string;
   /** The names the delivery carried, so `inbox trace` can say WHY a row is
-   *  this agent's. Without it the ledger records the verdict and drops the
-   *  evidence, and two agents spent a round guessing which mention opened six
-   *  items (2026-08-27). Absent on rows written before this field. */
+   * this agent's. Without it the ledger records the verdict and drops the
+   * evidence, and two agents spent a round guessing which mention opened six
+   * items. Absent on rows written before this field. */
   mentions?: string[];
   /** Was this line ADDRESSED to this agent, and so did it owe an answer?
    *
@@ -51,12 +51,11 @@ export interface InboxItem {
   addressed?: boolean;
   /** The Slack app id this line was delivered TO.
    *
-   *  The ledger is keyed by agent NAME, and a name can be repointed at a
-   *  different Slack app. `xingyu-bot` pointed at one app for an hour and then
-   *  got its own, and its ledger holds 14 rows from a channel the current app
-   *  has never been in: two identities in one corpus, reported under one name
-   *  (measured by that agent, 2026-08-22). Stamping the app makes the seam
-   *  visible to whoever reads the file. */
+   * The ledger is keyed by agent NAME, and a name can be repointed at a
+   * different Slack app. `xingyu-bot` pointed at one app for an hour and then
+   * got its own, and its ledger holds 14 rows from a channel the current app
+   * has never been in: two identities in one corpus, reported under one name.
+   * Stamping the app makes the seam visible to whoever reads the file. */
   app?: string;
 }
 
@@ -117,21 +116,21 @@ export function recordInboxItem(path: string, item: InboxItem): void {
  *  items, including one the ledger recorded against the channel whose own ts is
  *  the thread root.
  *
- *  A threaded reply does NOT close the room. It used to, and it cost a real
- *  question: xingyubot asked me something at channel level, I answered a
- *  different agent inside a thread half a minute later, and the ledger marked
- *  their question answered by that reply. They were left waiting with nothing on
- *  my list (2026-08-25, ts 1787664642.769859 closed by 1787664661.695049). The
- *  comment here used to call the looser direction a missed nag. The cost is a
- *  dropped question, and the person who asked it never learns that. */
+ * A threaded reply does NOT close the room. It used to, and it cost a real
+ * question: xingyubot asked me something at channel level, I answered a
+ * different agent inside a thread half a minute later, and the ledger marked
+ * their question answered by that reply. They were left waiting with nothing on
+ * my list (ts 1787664642.769859 closed by 1787664661.695049). The comment here
+ * used to call the looser direction a missed nag. The cost is a dropped
+ * question, and the person who asked it never learns that. */
 export function closeInboxItems(path: string, channel: string, replyId: string, thread?: string): number {
   return withFileLock(path, () => closeInsideLock(path, channel, replyId, thread));
 }
 
 /** MEASURED: eight processes each closing one item left TWO still open, because
- *  every close read the whole ledger, changed what it read, and wrote it back.
- *  A lost close nags an agent about a question it has answered, which is how an
- *  agent learns to stop reading its own list (2026-08-25). */
+ * every close read the whole ledger, changed what it read, and wrote it back. A
+ * lost close nags an agent about a question it has answered, which is how an
+ * agent learns to stop reading its own list. */
 function closeInsideLock(path: string, channel: string, replyId: string, thread?: string): number {
   const rows = readInbox(path);
   if (rows.length === 0) return 0;
@@ -189,12 +188,12 @@ function closeBeforeInsideLock(path: string, channel: string, ownTs: string, cut
 
 /** Close ONE open item by id, with a reason, without sending anything.
  *
- *  A sender can say a message needs no reply, and the ledger had no way to hear
- *  it: `pending` kept the item open, a reaction did not clear it, and only a real
- *  send did. So an agent clearing its ledger answers a message whose sender asked
- *  it not to, and the mechanism built to stop people being left waiting starts
- *  manufacturing noise (reported by xingyubot, 2026-08-22, with its own message
- *  as the example).
+ * A sender can say a message needs no reply, and the ledger had no way to hear
+ * it: `pending` kept the item open, a reaction did not clear it, and only a
+ * real send did. So an agent clearing its ledger answers a message whose sender
+ * asked it not to, and the mechanism built to stop people being left waiting
+ * starts manufacturing noise (reported by xingyubot, with its own message as
+ * the example).
  *
  *  THE REASON IS REQUIRED AND STORED. A close is the agent deciding an obligation
  *  is settled, which a reply never is, so the decision goes on the record where
@@ -247,9 +246,9 @@ export function pendingReport(items: InboxItem[], agent: string): string {
 
 /** WHAT HAPPENED TO ONE MESSAGE, from this agent's own record.
  *
- *  Four agents on four hosts spent a day answering "did that message reach me?"
- *  by grepping a `tee` of the listener, and every hand-rolled version was wrong
- *  in one of four ways, each measured by the agent who ran it (2026-08-22):
+ * Four agents on four hosts spent a day answering "did that message reach me?"
+ * by grepping a `tee` of the listener, and every hand-rolled version was wrong
+ * in one of four ways, each measured by the agent who ran it:
  *
  *  1. A substring grep for a ts matches a message QUOTING that ts as readily as
  *     the delivery of it. One agent got a hit that was another agent's message
@@ -329,7 +328,7 @@ export function traceReport(rows: InboxItem[], id: string, agent: string, path: 
   const lines = hits.map((r) => {
     // WHY IT IS THIS AGENT'S, from the names the delivery carried. The verdict
     // alone sent two agents guessing which mention opened six items, and one
-    // guess reached the channel as a cause (2026-08-27).
+    // guess reached the channel as a cause.
     const why =
       r.mentions === undefined
         ? ``
@@ -409,12 +408,12 @@ export function recordSent(path: string, ts: string, draft?: { hash: string; cha
 /** The ts of a send of this same draft into this same channel inside the window,
  *  or undefined.
  *
- *  A RETRY AFTER A GENUINE POST MUST BE A NO-OP. Asked for in those terms by an
- *  agent that posted a reply twice (peer-auto-evals, 2026-08-26): "A retry after
- *  a genuine post must be a no-op, for example by setting an idempotency key on
- *  the draft hash." Two byte-identical copies 27 seconds apart reached a third
- *  agent's inbox after the `posted:` line had already shipped, so the sender
- *  still had a reason to send twice and the tool still let them. */
+ * A RETRY AFTER A GENUINE POST MUST BE A NO-OP. Asked for in those terms by an
+ * agent that posted a reply twice: "A retry after a genuine post must be a
+ * no-op, for example by setting an idempotency key on the draft hash." Two
+ * byte-identical copies 27 seconds apart reached a third agent's inbox after
+ * the `posted:` line had already shipped, so the sender still had a reason to
+ * send twice and the tool still let them. */
 export function sentAlready(
   rows: SentRow[],
   channel: string,
@@ -461,16 +460,16 @@ export function isAddressed(
   // once delivery carries it.
   if (mentions.some((m) => BROADCAST_NAMES.includes(m))) return true;
   if (mentions.some((m) => names.includes(m))) return true;
-  // A REPLY TO SOMETHING THIS AGENT SAID is for this agent WHEN IT NAMES NOBODY.
-  // The operator answered a question of mine with one word, "limit", naming
-  // nobody, in a reply to my own message (2026-08-22), and Slack threading is
-  // why such a reply carries no name.
+  // A REPLY TO SOMETHING THIS AGENT SAID is for this agent WHEN IT NAMES
+  // NOBODY. The operator answered a question of mine with one word, "limit",
+  // naming nobody, in a reply to my own message, and Slack threading is why
+  // such a reply carries no name.
   //
   // A reply that names ANOTHER agent answers that agent, and my thread is where
-  // the conversation happens to sit. The rule was "any reply in my thread, whoever
-  // it names", and one thread of two agents working through a defect opened nine
-  // items in my ledger inside twelve minutes, every one of them a message between
-  // the two of them (2026-08-27). Nine debts I did not owe cost the list its
+  // the conversation happens to sit. The rule was "any reply in my thread,
+  // whoever it names", and one thread of two agents working through a defect
+  // opened nine items in my ledger inside twelve minutes, every one of them a
+  // message between the two of them. Nine debts I did not owe cost the list its
   // meaning, which is the same harm the 18-message case below names.
   if (mentions.length === 0 && typeof d.thread === "string" && ownSent.includes(d.thread)) return true;
   // NAMING NOBODY IN SOMEONE ELSE'S THREAD IS NOT AN OBLIGATION. The rule was

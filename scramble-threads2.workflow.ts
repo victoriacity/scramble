@@ -13,7 +13,7 @@ skills/scramble/SKILL.md first.
 WHAT HAPPENED: a unit built thread support into src/slack.ts and src/raft.ts while a
 concurrent unit deleted both files, so the merges kept the deletion and the feature is
 gone from main. The dispatch-spec commits survive and the implementation does not
-(postmortem: akrust log/postmortems/2026-08-21-parallel-delete-cliffed-a-feature.md).
+(postmortem: akrust `log/postmortems/2026-08-21-parallel-delete-cliffed-a-feature.md`).
 Neither of those files exists now, so build against what does.
 
 WHY THE FEATURE MATTERS: Slack sends \`thread_ts\` on a threaded message and scramble drops

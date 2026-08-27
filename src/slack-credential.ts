@@ -6,10 +6,10 @@
 //
 // Nothing on either host rotated it, so doctor lost the manifest check twice a
 // day on every machine, and the fix on offer was a person running `slack login`
-// again. An agent read the expiry out of the file and named the real root
-// (peer-metrics, 2026-08-26): the entry carries a `refresh_token`, and
-// `tooling.tokens.rotate` exchanges it for a fresh pair. A login writes a
-// credential that dies tonight; rotation keeps it alive without anybody.
+// again. An agent read the expiry out of the file and named the real root: the
+// entry carries a `refresh_token`, and `tooling.tokens.rotate` exchanges it for
+// a fresh pair. A login writes a credential that dies tonight; rotation keeps
+// it alive without anybody.
 
 import { renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";

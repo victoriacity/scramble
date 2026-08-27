@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
-# The ONE dispatch path for scramble units. Exists because a hand-typed launch
-# line cannot check its own preconditions: on 2026-08-20 a `source` of the
-# systemd-format akari-fix.env failed mid-line, the `nohup akari run` after it
-# STILL fired, and the retry left two clients running the same 8-unit workflow
-# (postmortem: log/postmortems/2026-08-20-duplicate-dispatch-survived-a-failed-source.md
-# in the akrust repo). Every precondition below is a REFUSAL, not a warning.
+# The ONE dispatch path for scramble units. Exists because a hand-typed launch line cannot check its
+# own preconditions: a `source` of the systemd-format akari-fix.env failed mid-line, the `nohup
+# akari run` after it STILL fired, and the retry left two clients running the same 8-unit workflow
+# (postmortem: `log/postmortems/-duplicate-dispatch-survived-a-failed-source.md` in the akrust
+# repo). Every precondition below is a REFUSAL, not a warning.
 #
 # usage: scripts/dispatch.sh [<workflow.ts>]   (default: scramble.workflow.ts)
 set -uo pipefail
@@ -44,7 +43,7 @@ TOKEN="$(grep -m1 '^AKARI_SERVER_CONTROL_TOKEN=' "$ENV_FILE" | cut -d= -f2-)"
 [ -n "$TOKEN" ] || fail "AKARI_SERVER_CONTROL_TOKEN missing from $ENV_FILE (POST /api/projects would 401)"
 
 # 3) Absolute CLI path, so a rewritten PATH cannot substitute a stale copy from
-#    inside a lane worktree (that is what happened on 2026-08-20).
+#    inside a lane worktree, which is what happened.
 [ -r "$CLI" ] || fail "dispatch CLI not readable at $CLI"
 [ -x "$BUN" ] || fail "bun not found (tried PATH and \$HOME/.bun/bin/bun)"
 
@@ -57,7 +56,7 @@ TOKEN="$(grep -m1 '^AKARI_SERVER_CONTROL_TOKEN=' "$ENV_FILE" | cut -d= -f2-)"
 #     it accepts only inline single-line arrays of double-quoted strings. A
 #     multi-line array makes the gate fail with `key must be a string at line 1
 #     column 2`, and the worker then spends its turns reading akari's Rust
-#     parser instead of writing its unit (that happened on 2026-08-20).
+#     parser and never wrote its unit, which happened.
 python3 - "$REPO/.akari/gate.toml" <<'PYEOF' || fail "see the gate.toml shape error above"
 import json, re, sys
 path = sys.argv[1]
@@ -93,12 +92,12 @@ if bad:
 sys.exit(0)
 PYEOF
 
-# 4c) BACKEND SCOPE. On 2026-08-21 I built a raft backend inside scramble, 249
+# 4c) BACKEND SCOPE. On I built a raft backend inside scramble, 249
 #     lines plus 433 of tests, for a product the operator considers scramble's
 #     parallel alternative; it became deleted work. A boundary that lives only in
 #     my judgment gets crossed again, so DESIGN.md's backend table is the
 #     authority: a workflow naming a backend the table does not list is refused.
-#     Postmortem: akrust log/postmortems/2026-08-21-built-a-backend-for-a-parallel-product.md
+#     Postmortem: akrust `log/postmortems/2026-08-21-built-a-backend-for-a-parallel-product.md`
 python3 - "$WORKFLOW" "$REPO/DESIGN.md" <<'PYEOF' || fail "see the backend-scope error above"
 import re, sys
 wf, design = open(sys.argv[1]).read(), open(sys.argv[2]).read()
@@ -115,13 +114,13 @@ if unlisted:
 sys.exit(0)
 PYEOF
 
-# 4d) CROSS-WORKFLOW FILE CONFLICT. On 2026-08-21 I ran four units at once. One
+# 4d) CROSS-WORKFLOW FILE CONFLICT. On I ran four units at once. One
 #     deleted src/slack.ts and src/raft.ts while another was writing the thread
 #     feature INTO those files, so the merge cliffed the feature: the spec commits
 #     survived and the implementation did not. Prose in a prompt ("port before
 #     deleting") did not hold. A workflow that DELETES a path may not run while a
 #     live workflow names that same path.
-#     Postmortem: akrust log/postmortems/2026-08-21-parallel-delete-cliffed-a-feature.md
+#     Postmortem: akrust `log/postmortems/2026-08-21-parallel-delete-cliffed-a-feature.md`
 python3 - "$WORKFLOW" <<'PYEOF' || fail "see the cross-workflow conflict above"
 import re, subprocess, sys
 new = open(sys.argv[1]).read()
@@ -174,7 +173,7 @@ LOG="$REPO/run-$(basename "$WORKFLOW" .workflow.ts).log"
 nohup "$BUN" run "$CLI" run "$WORKFLOW" > "$LOG" 2>&1 &
 pid=$!
 
-# 6) THE LAUNCH ITSELF IS VERIFIED. On 2026-08-21 a workflow whose meta held an
+# 6) THE LAUNCH ITSELF IS VERIFIED. A workflow whose meta held an
 #    escaped apostrophe ('a peer agent\'s') failed the client's pure-object-literal
 #    parse and the client exited in under a second, while this script had already
 #    printed "launched pid" and "preconditions verified". I read that as a live

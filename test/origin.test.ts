@@ -1,8 +1,8 @@
 // test/origin.test.ts — WHERE AN AGENT RUNS, published on the message itself.
 //
-// The operator, 2026-08-22: "Does each agent record its hostname and working
-// directory on scramble and an agent may know its same directory peers?" It did
-// not, and the absence cost two round trips that afternoon.
+// The operator: "Does each agent record its hostname and working directory on
+// scramble and an agent may know its same directory peers?" It did not, and the
+// absence cost two round trips that afternoon.
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -134,10 +134,9 @@ describe("the peers report", () => {
   });
 
   test("peersOnOtherCommits names a version disagreement across hosts", () => {
-    // THE HOST THAT STOPS UPDATING SENDS NO SIGNAL: the staleness notice compares
-    // a listener to the install beside it, so a machine nobody installs on stays
-    // quiet while it falls behind. One did, by five commits (xingyubot,
-    // 2026-08-26).
+    // THE HOST THAT STOPS UPDATING SENDS NO SIGNAL: the staleness notice
+    // compares a listener to the install beside it, so a machine nobody
+    // installs on stays quiet while it falls behind. One did, by five commits.
     const rows = [
       { agent: "ana", host: "h2", dir: "/d", commit: "old111", at: "2026-08-26T10:00:00Z" },
       { agent: "bo", host: "h2", dir: "/d", commit: "new222", at: "2026-08-26T11:00:00Z" },
@@ -162,9 +161,8 @@ describe("the peers report", () => {
   test("a peer on a different commit gets the reader-relative range named", () => {
     // I announced two commits with "both changes touch src/cli.ts", which was
     // MY range. An agent five commits back answered with theirs: 15 files, the
-    // delivery path included (peer-metrics, 2026-08-26). A reader on that build
-    // who took my sentence at face value would have skipped a restart their
-    // build needs.
+    // delivery path included. A reader on that build who took my sentence at
+    // face value would have skipped a restart their build needs.
     const behind = [{ agent: "cy", host: "h", dir: "/d", commit: "0ded7ad", at: "t" }, ...rows];
     const said = peersReport(behind, HERE, false);
     expect(said).toContain("read the range from THEIR commit");
@@ -178,9 +176,9 @@ describe("the peers report", () => {
 
   test("--same-dir matches HOST AND directory, never the path alone", () => {
     // Two agents measured the SAME absolute path on two machines, backed by
-    // different filesystems, and could not see each other's files (2026-08-22).
-    // Grouping by path would have told them they shared a directory when they
-    // shared a string.
+    // different filesystems, and could not see each other's files. Grouping by
+    // path would have told them they shared a directory when they shared a
+    // string.
     const sameString = [{ agent: "cy", host: "other-host", dir: "/srv/dev-work", at: "t" }, ...rows];
     const said = peersReport(sameString, HERE, true);
     expect(said).toContain("1 peer(s)");

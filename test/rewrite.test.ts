@@ -278,8 +278,8 @@ describe("choosing what to send", () => {
 
   test("a failed rewrite STOPS the send, and says why", () => {
     // "we should not allow claude original message go out. The communication is
-    // too bad" (2026-08-25). Falling back to the author's words published exactly
-    // the prose the rewrite exists to replace.
+    // too bad". Falling back to the author's words published exactly the prose
+    // the rewrite exists to replace.
     const out = chooseText("mine", { ok: false, why: "the rewrite call answered 503" });
     expect("refuse" in out && out.refuse).toContain("the rewrite did not happen");
     expect("refuse" in out && out.refuse).toContain("503");
@@ -291,9 +291,9 @@ describe("choosing what to send", () => {
   });
 
   test("a rewrite that DROPS what the original carried is refused", () => {
-    // Measured in a live channel: the rewriter dropped a closing causal sentence
-    // and replaced a statement of fact with a different one, and the receiving
-    // agent inferred the missing conclusion from the numbers (2026-08-25).
+    // Measured in a live channel: the rewriter dropped a closing causal
+    // sentence and replaced a statement of fact with a different one, and the
+    // receiving agent inferred the missing conclusion from the numbers.
     const original = "the run took 42 seconds and `_summary.mesh_quality.json` holds the score for @peer_metrics";
     const out = chooseText(original, { ok: true, text: "the run took 42 seconds and holds the score" });
     expect("refuse" in out && out.refuse).toContain("the rewrite dropped");
@@ -326,9 +326,8 @@ describe("choosing what to send", () => {
 
   test("a mention moved into code stopped notifying, and is refused", () => {
     // Measured live: the rewriter moved an `@name` into a code span, Slack
-    // recorded `mentions=[]`, and the addressee never heard about the message
-    // (2026-08-25). The characters are still on the line, so a whole-text check
-    // misses it.
+    // recorded `mentions=[]`, and the addressee never heard about the message.
+    // The characters are still on the line, so a whole-text check misses it.
     const mine = "@peer_metrics the run finished";
     const out = chooseText(mine, { ok: true, text: "The run finished, `@peer_metrics`" });
     expect("refuse" in out && out.refuse).toContain("stopped @peer_metrics from notifying anyone");
@@ -344,9 +343,9 @@ describe("choosing what to send", () => {
   });
 
   test("prose inside a fence may be rewritten, and its figures may not change", () => {
-    // The operator, 2026-08-26: "any natural language text MUST be rewritten
-    // even if it is in the code block." An agent had said an hour earlier that
-    // they put sentences in fences because the rewriter leaves fences alone.
+    // The operator: "any natural language text MUST be rewritten even if it is
+    // in the code block." An agent had said an hour earlier that they put
+    // sentences in fences because the rewriter leaves fences alone.
     const mine = "I measured it.\n```\nThe run finished and 42 files got written\n```";
     const better = chooseText(mine, {
       ok: true,
@@ -371,8 +370,8 @@ describe("choosing what to send", () => {
   });
 
   test("a rewrite that flattens `A, because B` into two facts is refused", () => {
-    // The operator, 2026-08-25: "it should never break the logic such as A,
-    // because B into A, and B." The instruction said so and nothing measured it.
+    // The operator: "it should never break the logic such as A, because B into
+    // A, and B." The instruction said so and nothing measured it.
     const mine = "I restarted the listener because the installed commit moved.";
     const out = chooseText(mine, { ok: true, text: "I restarted the listener, and the installed commit moved." });
     expect("refuse" in out).toBe(true);
@@ -386,7 +385,7 @@ describe("choosing what to send", () => {
     // MEASURED over 29 sends on two hosts: the connective guard fired four
     // times, always in the ADD direction, and killed one send. Two of the four
     // added `because`, a claim about why the author never made. The other two
-    // added `when` and `whenever`, which restate timing (2026-08-26).
+    // added `when` and `whenever`, which restate timing.
     const mine = "I restarted the listener, so the new build is live.";
     const timing = chooseText(mine, {
       ok: true,
@@ -408,7 +407,7 @@ describe("choosing what to send", () => {
 
   test("a rewrite that invents a link between two facts is refused", () => {
     // Measured on the instruction file itself: "Do not compress. Clipped prose
-    // reads as an interrogation" came back joined by `because` (2026-08-25).
+    // reads as an interrogation" came back joined by `because`.
     const mine = "I do not compress the text. Clipped prose reads as an interrogation.";
     const out = chooseText(mine, {
       ok: true,
@@ -420,8 +419,8 @@ describe("choosing what to send", () => {
 
   test("swapping one connective for another keeps the count and passes", () => {
     // Two agents measured `which is why` -> `because` and `therefore` ->
-    // `because` over ten sentences on two hosts, clauses swapped, logic intact
-    // (2026-08-25). A word-by-word check would have refused every one.
+    // `because` over ten sentences on two hosts, clauses swapped, logic intact.
+    // A word-by-word check would have refused every one.
     const mine = "The build passed, therefore I merged the change.";
     const out = chooseText(mine, { ok: true, text: "I merged the change because the build passed." });
     expect("send" in out).toBe(true);
@@ -443,8 +442,8 @@ describe("choosing what to send", () => {
 
   test("a mention the author never wrote is refused", () => {
     // Measured twice: a rewrite turned "re-ran the same five sentences" into
-    // "after @scramble_dev re-ran the same five sentences", crediting the run to
-    // a different agent and pinging them for it (2026-08-25).
+    // "after @scramble_dev re-ran the same five sentences", crediting the run
+    // to a different agent and pinging them for it.
     const mine = "re-ran the same five sentences on 7412f27";
     const out = chooseText(mine, { ok: true, text: "after @scramble_dev re-ran the same five sentences on 7412f27" });
     expect("refuse" in out && out.refuse).toContain("added @scramble_dev");
@@ -466,8 +465,7 @@ describe("choosing what to send", () => {
   test("trailing punctuation belongs to the sentence, never to the name", () => {
     // A Slack handle may contain a dot, so the match takes one, and `@name.` at
     // the end of a sentence read as a different person from `@name`. The
-    // added-mention guard called that a new mention and blocked two sends
-    // (2026-08-25).
+    // added-mention guard called that a new mention and blocked two sends.
     expect(mentionsIn("thanks @model_failure_researc.")).toEqual(["@model_failure_researc"]);
     expect(mentionsIn("@dev, @ana: @bo; @cy! @di?")).toEqual(["@dev", "@ana", "@bo", "@cy", "@di"]);
     // A dot INSIDE a handle stays.
@@ -481,8 +479,8 @@ describe("choosing what to send", () => {
   });
 
   test("a rewrite that makes a claim STRONGER is refused", () => {
-    // The worst case measured live: an author wrote about their exposure and the
-    // rewrite published a guarantee (2026-08-25).
+    // The worst case measured live: an author wrote about their exposure and
+    // the rewrite published a guarantee.
     const mine = "the diff check narrows the window where the rewriter can replace a measured number";
     const out = chooseText(mine, {
       ok: true,
@@ -514,8 +512,8 @@ describe("choosing what to send", () => {
 
   test("a rewrite over the word limit is DROPPED", () => {
     // COUNTED FROM THE SHIPPED LIMIT, so this moves with it. The operator
-    // raised the cap from 200 to 300 on 2026-08-27, and a hardcoded 260 quietly
-    // stopped exercising the guard.
+    // raised the cap from 200 to 300, and a hardcoded 260 quietly stopped
+    // exercising the guard.
     const long = Array.from({ length: WORD_LIMIT + 60 }, () => "word").join(" ");
     const out = chooseText("short", { ok: true, text: long });
     expect("refuse" in out && out.refuse).toContain("ran over the word limit");
@@ -523,9 +521,9 @@ describe("choosing what to send", () => {
 });
 
 describe("the record of what the rewriter did", () => {
-  // Every claim about whether the rewriter helps has been a single case somebody
-  // remembered, on a feature running on every send from two hosts and five
-  // agents (2026-08-25).
+  // Every claim about whether the rewriter helps has been a single case
+  // somebody remembered, on a feature running on every send from two hosts and
+  // five agents.
   const row = (over: Partial<Parameters<typeof recordRewrite>[1]> = {}) => ({
     at: "2026-08-25T12:00:00.000Z",
     agent: "dev",
@@ -543,8 +541,8 @@ describe("the record of what the rewriter did", () => {
 
   test("`--as` scopes the count to one agent, and names whose rows are here", () => {
     // MEASURED: two agents on one host read the same 13 rows as their own, and
-    // one of them reported a guard catch it had never had (xingyubot,
-    // 2026-08-25). The file is per host and every row carries its agent.
+    // one of them reported a guard catch it had never had. The file is per host
+    // and every row carries its agent.
     const rows = [row({ agent: "alice" }), row({ agent: "alice" }), row({ agent: "bob" })];
     expect(rewritesReport(rows, "alice")).toContain("2 send(s) from alice met the rewriter");
     expect(rewritesReport(rows, "bob")).toContain("1 send(s) from bob met the rewriter");

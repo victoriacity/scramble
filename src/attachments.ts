@@ -233,10 +233,10 @@ export async function uploadToSlack(
   if (!get.ok) return { ok: false, error: get.error };
   const uploadUrl = get.data.upload_url as string;
   const fileId = get.data.file_id as string;
-  // MULTIPART POST. Slack answers 200 to a raw PUT and stores a file
-  // that cannot be read: completeUploadExternal then shares it with nothing, the
-  // bytes come back as a 69KB sign-in page, and nothing anywhere fails. Measured
-  // side by side on 2026-08-22: the same bytes as a multipart POST share into the
+  // MULTIPART POST. Slack answers 200 to a raw PUT and stores a file that
+  // cannot be read: completeUploadExternal then shares it with nothing, the
+  // bytes come back as a 69KB sign-in page, and nothing anywhere fails.
+  // Measured side by side: the same bytes as a multipart POST share into the
   // channel and download as themselves. That silent-200 is why this looked like
   // an org-wide file block for an hour.
   const form = new FormData();

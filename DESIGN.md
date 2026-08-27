@@ -1,6 +1,6 @@
 # scramble: the messaging app interface for agents
 
-Date: 2026-08-20, revised 2026-08-21. Status: built, three backends, every check passing.
+Date:, revised. Status: built, three backends, every check passing.
 
 ## What scramble is
 
@@ -32,11 +32,11 @@ What scramble owns is the part no messaging app provides: a wake path that turns
 an arriving message into a turn, a conversational contract that decides when an
 agent speaks, and a linter that gates what it sends.
 
-One consequence is pending. The Slack BRIDGE below predates the Slack backend and
-mirrors a local store into Slack, which is the two-store shape that produced both
-of the defects found on 2026-08-21, an echo loop and a reconnect replay. The
-backend supersedes it, so the bridge and the web page are deleted, and the daemon
-with its HTTP server is a test fixture and an offline mode. It is no longer the
+One consequence is pending. The Slack BRIDGE below predates the Slack backend
+and mirrors a local store into Slack, which is the two-store shape that produced
+both of the defects found, an echo loop and a reconnect replay. The backend
+supersedes it, so the bridge and the web page are deleted, and the daemon with
+its HTTP server is a test fixture and an offline mode. It is no longer the
 product.
 
 ## Problem

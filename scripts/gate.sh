@@ -25,15 +25,13 @@ done
   exit 1
 }
 
-# == stage 0: COVERAGE-GATE SELF-TEST ==
-# A coverage threshold is a claim about bun's behavior, and a config key bun
-# ignores produces no error anywhere -- the only observable difference is an exit
-# code. bun 1.3.14 silently ignores `coverageThreshold` written as an inline
-# table and exits 0 at partial coverage, so this gate once reported green over
-# 57% coverage (postmortem:
-# akrust log/postmortems/2026-08-20-coverage-gate-was-decorative-ignored-threshold.md).
-# Before trusting a single number below, run the REPO'S OWN bunfig against a
-# fixture with a deliberately untested branch and require it to FAIL.
+# == stage 0: COVERAGE-GATE SELF-TEST == A coverage threshold is a claim about bun's behavior, and a
+# config key bun ignores produces no error anywhere -- the only observable difference is an exit
+# code. bun 1.3.14 silently ignores `coverageThreshold` written as an inline table and exits 0 at
+# partial coverage, so this gate once reported green over 57% coverage (postmortem: akrust
+# `log/postmortems/-coverage-gate-was-decorative-ignored-threshold.md`). Before trusting a single
+# number below, run the REPO'S OWN bunfig against a fixture with a deliberately untested branch and
+# require it to FAIL.
 SELF="$(mktemp -d)"
 trap 'rm -rf "$SELF"' EXIT
 mkdir -p "$SELF/src" "$SELF/test"
@@ -68,12 +66,11 @@ if [ "$self_rc" -eq 0 ]; then
 fi
 echo "self-test ok: partial coverage exits $self_rc under this repo's bunfig"
 
-# NO MACHINE PATH IN A TRACKED FILE. This repo is bound for GitHub, and on
-# 2026-08-21 it carried six: my home directory inside this very script, two akari
-# paths in dispatch.sh, and my checkout's path inside the onboarding call to
-# action in the README. A path from one machine is wrong in every clone of the
-# repo, and prose review kept missing them.
-# (postmortem: akrust log/postmortems/2026-08-21-shipped-my-own-machine-paths-in-a-public-repo.md)
+# NO MACHINE PATH IN A TRACKED FILE. This repo is bound for GitHub, and it carried six: my home
+# directory inside this very script, two akari paths in dispatch.sh, and my checkout's path inside
+# the onboarding call to action in the README. A path from one machine is wrong in every clone of
+# the repo, and prose review kept missing them. (postmortem: akrust
+# `log/postmortems/-shipped-my-own-machine-paths-in-a-public-repo.md`)
 echo "== no machine paths in tracked files =="
 python3 - <<'PATHEOF'
 import re, subprocess, sys
@@ -104,10 +101,9 @@ paths_rc=$?
 echo "== tracked files are written in English =="
 python3 - <<'LANGEOF'
 import re, subprocess, sys
-# The operator to every agent in the channel, 2026-08-22: "ensure everything you
-# write to files are English unless it is explicitly requested as another
-# language". This repo is public and several agents commit to it, so the rule
-# holds here rather than in each agent's memory.
+# The operator to every agent in the channel: "ensure everything you write to files are English
+# unless it is explicitly requested as another language". This repo is public and several agents
+# commit to it, so the rule holds here rather than in each agent's memory.
 #
 # CJK, Hiragana, Katakana, Hangul, Cyrillic, Arabic, Hebrew, Thai, Devanagari.
 # Latin-1 punctuation is NOT flagged: an em dash is typography, and the language
@@ -165,11 +161,10 @@ else
   skill_rc=0
 fi
 
-# THE COMMENTS IN THE SOURCE ARE PROSE A PERSON READS. The operator, 2026-08-26,
-# quoting a banned form out of a refusal string and then finding another in a
-# comment I had shipped an hour before: "Clean the comments first." The rules
-# covered messages and tracked markdown, and the source comments carried 174
-# hits, measured before the cleanup.
+# THE COMMENTS IN THE SOURCE ARE PROSE A PERSON READS. The operator, quoting a banned form out of a
+# refusal string and then finding another in a comment I had shipped an hour before: "Clean the
+# comments first." The rules covered messages and tracked markdown, and the source comments carried
+# 174 hits, measured before the cleanup.
 #
 # Comment lines only: the rule table's own patterns contain the words it bans.
 echo "== every source comment passes the language check =="
@@ -183,18 +178,33 @@ else
   comment_rc=0
 fi
 
+# NO DATED LOG LINE ANYWHERE THE REPO SHIPS. The operator ruled the stamps of the
+# form `The operator, 2026-08-27:` out of the code, and they sat thickest in
+# test/cli.test.ts, 66 of them, in a directory the stage above never read. This
+# stage checks the tests, the scripts and the workflow files for that one rule.
+# The prose rules still run over src/ and the markdown alone: over these
+# directories they find 121 older hits, which are their own piece of work.
+echo "== no dated log line in the tests, the scripts or the workflows =="
+DATE_FILES=$(git -C "$REPO" ls-files 'test/*.ts' 'scripts/*.ts' 'scripts/*.sh' '*.workflow.ts')
+if [ -n "$DATE_FILES" ]; then
+  # shellcheck disable=SC2086
+  ( cd "$REPO" && "$BUN" src/bin.ts lint --comments --dates $DATE_FILES )
+  dates_rc=$?
+else
+  echo "no test or script files tracked"
+  dates_rc=0
+fi
+
 echo "== tsc --noEmit =="
 "$BUN" x tsc --noEmit
 tsc_rc=$?
 
-# EVERY SHIPPED SOURCE FILE IS IN THE COVERAGE REPORT. bun reports the files its
-# tests LOAD, so a source file nothing imports is absent from the table entirely
-# and the 100% threshold passes over it in silence. src/rewrite.ts shipped that
-# way for an hour: 189 lines, no test, and a green gate (2026-08-25).
-# NO CREDENTIAL-SHAPED STRING IN A TRACKED FILE. This repo is PUBLIC and five
-# agents commit to it, and a key was about to be placed in the checkout by hand.
-# The cost of a leak is a rotation across every agent on two hosts, so this runs
-# on every gate rather than on anyone's memory.
+# EVERY SHIPPED SOURCE FILE IS IN THE COVERAGE REPORT. bun reports the files its tests LOAD, so a
+# source file nothing imports is absent from the table entirely and the 100% threshold passes over
+# it in silence. src/rewrite.ts shipped that way for an hour: 189 lines, no test, and a green gate.
+# NO CREDENTIAL-SHAPED STRING IN A TRACKED FILE. This repo is PUBLIC and five agents commit to it,
+# and a key was about to be placed in the checkout by hand. The cost of a leak is a rotation across
+# every agent on two hosts, so this runs on every gate rather than on anyone's memory.
 echo "== no credential-shaped string in a tracked file =="
 # A PLACEHOLDER IS NOT A LEAK. The setup document shows the shape of a config
 # with `xapp-1-A0EXAMPLE001-...` in it, and a scan that cannot tell that from a
@@ -234,8 +244,8 @@ echo "== bun test --coverage =="
 test_rc=$?
 
 echo "== gate summary =="
-echo "self_test_rc=$self_rc (nonzero required) paths_rc=$paths_rc lang_rc=$lang_rc skill_rc=$skill_rc comment_rc=$comment_rc leak_rc=$leak_rc cover_rc=$cover_rc tsc_rc=$tsc_rc test_rc=$test_rc"
-if [ "$paths_rc" -ne 0 ] || [ "$lang_rc" -ne 0 ] || [ "$skill_rc" -ne 0 ] || [ "$comment_rc" -ne 0 ] || [ "$leak_rc" -ne 0 ] || [ "$cover_rc" -ne 0 ] || [ "$tsc_rc" -ne 0 ] || [ "$test_rc" -ne 0 ]; then
+echo "self_test_rc=$self_rc (nonzero required) paths_rc=$paths_rc lang_rc=$lang_rc skill_rc=$skill_rc comment_rc=$comment_rc dates_rc=$dates_rc leak_rc=$leak_rc cover_rc=$cover_rc tsc_rc=$tsc_rc test_rc=$test_rc"
+if [ "$paths_rc" -ne 0 ] || [ "$lang_rc" -ne 0 ] || [ "$skill_rc" -ne 0 ] || [ "$comment_rc" -ne 0 ] || [ "$dates_rc" -ne 0 ] || [ "$leak_rc" -ne 0 ] || [ "$cover_rc" -ne 0 ] || [ "$tsc_rc" -ne 0 ] || [ "$test_rc" -ne 0 ]; then
   echo "GATE RED"
   exit 1
 fi

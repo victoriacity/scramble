@@ -144,9 +144,9 @@ function makeTimed(
 // --- computeMentions ------------------------------------------------------
 
 describe("unescapeSlack", () => {
-  // Slack stores `<`, `>` and `&` escaped, so a message carrying
-  // `--target <channel>` read back with the brackets escaped and `--verify`
-  // called it DIFFERS while the message was intact (xingyubot, 2026-08-27).
+  // Slack stores `<`, `>` and `&` escaped, so a message carrying `--target
+  // <channel>` read back with the brackets escaped and `--verify` called it
+  // DIFFERS while the message was intact.
   test("the three escapes come back as the characters the author typed", () => {
     expect(unescapeSlack("--target &lt;channel&gt; --as &lt;me&gt;")).toBe("--target <channel> --as <me>");
     expect(unescapeSlack("a &amp;&amp; b")).toBe("a && b");
@@ -176,8 +176,7 @@ describe("computeMentions", () => {
 
   test("an @ in the middle of a word is no mention", () => {
     // I took the name half of `denormalize`'s pattern and dropped its leading
-    // boundary, so `ret@4096` recorded 4096 and an email recorded its domain
-    // (model-failure-research, 2026-08-27).
+    // boundary, so `ret@4096` recorded 4096 and an email recorded its domain.
     expect(computeMentions("general", "@andrew DQ@4096 beats ret@4096 here.", "x")).toEqual(["andrew"]);
     expect(computeMentions("general", "mail me at name@example.com", "x")).toEqual([]);
     // A mention after punctuation still counts, which is what the boundary
@@ -187,8 +186,8 @@ describe("computeMentions", () => {
 
   test("a possessive handle records the NAME, the way Slack converts it", () => {
     // `@alignment_benchmark's` converted to that agent's id and recorded
-    // `alignment_benchmark's`, a name nobody has, so the person was pinged while
-    // their ledger owed them nothing (model-failure-research, 2026-08-27).
+    // `alignment_benchmark's`, a name nobody has, so the person was pinged
+    // while their ledger owed them nothing.
     expect(computeMentions("general", "@ana's table was right.", "x")).toEqual(["ana"]);
     expect(computeMentions("general", "@ana. @bo, @cy!", "x")).toEqual(["ana", "bo", "cy"]);
     // A handle that legitimately ends in a dot or dash keeps its own characters
@@ -197,11 +196,9 @@ describe("computeMentions", () => {
   });
 
   test("an @name inside a fence or a backtick span is NOT a mention", () => {
-    // `denormalize` skips fenced blocks and backtick spans, so Slack makes no
-    // entity for a name written in one. This counted them anyway, and a message
-    // of mine whose fence read `preserve EVERY @name` came back with `name` in
-    // its mention list, for an agent that does not exist
-    // (model-failure-research, 2026-08-27).
+    // `denormalize` skips fenced blocks and backtick spans, so Slack makes no entity for a name
+    // written in one. This counted them anyway, and a message of mine whose fence read `preserve
+    // EVERY @name` came back with `name` in its mention list, for an agent that does not exist.
     expect(computeMentions("general", "@alice see\n```\npreserve EVERY @name\n```\n", "x")).toEqual(["alice"]);
     expect(computeMentions("general", "run `@dev --now` when ready", "x")).toEqual([]);
     // A real mention beside a fenced one still counts.
@@ -230,7 +227,7 @@ describe("post", () => {
   });
 
   test("an upload resolves the channel the SAME way a plain send does", async () => {
-    // A peer agent, 2026-08-22, on a live channel: `message send --attach` read
+    // A peer agent, on a live channel: `message send --attach` read
     // cfg.channels[target] itself, so a channel the agent is IN but the config
     // does not map failed with a short "no Slack channel" while a plain send to
     // that same channel worked. The discriminator was the missing suffix.
@@ -517,8 +514,7 @@ describe("post", () => {
   test("a threaded reply keeps its metadata, so its origin and status survive the read", async () => {
     // Every read passed include_all_metadata except the thread expansion, so a
     // reply came back with no origin: `peers` could not name the host or commit
-    // that wrote it, and a status line inside a thread read as ordinary talk
-    // (2026-08-26).
+    // that wrote it, and a status line inside a thread read as ordinary talk.
     let repliesUrl = "";
     const h = make({}, async (url) => {
       if (url.includes("conversations.history"))
@@ -538,8 +534,8 @@ describe("post", () => {
 
   test("the read expands the threads with the NEWEST replies, never the newest roots", async () => {
     // At 5 roots picked by root age, an agent replying in an older thread read
-    // the channel back, saw nothing new, decided the send had failed, and posted
-    // the same report five times (peer-metrics, 2026-08-26).
+    // the channel back, saw nothing new, decided the send had failed, and
+    // posted the same report five times.
     const asked: string[] = [];
     const CAP = THREAD_EXPANSION_CAP;
     const roots = Array.from({ length: CAP + 1 }, (_, i) => ({
@@ -568,9 +564,9 @@ describe("post", () => {
 
   test("storedMessage pages a thread until it finds the reply", async () => {
     // conversations.replies returns a thread OLDEST-FIRST, so a reply just
-    // posted sits on the LAST page. One 200-reply request answered "slack has no
-    // message at <ts>" for a message in the thread, and a sender who believes
-    // that posts again (2026-08-26).
+    // posted sits on the LAST page. One 200-reply request answered "slack has
+    // no message at <ts>" for a message in the thread, and a sender who
+    // believes that posts again.
     const pagesSeen: string[] = [];
     const h = make({}, async (url) => {
       if (url.includes("conversations.replies")) {
@@ -1287,7 +1283,7 @@ describe("selectBackend", () => {
     // the listener fills, so a Slack agent that forgot the variable got a
     // TRANSCRIPT rather than an error. `message read` on the channel the
     // operator had just invited it into printed nothing and exited 0 while
-    // Slack held twenty messages in it (2026-08-22).
+    // Slack held twenty messages in it.
     const dir = makeTmpDir("backend-default");
     mkdirSync(join(dir, ".scramble"), { recursive: true });
     const io = stubIo({ env: () => undefined, cwd: () => dir });
@@ -1841,10 +1837,10 @@ describe("acting-agent credentials", () => {
 
 describe("a mention of the agent's Slack handle addresses the agent", () => {
   // Slack resolves <@U…> to the app's HANDLE, and a handle is not a scramble
-  // name: the handle for `scramble-dev` is `scramble_dev`. Measured live on
-  // 2026-08-21, a real mention arrived as mentions:["scramble_dev"] with
-  // mentioned:false, so the tier-one wake path, which filters on
-  // '"mentioned":true', slept through a message addressed to that agent.
+  // name: the handle for `scramble-dev` is `scramble_dev`. Measured live, a
+  // real mention arrived as mentions:["scramble_dev"] with mentioned:false, so
+  // the tier-one wake path, which filters on '"mentioned":true', slept through
+  // a message addressed to that agent.
   async function deliver(agents: SlackBackendConfig["agents"], as: string, text: string) {
     const h = make({ agents, roster: { U111: "andrew" } });
     const lines: Array<Record<string, unknown>> = [];
@@ -1921,10 +1917,11 @@ describe("who said it: operator, teammate, or agent", () => {
   });
 
   test("with no humanUserId configured a person still reads as HUMAN", async () => {
-    // The operator, 2026-08-26: "Scramble should very clearly indicating whether
-    // the speaker is a HUMAN or an AGENT." Slack's `bot_id` answers that half on
-    // every message, so it is never unknown. WHICH human takes the config entry,
-    // and guessing which one is the operator is still worse than saying nothing.
+    // The operator: "Scramble should very clearly indicating whether the
+    // speaker is a HUMAN or an AGENT." Slack's `bot_id` answers that half on
+    // every message, so it is never unknown. WHICH human takes the config
+    // entry, and guessing which one is the operator is still worse than saying
+    // nothing.
     const line = await kindOf({ user: "U111", text: "hi" }, { humanUserId: undefined });
     expect(line!.sender).toBe("human");
     const bot = await kindOf({ user: "U111", bot_id: "B1", text: "hi" }, { humanUserId: undefined });
@@ -1993,11 +1990,11 @@ describe("a reply in your own thread wakes you without naming you", () => {
 });
 
 describe("the regular path never touches the Slack CLI credential", () => {
-  // The operator, 2026-08-26: "Ideally, we only need to authenticate Slack CLI
-  // when a new agent joins the app or do a scramble doctor fix. Regular
-  // operations should be done through the bot token." Delivery used to export a
-  // peer's app manifest under the CLI credential on every line, which put a
-  // twelve-hour token on the path a listener runs for days.
+  // The operator: "Ideally, we only need to authenticate Slack CLI when a new
+  // agent joins the app or do a scramble doctor fix. Regular operations should
+  // be done through the bot token." Delivery used to export a peer's app
+  // manifest under the CLI credential on every line, which put a twelve-hour
+  // token on the path a listener runs for days.
   test("a delivered line costs no apps.manifest.export", async () => {
     let exports = 0;
     const h = make({ roster: {} }, (url) => {
@@ -2022,9 +2019,9 @@ describe("the regular path never touches the Slack CLI credential", () => {
 
 describe("a refused call names the scope Slack asked for", () => {
   // An agent named the shape of the next failure: "the next scope you add will
-  // fail the same way and the failure will look like an unrelated one-word error
-  // from whatever call needs it." Slack returns `needed` and `provided` on
-  // missing_scope, and this used to drop both (2026-08-25).
+  // fail the same way and the failure will look like an unrelated one-word
+  // error from whatever call needs it." Slack returns `needed` and `provided`
+  // on missing_scope, and this used to drop both.
   const scoped = (body: Record<string, unknown>) =>
     make({}, async () => new Response(JSON.stringify(body), { status: 200 }));
 
@@ -2061,9 +2058,8 @@ describe("denormalize: an outgoing @name becomes a real Slack mention", () => {
   test("a handle in an inline backtick span stays text, the way a fence does", () => {
     // Fenced lines were skipped and inline spans were converted, so a handle in
     // a span notified that person while `computeMentions` read prose and
-    // recorded nothing: pinged, with no item in their ledger
-    // (model-failure-research, 2026-08-27). The scramble skill tells agents to
-    // write examples in a span for exactly this reason.
+    // recorded nothing: pinged, with no item in their ledger. The scramble
+    // skill tells agents to write examples in a span for exactly this reason.
     expect(denormalize("write `@andrew` in an example", roster)).toBe("write `@andrew` in an example");
     // The prose around a span still converts.
     expect(denormalize("`@andrew` and @andrew", roster)).toBe("`@andrew` and <@U1>");
@@ -2080,9 +2076,9 @@ describe("denormalize: an outgoing @name becomes a real Slack mention", () => {
   test("the character before the @ can be ANY non-name character", () => {
     // The rule demanded whitespace or a line start, so a mention after a full
     // stop, a comma, a bracket or a CJK punctuation mark went out as plain text
-    // and notified nobody. Two agents hit it the same way and both worked around
-    // it with a space; one gave the clean case, where the SAME message converted
-    // the mention at the line start and left the one after the stop (2026-08-25).
+    // and notified nobody. Two agents hit it the same way and both worked
+    // around it with a space; one gave the clean case, where the SAME message
+    // converted the mention at the line start and left the one after the stop.
     expect(denormalize("\u6536\u5230\u3002@andrew", roster)).toBe("\u6536\u5230\u3002<@U1>");
     expect(denormalize("ok, @andrew next", roster)).toBe("ok, <@U1> next");
     expect(denormalize("(@andrew)", roster)).toBe("(<@U1>)");
@@ -2093,7 +2089,7 @@ describe("denormalize: an outgoing @name becomes a real Slack mention", () => {
     // a sentence end looked up a handle nobody has: the mention went out as
     // plain text and notified nobody. A comma or an exclamation mark never did
     // this, since neither is a handle character. Measured from raw Slack
-    // payloads by the agent whose name it was (2026-08-25).
+    // payloads by the agent whose name it was.
     expect(denormalize("thanks @andrew.", roster)).toBe("thanks <@U1>.");
     expect(denormalize("ask @andrew..", roster)).toBe("ask <@U1>..");
     // A handle that really contains a dot keeps it.

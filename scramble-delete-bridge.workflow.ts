@@ -12,7 +12,7 @@ docs/slack-setup.md first.
 
 WHY: the Slack BRIDGE mirrors a local store into Slack, and the Slack BACKEND makes Slack
 the store. Keeping both keeps the two-store reconciliation that produced both defects
-found on 2026-08-21: an echo loop, because a Slack-origin message could be republished to
+found in review: an echo loop, because a Slack-origin message could be republished to
 Slack, and a reconnect replay, because the local store held a cursor Slack knew nothing
 about. Deleting the bridge removes that bug class rather than a bug.
 
@@ -22,7 +22,7 @@ so resist re-adding anything as a "compatibility shim".
 DELETE:
 0. THE RAFT BACKEND: \`src/raft.ts\`, \`test/raft.test.ts\`, the
    \`SCRAMBLE_BACKEND=raft\` arm of the backend switch, and every raft row in the
-   backend tables of DESIGN.md, PLAN.md, README.md and the skill. Operator, 2026-08-21:
+   backend tables of DESIGN.md, PLAN.md, README.md and the skill. Operator:
    raft and scramble are PARALLEL ALTERNATIVES, so a raft backend inside scramble is one
    product wrapping its competitor for no gain.
    KEEP the raft-mirrored GRAMMAR: \`message send\`, \`message check\`, \`message read\`,

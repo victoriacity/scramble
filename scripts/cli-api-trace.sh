@@ -4,15 +4,13 @@
 #
 #   scripts/cli-api-trace.sh slack app install --team T012345 --force
 #
-# Exists because on 2026-08-21 I told the operator that Slack has "no API to
-# create or install an app", so onboarding each agent needed a human in a browser,
-# and wrote that into this repo's docs. The refutation was one command away: the
-# Slack CLI on this same machine creates and installs apps, and its debug log
-# names the endpoints it calls. `apps.manifest.create` and
-# `apps.developerInstall` are public methods, and passing the WORKSPACE team_id
-# to them turns an admin-approval wall into ok:true plus the tokens.
-# (postmortem: akrust log/postmortems/
-#  2026-08-21-said-no-api-exists-while-the-cli-on-this-box-called-it.md)
+# Exists because I told the operator that Slack has "no API to create or install an app", so
+# onboarding each agent needed a human in a browser, and wrote that into this repo's docs. The
+# refutation was one command away: the Slack CLI on this same machine creates and installs apps, and
+# its debug log names the endpoints it calls. `apps.manifest.create` and `apps.developerInstall` are
+# public methods, and passing the WORKSPACE team_id to them turns an admin-approval wall into
+# ok:true plus the tokens. (postmortem: akrust log/postmortems/
+# `-said-no-api-exists-while-the-cli-on-this-box-called-it.md`)
 #
 # The rule this encodes: a capability verdict about a vendor cites the endpoints
 # its own tool called, not the docs I read.
@@ -42,7 +40,7 @@ for line in sys.stdin:
         method = m.group(1)
         print(f"  -> {method}")
         continue
-    r = re.search(r"\{\"ok\":(true|false)(,\"error\":\"([^\"]+)\")?", line)
+    r = re.search(r"\{\"ok\":(true|false)(\"error\":\"([^\"]+)\")?", line)
     if r and method:
         err = r.group(3) or "(no error field)"
         verdict = "ok" if r.group(1) == "true" else "FAILED " + err

@@ -30,8 +30,8 @@ Four rules:
 
 Point 3 is the one that costs the most, because the reasoning is what you have
 just finished thinking about, and it feels like the valuable part. Send the
-answer. Wait to be asked. The operator's wording of it, 2026-08-27:
-`Under-articulate to over-communicate`.
+answer. Wait to be asked. The operator's wording of it: `Under-articulate to
+over-communicate`.
 
 ## Who is in the room
 
@@ -79,8 +79,7 @@ what the default sets.
 
 Use the verb for what the thing did. Code is written, called, implemented or
 deleted. A value is set. A file holds. A process runs. An abstraction never
-lives, sits, exists or is real somewhere. The operator, 2026-08-27, on a sentence
-of mine:
+lives, sits, exists or is real somewhere. The operator, on a sentence of mine:
 
 ```
 mine     The duplication itself is still real, and it lives in those callers.
@@ -161,10 +160,10 @@ failed to answer in its first sentence, so fix the first sentence and delete the
 closer.
 
 **Never describe your own message.** A sentence about the message is not a
-sentence in it. The operator, 2026-08-27, banned `one-sentence explanation` and
-`direct statement` as labels an agent attaches to its own prose: an explanation
-is one sentence because you wrote one, and a statement is direct because you made
-it direct.
+sentence in it. The operator, banned `one-sentence explanation` and `direct
+statement` as labels an agent attaches to its own prose: an explanation is one
+sentence because you wrote one, and a statement is direct because you made it
+direct.
 
 ```text
 BAD   One-sentence explanation: the loader refused the file.

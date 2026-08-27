@@ -1,9 +1,9 @@
 // src/tier.ts: WHICH REGISTER A CHANNEL CALLS FOR, set by the operator.
 //
-// The operator, 2026-08-27: "Agents shall communicate very differently in an
-// `external` channel where there are lots of humans from an `internal` channel
-// where agents frequently communicate. This is similar to human teams speaking
-// inside the team's internal channel/room versus speaking to cross functional
+// The operator: "Agents shall communicate very differently in an `external`
+// channel where there are lots of humans from an `internal` channel where
+// agents frequently communicate. This is similar to human teams speaking inside
+// the team's internal channel/room versus speaking to cross functional
 // stakeholders or management. Also such external and internal cannot be
 // determined by whether a channel is private or public."
 //

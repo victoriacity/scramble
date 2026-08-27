@@ -4,11 +4,10 @@
 #   bash scripts/install.sh              # into ~/.local/share/scramble
 #   SCRAMBLE_HOME=/somewhere bash scripts/install.sh
 #
-# WHY THIS EXISTS. `bun link` puts a symlink chain from the agent's PATH straight
-# into this checkout: ~/.bun/bin/scramble -> node_modules/scramble -> the
-# checkout itself, and bun runs `src` directly. So every agent on the host
-# executes the MAINTAINER'S WORKING TREE. A peer agent measured it and said it
-# best (2026-08-22):
+# WHY THIS EXISTS. `bun link` puts a symlink chain from the agent's PATH straight into this
+# checkout: ~/.bun/bin/scramble -> node_modules/scramble -> the checkout itself, and bun runs `src`
+# directly. So every agent on the host executes the MAINTAINER'S WORKING TREE. A peer agent measured
+# it and said it best:
 #
 #   "Every agent on this host that linked the same checkout picks up your edits
 #    the moment you save, with no pull and no signal, so asking me to update
@@ -49,15 +48,14 @@ ln -sfn "$DEST" "$ROOT/current" || fail "cannot point $ROOT/current at $DEST"
 
 BIN="${SCRAMBLE_BIN:-$HOME/.bun/bin}"
 mkdir -p "$BIN" || fail "cannot create $BIN"
-# REMOVE BEFORE WRITING. The name being replaced is usually the `bun link`
-# symlink, and `>` follows a symlink to its target: the first run of this script
-# wrote the launcher THROUGH ~/.bun/bin/scramble into the checkout's own
-# src/bin.ts and gutted it. git had the file, so the cost was a restore, and the
-# next installer to do this to an unversioned target would take the file with it.
-# WHOSE VERSION THIS CHANGES. One launcher serves every agent sharing this HOME,
-# so an install moves all of them at once, and an agent that installed a commit
-# and ran nothing since finds itself on someone else's. Measured by an agent that
-# read `scramble version` and saw a commit it had never installed (2026-08-25).
+# REMOVE BEFORE WRITING. The name being replaced is usually the `bun link` symlink, and `>` follows
+# a symlink to its target: the first run of this script wrote the launcher THROUGH
+# ~/.bun/bin/scramble into the checkout's own src/bin.ts and gutted it. git had the file, so the
+# cost was a restore, and the next installer to do this to an unversioned target would take the file
+# with it. WHOSE VERSION THIS CHANGES. One launcher serves every agent sharing this HOME, so an
+# install moves all of them at once, and an agent that installed a commit and ran nothing since
+# finds itself on someone else's. Measured by an agent that read `scramble version` and saw a commit
+# it had never installed.
 #
 # The launcher cannot be per-agent without changing the command everyone types,
 # so the change is ANNOUNCED instead of hidden: what it pointed at, what it will

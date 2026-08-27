@@ -2,17 +2,17 @@
  *  readers: `scripts/onboard-agent.ts` builds the manifest from it, and `doctor`
  *  compares a live app against it.
  *
- *  It is one list because it was two. The scopes lived here as `REQUIRED_SCOPES`
- *  and again in the onboarding script, under a comment saying the duplication was
- *  deliberate and that "`doctor` compares them so a drift between the two is
- *  reported". That comparison was never written, and the two
- *  lists had already diverged: the script asked for `reactions:write` and
- *  `reactions:read` and this copy did not, so an agent could react and doctor
- *  would not have noticed if it could not. The events had no second copy at all,
- *  which is worse: doctor could not check a subscription it did not know about,
- *  and `member_joined_channel` was added to the script while every app created
- *  before it stayed subscribed to three events, silently, with an invite
- *  delivering nothing (operator, 2026-08-22: "invited but inbox does not fire").
+ * It is one list because it was two. The scopes lived here as `REQUIRED_SCOPES`
+ * and again in the onboarding script, under a comment saying the duplication
+ * was deliberate and that "`doctor` compares them so a drift between the two is
+ * reported". That comparison was never written, and the two lists had already
+ * diverged: the script asked for `reactions:write` and `reactions:read` and
+ * this copy did not, so an agent could react and doctor would not have noticed
+ * if it could not. The events had no second copy at all, which is worse: doctor
+ * could not check a subscription it did not know about, and
+ * `member_joined_channel` was added to the script while every app created
+ * before it stayed subscribed to three events, silently, with an invite
+ * delivering nothing (operator: "invited but inbox does not fire").
  */
 
 /** Each scope with the capability that needs it. The reason travels with the
@@ -58,12 +58,11 @@ export const SCOPES: Array<[string, string]> = [
  *  leaves every config holding a dead one, so a scope change is a rotation
  *  across every agent.
  *
- *  Adding an EVENT is a manifest write and nothing else. Measured end to end on
- *  a live app (A0EXAMPLE002, xingyubot, 2026-08-22): `apps.manifest.update` with
- *  `reaction_added` added, no `developerInstall` call, bot token sha256
- *  `c34fc7458ffc` before and after, `auth.test` ok on the same token, and
- *  `doctor --wake` delivered afterwards. Everything keeps running while you do
- *  it.
+ * Adding an EVENT is a manifest write and nothing else. Measured end to end on
+ * a live app: `apps.manifest.update` with `reaction_added` added, no
+ * `developerInstall` call, bot token sha256 `c34fc7458ffc` before and after,
+ * `auth.test` ok on the same token, and `doctor --wake` delivered afterwards.
+ * Everything keeps running while you do it.
  *
  *  What that measurement does NOT cover: whether a frame for a newly subscribed
  *  event ARRIVES at all. `toDelivery` returns nothing for any type that is not

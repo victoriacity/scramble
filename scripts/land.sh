@@ -1,24 +1,21 @@
 #!/usr/bin/env bash
 # The ONE way to commit by hand in this checkout.
 #
-# Exists because on 2026-08-21 a four-line commit to a skill file DELETED a
-# landed unit: 297 lines across src/slack-backend.ts, its tests and a
-# reproducer. A lane merge had advanced main's ref while I held this checkout,
-# and git's index still described the PREVIOUS HEAD for every path, so
-# `git add <one file>` plus a bare `git commit` recorded old-index-plus-my-file,
-# which is a revert of the merge for every path that differed. The gate stayed
-# green at 324 tests because the deleted feature took its tests with it.
-# (postmortem: akrust log/postmortems/
-#  2026-08-21-my-commit-reverted-a-landed-unit-from-a-stale-index.md)
+# Exists because a four-line commit to a skill file DELETED a landed unit: 297 lines across
+# src/slack-backend.ts, its tests and a reproducer. A lane merge had advanced main's ref while I
+# held this checkout, and git's index still described the PREVIOUS HEAD for every path, so `git add
+# <one file>` plus a bare `git commit` recorded old-index-plus-my-file, which is a revert of the
+# merge for every path that differed. The gate stayed green at 324 tests because the deleted feature
+# took its tests with it. (postmortem: akrust log/postmortems/
+# `-my-commit-reverted-a-landed-unit-from-a-stale-index.md`)
 #
 # usage: scripts/land.sh -F - <path> [<path> ...]  <<'MSG' ... MSG   (PREFER THIS)
 #        scripts/land.sh -m "<message>" <path> [<path> ...]
 #
-# PREFER -F WITH A QUOTED HEREDOC. A -m message is a shell argument, so a
-# backtick in it runs as a command before this script ever sees it: on
-# 2026-08-21 a message mentioning `slack` executed the Slack CLI and pasted its
-# help text into the commit. A <<'MSG' heredoc is literal, and it also lets the
-# message hold blank lines and quotes without escaping.
+# PREFER -F WITH A QUOTED HEREDOC. A -m message is a shell argument, so a backtick in it runs as a
+# command before this script ever sees it: a message mentioning `slack` executed the Slack CLI and
+# pasted its help text into the commit. A <<'MSG' heredoc is literal, and it also lets the message
+# hold blank lines and quotes without escaping.
 #
 # Every path is REQUIRED and is the whole of what gets committed: the commit uses
 # `git commit -- <paths>`, which builds the tree from HEAD plus those paths and
@@ -83,7 +80,7 @@ echo "$STAGED" | sed 's/^/  /'
 #    (b) A path NOT named that differs from HEAD, which is how a lane merge
 #        landing under this checkout announces itself: the worktree copy is
 #        older than main, and committing it later would revert the merge. This
-#        fired on 2026-08-21 with src/cli.ts at +3 -15 and caught exactly that,
+#        fired with src/cli.ts at +3 -15 and caught exactly that,
 #        minutes after the same class had already cost a restore.
 # The PATHS array, not "$@": the arg loop above shifted "$@" empty, and passing
 # it meant this block diffed the whole tree while believing it diffed the named
@@ -128,18 +125,14 @@ if others:
 sys.exit(0)
 PYEOF
 
-# THE COMMIT MESSAGE GOES THROUGH THE SAME RULES A SENT MESSAGE DOES. Four of the
-# last eight failed them when this was first run: the antithesis form twice, a
-# closer restating the message twice. A commit message is read by everyone who
-# reads the history, and it was the one piece of writing here that nothing
-# checked (2026-08-25).
-# STDIN IS READ ONCE, INTO A FILE. `-F -` and a lint that also reads stdin do not
-# share: the lint drained it and git saw an empty message. Caught on the first
-# real commit after this check was added.
-# THE MESSAGE IS COPIED ONCE, AND BOTH STEPS READ THE COPY. `-F -` becomes
-# /dev/stdin above, so the lint drained it and git found an empty message. It
-# took two attempts to see, because the first fix still left git pointed at the
-# drained stream.
+# THE COMMIT MESSAGE GOES THROUGH THE SAME RULES A SENT MESSAGE DOES. Four of the last eight failed
+# them when this was first run: the antithesis form twice, a closer restating the message twice. A
+# commit message is read by everyone who reads the history, and it was the one piece of writing here
+# that nothing checked. STDIN IS READ ONCE, INTO A FILE. `-F -` and a lint that also reads stdin do
+# not share: the lint drained it and git saw an empty message. Caught on the first real commit after
+# this check was added. THE MESSAGE IS COPIED ONCE, AND BOTH STEPS READ THE COPY. `-F -` becomes
+# /dev/stdin above, so the lint drained it and git found an empty message. It took two attempts to
+# see, because the first fix still left git pointed at the drained stream.
 LINT_INPUT="$(mktemp)"
 if [ -n "$MSG_FILE" ]; then
   cat "$MSG_FILE" > "$LINT_INPUT"
@@ -151,10 +144,9 @@ if ! "${SCRAMBLE_BUN:-bun}" "$(git rev-parse --show-toplevel)/src/bin.ts" lint "
   fail "the commit message breaks the language rules above. Rewrite it and run again."
 fi
 
-# ONE SENTENCE. The operator, 2026-08-27: "commit message should be 1 SENTENCE".
-# Every message in this repo's history was a subject line plus paragraphs of
-# reasoning, and `git log` is the wrong place for that: the reasoning belongs in
-# the code comment beside the change, where a reader meets it.
+# ONE SENTENCE. The operator: "commit message should be 1 SENTENCE". Every message in this repo's
+# history was a subject line plus paragraphs of reasoning, and `git log` is the wrong place for
+# that: the reasoning belongs in the code comment beside the change, where a reader meets it.
 #
 # The check counts lines with any text on them, and counts sentence ends inside
 # the line. A trailing full stop is fine; one in the middle means two sentences.

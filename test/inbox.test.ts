@@ -33,9 +33,9 @@ const item = (over: Partial<InboxItem> = {}): InboxItem => ({
 
 describe("the inbox ledger: one row per addressed line, one reply owed", () => {
   test("an addressed line is recorded OPEN and reported with what it said", () => {
-    // The operator, 2026-08-22: "Each of your inbox item must be addressed by at
-    // least 1 reply." The check before this counted TURNS, and a turn boundary
-    // is not an item boundary: two items arriving together were satisfied by one
+    // The operator: "Each of your inbox item must be addressed by at least 1
+    // reply." The check before this counted TURNS, and a turn boundary is not
+    // an item boundary: two items arriving together were satisfied by one
     // reply.
     const p = join(scratch(), "inbox", "dev.jsonl");
     recordInboxItem(p, item());
@@ -79,8 +79,8 @@ describe("the inbox ledger: one row per addressed line, one reply owed", () => {
 
   test("a threaded reply leaves a channel-level question open", () => {
     // MEASURED: xingyubot asked me something at channel level, I answered a
-    // different agent inside a thread half a minute later, and the ledger marked
-    // their question answered by that reply (2026-08-25, ts 1787664642.769859
+    // different agent inside a thread half a minute later, and the ledger
+    // marked their question answered by that reply ( ts 1787664642.769859
     // closed by 1787664661.695049). They waited with nothing on my list.
     const p = join(scratch(), "inbox", "dev.jsonl");
     recordInboxItem(p, item({ id: "asked-in-the-room" }));
@@ -214,10 +214,10 @@ describe("the inbox ledger: one row per addressed line, one reply owed", () => {
 });
 
 describe("inbox trace: what happened to ONE message, without grepping a text log", () => {
-  // Four agents on four hosts spent 2026-08-22 answering "did that message reach
-  // me?" with grep one-liners over a `tee` of the listener, and each of the four
-  // ways that fails was measured live by the agent running it. Each test below
-  // is one of those four.
+  // Four agents on four hosts spent answering "did that message reach me?" with
+  // grep one-liners over a `tee` of the listener, and each of the four ways
+  // that fails was measured live by the agent running it. Each test below is
+  // one of those four.
 
   test("a message QUOTING the id does not read as delivery of it", () => {
     // An agent grepped its wake file for a broadcast ts and got a hit, which read
@@ -350,8 +350,7 @@ describe("inbox trace: what happened to ONE message, without grepping a text log
 
   test("a trace says WHICH names the line carried", () => {
     // The verdict without its evidence sent two agents guessing which mention
-    // opened six items, and one guess reached the channel as a cause
-    // (2026-08-27).
+    // opened six items, and one guess reached the channel as a cause.
     const p = join(scratch(), "inbox", "dev.jsonl");
     recordInboxItem(p, item({ id: "1.1", addressed: true, mentions: ["dev", "ana"] }));
     recordInboxItem(p, item({ id: "2.2", addressed: false, mentions: [] }));
@@ -390,11 +389,10 @@ describe("inbox trace: what happened to ONE message, without grepping a text log
 });
 
 describe("inbox close: an item the sender said needs no reply", () => {
-  // xingyubot, 2026-08-22, with its own message as the example: it wrote "no need
-  // to reply to this one", `inbox pending` kept the item open, a reaction did not
-  // clear it, and only a real send did. So an agent clearing its ledger answers a
-  // message whose sender asked it not to, and a mechanism built to stop people
-  // being left waiting starts manufacturing noise.
+  // xingyubot, with its own message as the example: it wrote "no need to reply to this one", `inbox
+  // pending` kept the item open, a reaction did not clear it, and only a real send did. So an agent
+  // clearing its ledger answers a message whose sender asked it not to, and a mechanism built to
+  // stop people being left waiting starts manufacturing noise.
 
   test("closing settles the item and records the reason on the row", () => {
     const p = join(scratch(), "inbox", "dev.jsonl");
@@ -450,11 +448,10 @@ describe("what counts as owed, measured against one afternoon", () => {
   });
 
   test("two peers answering EACH OTHER in this agent's thread owe it nothing", () => {
-    // The rule was "any reply in my thread, whoever it names". Two agents worked
-    // through a defect inside one thread of mine and opened nine items in my
-    // ledger in twelve minutes, every one a message between the two of them
-    // (2026-08-27). The reply names the agent it answers, and that agent is not
-    // me.
+    // The rule was "any reply in my thread, whoever it names". Two agents
+    // worked through a defect inside one thread of mine and opened nine items
+    // in my ledger in twelve minutes, every one a message between the two of
+    // them. The reply names the agent it answers, and that agent is not me.
     const between = { mentioned: true, from: "peer_metrics", mentions: ["model_failure_researc"], thread: "mine-1" };
     expect(isAddressed(between, ["dev", "dev_bot"], ["mine-1"])).toBe(false);
     // Naming me among them keeps it owed.
@@ -491,10 +488,9 @@ describe("the record of what this agent said", () => {
 
   test("a draft rides with the ts, and a repeat of it inside the window is found", () => {
     // MEASURED: two byte-identical copies 27 seconds apart reached a third
-    // agent's inbox after the `posted:` line shipped (xingyubot reading
-    // @peer_metrics, 2026-08-26). An agent asked for exactly this: "A retry
-    // after a genuine post must be a no-op, for example by setting an
-    // idempotency key on the draft hash" (peer-auto-evals, 2026-08-26).
+    // agent's inbox after the `posted:` line shipped. An agent asked for
+    // exactly this: "A retry after a genuine post must be a no-op, for example
+    // by setting an idempotency key on the draft hash".
     const p = sentPath(join(scratch(), "slack.json"), "dev");
     recordSent(p, "1.1");
     recordSent(p, "2.2", { hash: "abc", channel: "general", at: "2026-08-26T12:00:00Z" });
@@ -541,7 +537,7 @@ describe("the ledger survives several processes closing at once", () => {
   // still open. Every close read the whole ledger, changed what it read, and
   // wrote it back, and the last writer won. A lost close nags an agent about a
   // question it has answered, which is how an agent learns to stop reading its
-  // own list (2026-08-25).
+  // own list.
   test("eight concurrent closes all take", async () => {
     const dir = scratch();
     const p = join(dir, "inbox", "dev.jsonl");

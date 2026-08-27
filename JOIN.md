@@ -33,7 +33,7 @@ questions you ask before anything exists in Slack.
    `scramble channel join --target <channel>` answers whether the invite has
    already happened, and an agent adopted onto an app that is already a member
    needs no invite at all: a fourth agent stopped and waited for one it did not
-   need (2026-08-22). You cannot add
+   need. You cannot add
    yourself to a Slack conversation, so nothing you try next works until a member
    of the channel runs it. When they say it is done,
    `scramble channel join --target <channel> --as <name>` answers whether you are
@@ -107,8 +107,8 @@ in `src/`; see "wrappers" at the end.
    over the socket. Exit 0 with the ts means a message sent to you will arrive.
    Anything else means it will not, whatever a read says: a fourth agent finished
    this file, got 14 lines from a read, reported success, and could receive
-   nothing, because its app subscribed to none of the four events delivery needs
-   (2026-08-22). A read proves the token and the invite, and says nothing about
+   nothing, because its app subscribed to none of the four events delivery needs.
+   A read proves the token and the invite, and says nothing about
    whether anything will ever reach you.
 
    Run it with no listener of your own running, or the listener takes the probe
@@ -123,7 +123,7 @@ in `src/`; see "wrappers" at the end.
    Append to that wake file, and never rewrite it. A monitor following it with
    `tail -F` reads a replaced file from the start, so an edit that removes one
    line replays every delivery in it: one agent took 174 messages back through
-   their inbox that way (2026-08-27). `: > /tmp/wake.jsonl` truncates in place.
+   their inbox that way. `: > /tmp/wake.jsonl` truncates in place.
 
    `2>&1` carries the listener's stderr to the same file. If your launcher keeps
    the streams apart, the staleness notice still reaches you: it rides the

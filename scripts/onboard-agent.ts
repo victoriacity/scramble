@@ -58,11 +58,11 @@ const LONG_DESCRIPTION_MIN = 175;
 
 /** The name Slack shows BESIDE MESSAGES, which has to convert to a username.
  *
- *  Slack refuses a manifest whose `features.bot_user.display_name` is not
- *  convertible: `bad_username`, "The display_name cannot be converted to a
- *  username". An agent measured it creating an app with a CJK name (2026-08-22),
- *  and the failure named neither the field nor the reason, because --app-name
- *  was written into BOTH display_information.name and this one.
+ * Slack refuses a manifest whose `features.bot_user.display_name` is not
+ * convertible: `bad_username`, "The display_name cannot be converted to a
+ * username". An agent measured it creating an app with a CJK name, and the
+ * failure named neither the field nor the reason, because --app-name was
+ * written into BOTH display_information.name and this one.
  *
  *  A name can also never be fixed afterwards: `users.profile:write` is not a
  *  valid bot scope and users.profile.set answers not_allowed_token_type, so the
@@ -106,9 +106,9 @@ function manifestFor(
       // team_id is passed. An app installed that way while declaring
       // org_deploy_enabled:false is a contradiction Slack ACCEPTS in silence:
       // the tokens work, every REST call works, the socket opens and says
-      // hello, and no event is ever delivered. Measured on 2026-08-21 by
-      // flipping this one field on a live app: messages began arriving on the
-      // socket seconds later, from a bot and from a human.
+      // hello, and no event is ever delivered. Measured by flipping this one
+      // field on a live app: messages began arriving on the socket seconds
+      // later, from a bot and from a human.
       org_deploy_enabled: true,
     },
   };
@@ -134,7 +134,7 @@ function configToken(): { token: string; enterpriseId: string } {
         `     it prints into Slack, then give it the code Slack shows.\n` +
         `     NOT \`slack login --no-prompt\`: that prints a ticket and exits, and the\n` +
         `     ticket expires faster than a person can paste it and read the code back.\n` +
-        `     A remote agent hit this three times in a row (2026-08-22). Interactive\n` +
+        `     A remote agent hit this three times in a row. Interactive\n` +
         `     login holds the process open and has no such window.`,
     );
   }
@@ -171,7 +171,7 @@ async function api(
           `onto a foreign app leaves the two things delivery needs outside anyone's reach here:\n` +
           `the four bot events (message.channels, message.groups, message.im,\n` +
           `member_joined_channel) and the scope list. A fourth agent hit exactly this\n` +
-          `(2026-08-22): reads worked, 14 lines came back, and no message could ever arrive.\n` +
+          `: reads worked, 14 lines came back, and no message could ever arrive.\n` +
           `Either have the app's owner add them, or let this script create an app for the\n` +
           `agent by removing its entry from the config and running again.`,
       );
@@ -299,10 +299,10 @@ if (agent === undefined || appName === undefined) {
 // There was no way to do this. The update-or-create branch reads the config
 // entry alone, so an agent handed credentials for an existing app had to
 // hand-write four fields into the config: token, appToken, appId and handle. A
-// fourth agent did exactly that and reported it (2026-08-22), including the trap:
-// "a wrong handle fails silently, since the handle is what mention detection keys
-// on". Every one of those four is knowable from the token, so none of them should
-// be typed by anyone.
+// fourth agent did exactly that and reported it, including the trap: "a wrong
+// handle fails silently, since the handle is what mention detection keys on".
+// Every one of those four is knowable from the token, so none of them should be
+// typed by anyone.
 const adoptToken = flag("adopt");
 if (adoptToken !== undefined && adoptToken !== "") {
   const who = await get(adoptToken, "auth.test");
@@ -697,10 +697,10 @@ async function verb(args: string[]): Promise<{ code: number; out: string; err: s
 // This ended on a `message read` and called that verification. A fourth agent
 // onboarded, got 14 lines from a read, reported success, and could receive
 // nothing: its app subscribed to app_mention and to none of the four events
-// delivery needs. Their words (2026-08-22): "onboarding verifies the read path
-// and never the wake path, so an agent can finish JOIN.md, report success, and
-// receive nothing." They asked whether onboarding should end on `doctor --wake`.
-// It should, and it does.
+// delivery needs. Their words: "onboarding verifies the read path and never the
+// wake path, so an agent can finish JOIN.md, report success, and receive
+// nothing." They asked whether onboarding should end on `doctor --wake`. It
+// should, and it does.
 //
 // A read proves the token and the invite. It says nothing about whether a
 // message will ever arrive, and those are the two halves an agent needs.

@@ -112,10 +112,10 @@ function request(cfg: RewriteConfig & { key: string }, prompt: string): { url: s
 /** ONE ROW PER SEND THAT MET THE REWRITER, so the question "does this help" is
  *  answered by a number. Every earlier answer was an anecdote.
  *
- *  The rewriter runs on every send from two hosts and five agents, and nobody can
- *  say how often it improves a message, how often a guard refuses one, or which
- *  guard fires most. Every claim about it today has been a single case somebody
- *  remembered (2026-08-25).
+ * The rewriter runs on every send from two hosts and five agents, and nobody
+ * can say how often it improves a message, how often a guard refuses one, or
+ * which guard fires most. Every claim about it today has been a single case
+ * somebody remembered.
  *
  *  `outcome` is one of: `sent` (a rewrite went out), `unchanged` (the model
  *  returned what it was given), `retried` (the first attempt was refused and the
@@ -163,9 +163,9 @@ export function readRewrites(path: string): RewriteRecord[] {
 
 /** What the rows say, in the shape a person asks it. */
 export function rewritesReport(rows: RewriteRecord[], agent?: string): string {
-  // ONE FILE PER HOST, AND THE AGENT IS ON EVERY ROW. `--as` named nothing here,
-  // so two agents sharing a host read each other's counts as their own and one
-  // of them reported a guard catch it had never had (xingyubot, 2026-08-25).
+  // ONE FILE PER HOST, AND THE AGENT IS ON EVERY ROW. `--as` named nothing
+  // here, so two agents sharing a host read each other's counts as their own
+  // and one of them reported a guard catch it had never had.
   const all = rows;
   if (agent !== undefined && agent !== "") rows = rows.filter((r) => r.agent === agent);
   if (rows.length === 0) {
@@ -216,10 +216,9 @@ export function rewritesReport(rows: RewriteRecord[], agent?: string): string {
 
 /** What to ask the model when someone wants the DIAGNOSIS, with no fix attached.
  *
- *  The operator, 2026-08-26, about a refusal message this tool prints: "Use
- *  gemini 3.7 to find why the communication is wrong." A rewrite shows a better
- *  version and leaves the author guessing which of their habits produced the
- *  worse one. */
+ * The operator, about a refusal message this tool prints: "Use gemini 3.7 to
+ * find why the communication is wrong." A rewrite shows a better version and
+ * leaves the author guessing which of their habits produced the worse one. */
 export function critiquePrompt(text: string): string {
   return (
     `You are a very experienced Member of Technical Staff in a frontier AI company reviewing a ` +
@@ -234,9 +233,9 @@ export function critiquePrompt(text: string): string {
 
 /** The register block for a tier, appended to the instruction.
  *
- *  Two files beside the instruction, so the difference between speaking to
- *  agents and speaking to people is readable in one place and editable without
- *  touching code (operator, 2026-08-27). */
+ * Two files beside the instruction, so the difference between speaking to
+ * agents and speaking to people is readable in one place and editable without
+ * touching code. */
 export function tierPromptPath(moduleDir: string, tier: string): string {
   return join(moduleDir, "prompts", `tier-${tier}.md`);
 }
@@ -342,12 +341,11 @@ function firstText(body: unknown): string | undefined {
 /** Words that change how strong a claim is. A rewrite may not introduce one the
  *  original never used, in either direction.
  *
- *  Measured live, and the worst case in the set: an author wrote about their
- *  exposure and the rewrite published a guarantee, "the diff check PREVENTS the
- *  rewriter from silently replacing measured numbers" (2026-08-25). The reverse
- *  is the failure the instruction already names, a fact softened into an
- *  impression. Both are the same defect: the strength of a claim is the author's
- *  to set. */
+ * Measured live, and the worst case in the set: an author wrote about their
+ * exposure and the rewrite published a guarantee, "the diff check PREVENTS the
+ * rewriter from silently replacing measured numbers". The reverse is the
+ * failure the instruction already names, a fact softened into an impression.
+ * Both are the same defect: the strength of a claim is the author's to set. */
 const STRENGTH = /\b(prevents?|guarantees?|ensures?|eliminates?|always|never|cannot|impossible|entirely|fully|completely|may|might|appears?|seems?|likely|possibly|generally|typically|usually)\b/gi;
 
 /** Strength words the REWRITE introduced. Case-folded, and counted by
@@ -365,20 +363,20 @@ export function strengthDrift(original: string, rewritten: string): string[] {
 /** The words that say how two facts relate. A rewrite keeps as many as the
  *  original had, no more and no fewer.
  *
- *  The operator, 2026-08-25: "rewrite should be explicitly insturcted to exactly
- *  preserve the causal and logic structure. it should never break the logic such
- *  as A, because B into A, and B." The instruction said so and nothing measured
- *  it. Running the instruction file through the rewriter produced the opposite
- *  fault in the same minute: "Do not compress. Clipped prose reads as an
- *  interrogation" came back as "We do not compress the text BECAUSE clipped
- *  prose reads like an interrogation", inventing a causal claim from two
- *  adjacent statements.
+ * The operator: "rewrite should be explicitly insturcted to exactly preserve
+ * the causal and logic structure. it should never break the logic such as A,
+ * because B into A, and B." The instruction said so and nothing measured it.
+ * Running the instruction file through the rewriter produced the opposite fault
+ * in the same minute: "Do not compress. Clipped prose reads as an
+ * interrogation" came back as "We do not compress the text BECAUSE clipped
+ * prose reads like an interrogation", inventing a causal claim from two
+ * adjacent statements.
  *
- *  COUNTED AS A CLASS. Two agents measured `which is why` ->
- *  `because` and `therefore` -> `because` across ten sentences on two hosts, with
- *  the clauses swapped and the logic intact (2026-08-25). Swapping one connective
- *  for another keeps the count and passes; flattening a link into `and` or a full
- *  stop drops the count, and inventing one raises it. */
+ * COUNTED AS A CLASS. Two agents measured `which is why` -> `because` and
+ * `therefore` -> `because` across ten sentences on two hosts, with the clauses
+ * swapped and the logic intact. Swapping one connective for another keeps the
+ * count and passes; flattening a link into `and` or a full stop drops the
+ * count, and inventing one raises it. */
 const CONNECTIVES =
   /\b(because|so|since|therefore|thus|hence|if|unless|when|whenever|although|though|but|however|otherwise|which means|as a result|that is why|which is why|in order to)\b/gi;
 
@@ -389,11 +387,11 @@ export function connectivesIn(text: string): string[] {
 
 /** The connectives that state WHY, which is the half a rewrite must not invent.
  *
- *  MEASURED over 29 sends on two hosts: the connective guard fired four times,
- *  every one of them in the ADD direction, and it killed one send outright. Two
- *  of the four added `because`, which is a claim about why that the author did
- *  not make. The other two added `when` and `whenever`, which restate timing and
- *  invent nothing (2026-08-26).
+ * MEASURED over 29 sends on two hosts: the connective guard fired four times,
+ * every one of them in the ADD direction, and it killed one send outright. Two
+ * of the four added `because`, which is a claim about why that the author did
+ * not make. The other two added `when` and `whenever`, which restate timing and
+ * invent nothing.
  *
  *  So the DROP check keeps the whole class, since losing any link flattens the
  *  logic, and the ADD check counts these only. */
@@ -429,8 +427,8 @@ function refusal(what: string, attempt: string): { refuse: string; why: string; 
     attempt,
     // WHAT TO TELL THE MODEL ON A SECOND ATTEMPT. Every guard here fires on
     // something the MODEL did, so the model is the party that can fix it. Two
-    // agents wrote prose that avoided a banned form on purpose, the rewriter put
-    // it back, and the send died with both versions refused (2026-08-25).
+    // agents wrote prose that avoided a banned form on purpose, the rewriter
+    // put it back, and the send died with both versions refused.
     retry: `Your previous attempt was rejected: ${what}. Rewrite again without that.`,
   };
 }
@@ -440,10 +438,10 @@ export function factsIn(text: string): string[] {
   // AN INLINE SPAN IS AN IDENTIFIER and survives byte for byte: a ts, a flag, a
   // filename, a command.
   for (const m of text.matchAll(/`[^`\n]+`/g)) out.add(m[0]);
-  // A FENCED BLOCK IS NOT EXEMPT PROSE. The operator, 2026-08-26: "any natural
-  // language text MUST be rewritten even if it is in the code block." An agent
-  // had said the quiet part out loud an hour earlier: they put sentences in
-  // fences because the rewriter edits prose and leaves fenced blocks alone.
+  // A FENCED BLOCK IS NOT EXEMPT PROSE. The operator: "any natural language
+  // text MUST be rewritten even if it is in the code block." An agent had said
+  // the quiet part out loud an hour earlier: they put sentences in fences
+  // because the rewriter edits prose and leaves fenced blocks alone.
   //
   // So the block text is no longer required verbatim, and what it MEASURES
   // still is: every number, id, mention, url and path inside it has to come
@@ -468,11 +466,10 @@ function atomsIn(text: string): string[] {
 
 /** The mentions that will NOTIFY someone: `@name` in prose.
  *
- *  A mention inside a backtick span notifies nobody, and Slack records the
- *  message with an empty `mentions` list. Measured live: the rewriter moved an
- *  `@name` into a code span and the addressee never heard about the message
- *  (2026-08-25). The whole-text check misses this, since the characters are
- *  still there.
+ * A mention inside a backtick span notifies nobody, and Slack records the
+ * message with an empty `mentions` list. Measured live: the rewriter moved an
+ * `@name` into a code span and the addressee never heard about the message. The
+ * whole-text check misses this, since the characters are still there.
  *
  *  Keeping mentions working is the point of the message, so this is checked in
  *  PROSE on both sides. */
@@ -480,7 +477,7 @@ export function mentionsIn(text: string): string[] {
   // TRAILING PUNCTUATION BELONGS TO THE SENTENCE. A Slack handle may contain a
   // dot, so the match takes one and `@name.` at the end of a sentence read as a
   // different person from `@name`: the added-mention guard called it a new
-  // mention and blocked two sends by the agent writing them (2026-08-25).
+  // mention and blocked two sends by the agent writing them.
   return [
     ...new Set(
       [...proseOf(text).matchAll(/@[A-Za-z0-9._-]+/g)].map((m) => m[0].replace(/[.,:;!?]+$/, "")).filter((m) => m !== "@"),
@@ -502,12 +499,12 @@ export const MIN_PROSE_RATIO = 0.6;
 /** What the send does with a rewrite. `send` carries the text to post; `refuse`
  *  carries the reason the send stops.
  *
- *  THE ORIGINAL NO LONGER GOES OUT WHERE THE REWRITE IS ON, 2026-08-25: "we
- *  should not allow claude original message go out. The communication is too
- *  bad." Falling back to the author's words on a failed rewrite published exactly
- *  the prose the rewrite exists to replace. A rewrite that cannot be used stops
- *  the send and says what happened, and the author writes it again, which is what
- *  the language rules already require.
+ * THE ORIGINAL NO LONGER GOES OUT WHERE THE REWRITE IS ON: "we should not allow
+ * claude original message go out. The communication is too bad." Falling back
+ * to the author's words on a failed rewrite published exactly the prose the
+ * rewrite exists to replace. A rewrite that cannot be used stops the send and
+ * says what happened, and the author writes it again, which is what the
+ * language rules already require.
  *
  *  With no key configured the rewriter is OFF and this is never consulted. */
 export type RewriteChoice =
@@ -534,9 +531,9 @@ export function chooseText(
   }
   // WHAT THE ORIGINAL CARRIED MUST STILL BE THERE. Measured in a live channel:
   // the rewriter dropped a closing causal sentence and replaced a statement of
-  // fact with a different one, and the receiving agent then inferred the missing
-  // conclusion from the numbers (2026-08-25). The instruction already demands
-  // both; this refuses the rewrite when the demand went unmet.
+  // fact with a different one, and the receiving agent then inferred the
+  // missing conclusion from the numbers. The instruction already demands both;
+  // this refuses the rewrite when the demand went unmet.
   const lost = factsIn(original).filter((f) => !rewritten.text.includes(f));
   if (lost.length > 0) {
     return refusal(
@@ -549,10 +546,9 @@ export function chooseText(
   const keptMentions = mentionsIn(rewritten.text);
   const mine = mentionsIn(original);
   // A MENTION THE AUTHOR NEVER WROTE notifies someone they did not address, and
-  // it can invent attribution. Measured twice: a rewrite turned "re-ran the same
-  // five sentences" into "after @scramble_dev re-ran the same five sentences",
-  // crediting the run to a different agent and pinging them for it
-  // (2026-08-25).
+  // it can invent attribution. Measured twice: a rewrite turned "re-ran the
+  // same five sentences" into "after @scramble_dev re-ran the same five
+  // sentences", crediting the run to a different agent and pinging them for it.
   const addedMentions = keptMentions.filter((m) => !mine.includes(m));
   if (addedMentions.length > 0) {
     return refusal(
@@ -572,7 +568,7 @@ export function chooseText(
   // THE ACTOR STAYS THE ACTOR. Two agents measured the same shift: "I stopped
   // restarting on every bump" became "The process waited for the installed
   // commit to hold steady", and a first-person report turned into a description
-  // with nobody in it (2026-08-25). Who did a thing is part of the claim.
+  // with nobody in it. Who did a thing is part of the claim.
   const firstPerson = /\b(I|I'm|I've|my|me|we|we're|we've|our)\b/i;
   if (firstPerson.test(proseOf(original)) && !firstPerson.test(proseOf(rewritten.text))) {
     return refusal(

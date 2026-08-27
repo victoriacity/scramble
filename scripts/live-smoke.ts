@@ -53,11 +53,10 @@ const SELF: string = firstAgent;
 const PEER: string = secondAgent;
 const TOKEN = cfg.agents[SELF]!.token!;
 const stamp = process.env.SMOKE_STAMP ?? String(Math.floor(Date.now() / 1000));
-// THE SMOKE RUNS WITH THE REWRITE OFF. Every stage here asserts on the exact
-// text it posted, and this file tests DELIVERY. With a key on the host, the
-// rewriter rephrased every fixture and six stages failed: the smoke posted
-// `smoke <stamp> @akari wake check` and the channel held `I am doing a wake
-// check for @akari on smoke <stamp>.` (2026-08-25).
+// THE SMOKE RUNS WITH THE REWRITE OFF. Every stage here asserts on the exact text it posted, and
+// this file tests DELIVERY. With a key on the host, the rewriter rephrased every fixture and six
+// stages failed: the smoke posted `smoke <stamp> @akari wake check` and the channel held `I am
+// doing a wake check for @akari on smoke <stamp>.`.
 //
 // bun also loads `.env` from the checkout into every process it starts, so
 // clearing these by name is what makes the run independent of the machine.
@@ -216,12 +215,12 @@ async function stageWakeAndStatus(): Promise<void> {
       .split("\n")
       .filter((l) => l.startsWith("{"))
       .map((l) => JSON.parse(l) as { from?: string; mentioned?: boolean; text?: string });
-    // THE LINE THIS STAGE POSTED, and no other. Selecting on the run stamp alone
-    // matched an EARLIER stage's message that the listener also carried, and the
-    // check then reported `mentioned=false` for a line that had been delivered
-    // with `mentioned:true`, four lines below it in the same file. A selector
-    // loose enough to match a neighbour is a failing check that proves nothing
-    // (2026-08-25).
+    // THE LINE THIS STAGE POSTED, and no other. Selecting on the run stamp
+    // alone matched an EARLIER stage's message that the listener also carried,
+    // and the check then reported `mentioned=false` for a line that had been
+    // delivered with `mentioned:true`, four lines below it in the same file. A
+    // selector loose enough to match a neighbour is a failing check that proves
+    // nothing.
     const woke = lines.find((l) => l.text?.includes(`smoke ${stamp} @${SELF} wake check`));
     check("wake/delivered", woke !== undefined, `the peer's line reached the listener: ${woke !== undefined}`);
     check("wake/mentioned", woke?.mentioned === true, `mentioned=${String(woke?.mentioned)}`);
@@ -360,12 +359,12 @@ async function stageResolve(): Promise<void> {
  *  broken and neither showed up here, because this smoke only ever attached to a
  *  MAPPED channel with no name in the text.
  *
- *  A peer agent measured both on a live channel (2026-08-22): `--attach` read the
- *  config's channel map itself, so a channel the agent is IN but the config does
- *  not name failed while a plain send to it worked; and the text rode as
- *  `initial_comment` with no mention conversion, so a message opening with the
- *  operator's name stored the name literally and notified nobody, on an answer he
- *  had asked for.
+ * A peer agent measured both on a live channel: `--attach` read the config's
+ * channel map itself, so a channel the agent is IN but the config does not name
+ * failed while a plain send to it worked; and the text rode as
+ * `initial_comment` with no mention conversion, so a message opening with the
+ * operator's name stored the name literally and notified nobody, on an answer
+ * he had asked for.
  *
  *  Run against a config whose `channels` map is EMPTY, so the upload has to
  *  resolve the name, with a mention in the text so the conversion has to happen. */

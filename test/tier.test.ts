@@ -3,9 +3,9 @@ import { tierFor, unclassified } from "../src/tier";
 
 describe("which register a channel calls for", () => {
   test("the operator's entry decides it", () => {
-    // The operator, 2026-08-27: "Channel classification should be manually done
-    // by the operator." I had built this from the membership, counting people
-    // against agents, and the ruling came the same hour.
+    // The operator: "Channel classification should be manually done by the
+    // operator." I had built this from the membership, counting people against
+    // agents, and the ruling came the same hour.
     expect(tierFor("team", { team: "internal" })).toEqual({ tier: "internal", why: "set to internal by the operator" });
     expect(tierFor("team", { team: "external" })).toEqual({ tier: "external", why: "set to external by the operator" });
   });

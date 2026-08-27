@@ -180,7 +180,7 @@ describe("status local backend", () => {
     // The ledger held ONE record per channel, so one agent's status overwrote
     // another's, and any agent's reply cleared whatever the channel held. The
     // live smoke caught it: a peer's message took down the status the listener
-    // had set for itself (2026-08-25).
+    // had set for itself.
     const { mgr, dir } = makeLocal();
     await mgr.setOn("general", "ana");
     await mgr.setOn("general", "bob");
@@ -236,8 +236,7 @@ describe("status local backend", () => {
 describe("status slack backend", () => {
   // A status is SLACK'S OWN status on a thread, not a message. Posting a
   // `working` line into the channel was the wrong shape, and setStatus works on
-  // an ordinary channel thread, which is what makes the message unnecessary
-  // (operator, 2026-08-21).
+  // an ordinary channel thread, which is what makes the message unnecessary.
   test("a status on a thread is Slack's own status, and NO message is posted", async () => {
     const { mgr, calls } = makeSlack();
     await mgr.setOn("general", "ana", "thread.9");
@@ -519,11 +518,11 @@ describe("status through the CLI", () => {
 
 describe("a channel the config map does not hold", () => {
   // The map is a hand-kept copy of what Slack holds, and this is the fourth
-  // place in this repo where the copy was missing or stale. Measured live on
-  // 2026-08-22: an agent was invited into a channel, `message send` to it worked
-  // because the post path ASKS Slack, and the status path read the map, found
-  // nothing, and the whole feature was dead in that channel. A stale entry ended
-  // the same way, as a bare `status: channel_not_found`.
+  // place in this repo where the copy was missing or stale. Measured live: an
+  // agent was invited into a channel, `message send` to it worked because the
+  // post path ASKS Slack, and the status path read the map, found nothing, and
+  // the whole feature was dead in that channel. A stale entry ended the same
+  // way, as a bare `status: channel_not_found`.
 
   test("resolves live, and the status lands in the resolved channel", async () => {
     const h = makeSlack({ resolve: async (c) => (c === "invited-channel" ? "C-INVITED" : undefined) });
@@ -589,10 +588,9 @@ describe("a wedged lock", () => {
 
 describe("an expiry sweep touches only the sweeping agent's own rows", () => {
   test("another agent's expired row is left where it is", async () => {
-    // One manager holds ONE token, so taking down another agent's status means
-    // calling Slack under the wrong credential, in a channel this agent may not
-    // be in. Measured as `status in team: channel_not_found (channel_id
-    // C0EXAMPLE006)` for a row belonging to a different agent (2026-08-25).
+    // One manager holds ONE token, so taking down another agent's status means calling Slack under
+    // the wrong credential, in a channel this agent may not be in. Measured as `status in team:
+    // channel_not_found (channel_id C0EXAMPLE006)` for a row belonging to a different agent.
     const dir = scratch("sweep-own");
     const file = statusPath(dir);
     mkdirSync(join(dir, ".scramble"), { recursive: true });

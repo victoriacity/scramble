@@ -1,11 +1,10 @@
 // WHERE AN AGENT IS RUNNING, published by every message it sends.
 //
-// The operator, 2026-08-22: "Does each agent record its hostname and working
-// directory on scramble and an agent may know its same directory peers?" It did
-// not, and the absence cost two round trips in one afternoon: an agent
-// introduced itself by typing its hostname and `C:\xingyu-agent` into a message
-// by hand, and later a drive letter on somebody else's machine needed a human to
-// ask a human.
+// The operator: "Does each agent record its hostname and working directory on
+// scramble and an agent may know its same directory peers?" It did not, and the
+// absence cost two round trips in one afternoon: an agent introduced itself by
+// typing its hostname and `C:\xingyu-agent` into a message by hand, and later a
+// drive letter on somebody else's machine needed a human to ask a human.
 //
 // IT RIDES ON SLACK MESSAGE METADATA, which is the same channel a status line
 // already uses to be recognised by every other agent. Nothing is parsed out of
@@ -122,11 +121,11 @@ export function currentPeers(rows: PeerRow[]): PeerRow[] {
 /** Peers whose commit differs from the one installed HERE, newest sighting
  *  first.
  *
- *  THE HOST THAT STOPS UPDATING SENDS NO SIGNAL. The staleness notice compares a
- *  running listener against the commit installed on the same machine, so a
- *  machine nobody installs on has nothing to disagree with and stays quiet. An
- *  agent found that on a host five commits behind, where every listener matched
- *  its install and no notice had ever fired (xingyubot, 2026-08-26).
+ * THE HOST THAT STOPS UPDATING SENDS NO SIGNAL. The staleness notice compares a
+ * running listener against the commit installed on the same machine, so a
+ * machine nobody installs on has nothing to disagree with and stays quiet. An
+ * agent found that on a host five commits behind, where every listener matched
+ * its install and no notice had ever fired.
  *
  *  A peer's own message carries the commit it ran, so a difference between that
  *  and this install is visible without git and without a network. WHICH SIDE IS
@@ -160,12 +159,11 @@ export function peersReport(rows: PeerRow[], self: Origin | undefined, sameDir: 
   const lines = shown.map(
     (r) => `  ${r.agent}  ${r.host}  ${r.dir}${r.commit === undefined ? "" : `  (${r.commit})`}  seen ${r.at}`,
   );
-  // WHAT TO TELL EACH OF THEM DEPENDS ON THEIR OWN COMMIT. I
-  // announced two commits with "both changes touch src/cli.ts", which was the
-  // range I had just written. An agent five commits back answered with their own
-  // range: 15 files, the delivery path included (peer-metrics, 2026-08-26). A
-  // reader on that build who took my sentence at face value would have skipped a
-  // restart their build needs.
+  // WHAT TO TELL EACH OF THEM DEPENDS ON THEIR OWN COMMIT. I announced two
+  // commits with "both changes touch src/cli.ts", which was the range I had
+  // just written. An agent five commits back answered with their own range: 15
+  // files, the delivery path included. A reader on that build who took my
+  // sentence at face value would have skipped a restart their build needs.
   //
   // The commits above are the input to that sentence, so the reminder goes where
   // they are printed.

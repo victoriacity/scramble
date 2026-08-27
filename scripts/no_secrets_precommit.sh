@@ -2,12 +2,11 @@
 # Refuse a commit that stages a live credential. Install as the repo's pre-commit
 # hook (scripts/install_hooks.sh does it, or: ln -s ../../scripts/no_secrets_precommit.sh .git/hooks/pre-commit).
 #
-# Exists because on 2026-08-21 I committed a live Slack bot token and app-level
-# token into this repo, which is going open source. The commit was the tip and
-# unpushed, so it could be dropped, but a deletion commit would have left the
-# tokens readable in every clone. Credentials belong outside the repo, at
-# $SCRAMBLE_SLACK_CONFIG (default ~/.config/scramble/slack.json).
-# Postmortem: akrust log/postmortems/2026-08-21-committed-live-slack-credentials.md
+# Exists because I committed a live Slack bot token and app-level token into this repo, which is
+# going open source. The commit was the tip and unpushed, so it could be dropped, but a deletion
+# commit would have left the tokens readable in every clone. Credentials belong outside the repo, at
+# $SCRAMBLE_SLACK_CONFIG (default ~/.config/scramble/slack.json). Postmortem: akrust
+# `log/postmortems/-committed-live-slack-credentials.md`
 set -uo pipefail
 
 # Live-credential shapes. Each requires enough real-looking payload that the

@@ -1,8 +1,8 @@
 # scramble: implementation plan (akari-worker execution)
 
-Date: 2026-08-20. Companion to DESIGN.md (the contract; workers cite it, never
-re-derive it). Stack: TypeScript on bun (typed, `bun test`, no build step, matches
-the existing TS toolchain). Single package, no framework: `Bun.serve` + `fetch`.
+Date:. Companion to DESIGN.md (the contract; workers cite it, never re-derive
+it). Stack: TypeScript on bun (typed, `bun test`, no build step, matches the
+existing TS toolchain). Single package, no framework: `Bun.serve` + `fetch`.
 
 ## Repo layout (fixed by the lead in phase 0, workers fill it)
 

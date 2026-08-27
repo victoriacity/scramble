@@ -199,9 +199,9 @@ export class StatusManager {
    *  update/delete/expire paths can address it. Returns the ts, or undefined on
    *  a failure, which is reported here. */
   // THERE IS NO LIVING MESSAGE. A status is Slack's own status on a thread and
-  // nothing else: no post, no edit, no delete, and no `ts` on the record
-  // (operator, 2026-08-21: "we don't need living messages, only assistant
-  // status"). Nothing here writes a message into a channel.
+  // nothing else: no post, no edit, no delete, and no `ts` on the record. The operator:
+  // `we don't need living messages, only assistant status`.
+  // Nothing here writes a message into a channel.
 
 
   /** Set Slack's own status on a thread. Reports a failure and answers whether
@@ -223,21 +223,21 @@ export class StatusManager {
   /** Set the status ON: Slack's OWN status where Slack has one, and nothing at
    *  all where it does not.
    *
-   *  `assistant.threads.setStatus` works on an ordinary channel thread, which I
-   *  had assumed needed an assistant DM: probed on a real channel thread it
-   *  answers ok:true. The living message existed for that one reason. A status
-   *  belongs on Slack's own status surface, so posting one into the channel was
-   *  the wrong shape. The operator, 2026-08-21: `why did you send a working text`
-   *  and `this should be implemented in slack assistant status, not message`.
+   * `assistant.threads.setStatus` works on an ordinary channel thread, which I
+   * had assumed needed an assistant DM: probed on a real channel thread it
+   * answers ok:true. The living message existed for that one reason. A status
+   * belongs on Slack's own status surface, so posting one into the channel was
+   * the wrong shape. The operator: `why did you send a working text` and
+   * `this should be implemented in slack assistant status, not message`.
    *
    *  With no thread there is no native status, and the answer there is
    *  silence. */
   async setOn(channel: string, agent: string, threadTs?: string): Promise<void> {
     // KEYED BY CHANNEL AND AGENT. Several agents work in one channel, and this
     // ledger held one record per channel, so one agent's status overwrote
-    // another's, and ANY agent's reply cleared it. The live smoke caught
-    // that: a peer's message in the channel took down the status the listener
-    // had set for itself (2026-08-25).
+    // another's, and ANY agent's reply cleared it. The live smoke caught that:
+    // a peer's message in the channel took down the status the listener had set
+    // for itself.
     const existing = this.load().find((r) => r.channel === channel && r.agent === agent);
     const thread = existing?.thread ?? threadTs;
     let took = existing?.thread !== undefined;
@@ -297,12 +297,10 @@ export class StatusManager {
     const records = this.load();
     const now = this.cfg.now();
     const mine = (r: StatusRecord): boolean => this.cfg.agent === undefined || r.agent === this.cfg.agent;
-    // ONLY THIS AGENT'S OWN. Sweeping every row meant calling Slack about
-    // another agent's status under this agent's token, in a channel this agent
-    // may not even be in: measured as `status in team: channel_not_found
-    // (channel_id C0EXAMPLE006)` for a row belonging to a different agent
-    // (2026-08-25). A row whose owner never runs again sits expired and inert,
-    // which `isActive` already ignores.
+    // ONLY THIS AGENT'S OWN. Sweeping every row meant calling Slack about another agent's status
+    // under this agent's token, in a channel this agent may not even be in: measured as `status in
+    // team: channel_not_found (channel_id C0EXAMPLE006)` for a row belonging to a different agent. A
+    // row whose owner never runs again sits expired and inert, which `isActive` already ignores.
     const stale = records.filter((r) => r.expiresAt <= now && mine(r));
     if (stale.length === 0) return 0;
     for (const rec of stale) {

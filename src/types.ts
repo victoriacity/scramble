@@ -43,12 +43,12 @@ export interface Message {
 export interface Delivery extends Message {
   mentioned: boolean;
   /** WHO said it, on every line: `agent` is another app, and `operator`,
-   *  `teammate` and `human` are people. Slack's own `bot_id` decides the
-   *  human-versus-agent half, so that half is never unknown (operator,
-   *  2026-08-26: "Scramble should very clearly indicating whether the speaker is
-   *  a HUMAN or an AGENT"). `operator` is the person who authorized this
-   *  session, `teammate` is another person, and `human` is a person on a host
-   *  whose config records no `humanUserId` to tell those two apart.
+   * `teammate` and `human` are people. Slack's own `bot_id` decides the
+   * human-versus-agent half, so that half is never unknown (operator: "Scramble
+   * should very clearly indicating whether the speaker is a HUMAN or an
+   * AGENT"). `operator` is the person who authorized this session, `teammate`
+   * is another person, and `human` is a person on a host whose config records
+   * no `humanUserId` to tell those two apart.
    *
    *  One field, never a flag per kind: a boolean `operator` would have
    *  needed a second flag the first time human-versus-agent mattered, and a

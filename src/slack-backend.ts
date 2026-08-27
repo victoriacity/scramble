@@ -48,12 +48,12 @@ const USERS_CONVERSATIONS_URL = "https://slack.com/api/users.conversations";
  *  Unbounded expansion on a busy channel is not acceptable; a root dropped by
  *  the cap is REPORTED in the read's own problems.
  *
- *  CHOSEN BY NEWEST REPLY. At 5 roots picked by
- *  root age, an agent replying in a thread started hours earlier read the
- *  channel back, saw nothing newer than 04:34:09, decided the send had failed,
- *  and posted the same progress report FIVE times (peer-metrics, 2026-08-26,
- *  ts 1787715280 through 1787715629). The thread they were writing in is the
- *  one they need expanded, and its root is old by definition. */
+ * CHOSEN BY NEWEST REPLY. At 5 roots picked by root age, an agent replying in a
+ * thread started hours earlier read the channel back, saw nothing newer than
+ * 04:34:09, decided the send had failed, and posted the same progress report
+ * FIVE times (peer-metrics, ts 1787715280 through 1787715629). The thread they
+ * were writing in is the one they need expanded, and its root is old by
+ * definition. */
 export const THREAD_EXPANSION_CAP = 25;
 
 /** Backoff for RE-CONNECTING a Socket Mode stream after it dropped: the first
@@ -102,11 +102,12 @@ interface Frame {
 }
 
 /** The config the backend reads, a SUBSET of the bridge config (src/slack.ts):
- * tokens, the channel->Slack channel map, per-agent identities and the mention roster.
- * `postToChannel` is deliberately absent: the backend POSTS STRAIGHT TO SLACK,
- * with no stitched local channel in between. There is NO self-filter list here: an agent's own
- * posts are suppressed by NAME on the delivery path only (a resolved sender name
- * equals the consuming agent), the same mechanism the local backend uses. */
+ * tokens, the channel->Slack channel map, per-agent identities and the mention
+ * roster. `postToChannel` is deliberately absent: the backend POSTS STRAIGHT TO
+ * SLACK, with no stitched local channel in between. There is NO self-filter
+ * list here: an agent's own posts are suppressed by NAME on the delivery path
+ * only (a resolved sender name equals the consuming agent), the same mechanism
+ * the local backend uses. */
 export interface SlackBackendConfig {
   /** main bot token (xoxb-) used as the fallback for every post. */
   token: string;
@@ -121,16 +122,16 @@ export interface SlackBackendConfig {
   /** Where THIS process runs, stamped onto every message it posts so peers can
    *  learn it without anyone typing it into prose. */
   origin?: Origin;
-  // NO CLI CREDENTIAL LIVES HERE. The operator, 2026-08-26: "Ideally, we only
-  // need to authenticate Slack CLI when a new agent joins the app or do a
-  // scramble doctor fix. Regular operations should be done through the bot
-  // token." This backend serves the regular operations, so the app-config token
-  // it used to carry for peer descriptions is gone, along with the description.
+  // NO CLI CREDENTIAL LIVES HERE. The operator: "Ideally, we only need to
+  // authenticate Slack CLI when a new agent joins the app or do a scramble
+  // doctor fix. Regular operations should be done through the bot token." This
+  // backend serves the regular operations, so the app-config token it used to
+  // carry for peer descriptions is gone, along with the description.
   /** channel -> `internal` or `external`, overriding what the membership says.
    *
-   *  A room full of agents can still be where a customer reads, and nothing
-   *  derives that. This names those rooms; every other channel is answered by
-   *  counting who is in it (operator, 2026-08-27). */
+   * A room full of agents can still be where a customer reads, and nothing
+   * derives that. This names those rooms; every other channel is answered by
+   * counting who is in it. */
   tiers?: Record<string, string>;
   /** slack user id -> name, for <@U…> -> @name normalization. */
   roster: Record<string, string>;
@@ -189,11 +190,11 @@ async function readOk<T = Record<string, unknown>>(
   const rec = body as Record<string, unknown>;
   if (rec.ok !== true) {
     const error = (rec.error as string) ?? "slack call failed";
-    // SLACK SAYS WHICH SCOPE, and this used to drop it. An agent named the shape
-    // of the next failure exactly: "the next scope you add will fail the same
-    // way and the failure will look like an unrelated one-word error from
-    // whatever call needs it" (2026-08-25). Slack returns `needed` and
-    // `provided` on missing_scope, which turns that one word into the answer.
+    // SLACK SAYS WHICH SCOPE, and this used to drop it. An agent named the
+    // shape of the next failure exactly: "the next scope you add will fail the
+    // same way and the failure will look like an unrelated one-word error from
+    // whatever call needs it". Slack returns `needed` and `provided` on
+    // missing_scope, which turns that one word into the answer.
     if (error === "missing_scope") {
       const needed = typeof rec.needed === "string" ? rec.needed : "";
       const provided = typeof rec.provided === "string" ? rec.provided : "";
@@ -243,11 +244,11 @@ export function isStatusLine(m: { metadata?: { event_type?: string } }): boolean
 }
 
 /** Turn `@name` into Slack's `<@U…>` entity on the way OUT, the mirror of what
- *  `normalize` does on the way in. Without it a mention an agent writes is
- *  literal text: Slack renders it grey and a HUMAN gets no notification, while
- *  agents still wake because the receive path parses `@name` itself, so the
- *  defect is invisible from an agent's side (peer agent, 2026-08-21, confirmed
- *  in Slack's raw record).
+ * `normalize` does on the way in. Without it a mention an agent writes is
+ * literal text: Slack renders it grey and a HUMAN gets no notification, while
+ * agents still wake because the receive path parses `@name` itself, so the
+ * defect is invisible from an agent's side (peer agent, confirmed in Slack's
+ * raw record).
  *
  *  `roster` is id -> name, so it is inverted here. A name nobody in the roster
  *  answers to stays LITERAL, since a made-up entity renders worse than plain
@@ -263,10 +264,9 @@ export function denormalize(text: string, roster: Record<string, string>): strin
     // AN INLINE BACKTICK SPAN IS CODE TOO. Fenced lines were skipped and inline
     // spans were converted, so a handle in `@name` form notified that person
     // while `computeMentions` read prose and recorded nothing: they were pinged
-    // with no item in their ledger, which is the split this file keeps closing
-    // (model-failure-research, 2026-08-27). The scramble skill tells agents to
-    // write examples in a span for exactly this reason, and until now that was
-    // false for the inline kind.
+    // with no item in their ledger, which is the split this file keeps closing.
+    // The scramble skill tells agents to write examples in a span for exactly
+    // this reason, and until now that was false for the inline kind.
     const convert = (part: string): string =>
       // ANY CHARACTER THAT IS NOT PART OF A NAME may precede the @, and the
           // rule used to demand whitespace or a line start. A mention after a
@@ -275,7 +275,7 @@ export function denormalize(text: string, roster: Record<string, string>): strin
           // both worked around it by putting a space before the @. One gave the
           // clean case: a message that converted its mention at the line start
           // and left the one that followed a full stop, in a script whose full
-          // stop is its own character (reported 2026-08-25).
+          // stop is its own character (reported).
           //
           // `<` is excluded with the name characters so an already-converted
           // `<@U123>` is left alone, and an address like name@example.com stays
@@ -286,10 +286,10 @@ export function denormalize(text: string, roster: Record<string, string>): strin
             // A TRAILING DOT IS THE SENTENCE, and it was eating the mention. A
             // Slack handle may contain a dot, so the match takes one, and
             // `@name.` at the end of a sentence looked up a handle nobody has:
-            // the mention went out as plain text and notified nobody. A comma or
-            // an exclamation mark never did this, since neither is a handle
+            // the mention went out as plain text and notified nobody. A comma
+            // or an exclamation mark never did this, since neither is a handle
             // character. Measured from raw Slack payloads by the agent whose
-            // name it was (2026-08-25).
+            // name it was.
             const trimmed = name.replace(/\.+$/, "");
             const id = trimmed === name ? undefined : idOf.get(trimmed);
             return id === undefined ? whole : `${lead}<@${id}>${name.slice(trimmed.length)}`;
@@ -315,11 +315,10 @@ export function denormalize(text: string, roster: Record<string, string>): strin
  *  it is trivially unit-tested. */
 /** Slack's three escapes, undone.
  *
- *  Slack stores `<`, `>` and `&` as `&lt;`, `&gt;` and `&amp;`, so a message
- *  carrying `--target <channel>` reads back with the brackets escaped and
- *  `--verify` called it DIFFERS while the message was intact (xingyubot,
- *  2026-08-27). The comparison is against what the AUTHOR wrote, so the read
- *  undoes what the wire did.
+ * Slack stores `<`, `>` and `&` as `&lt;`, `&gt;` and `&amp;`, so a message carrying `--target
+ * <channel>` reads back with the brackets escaped and `--verify` called it DIFFERS while the
+ * message was intact. The comparison is against what the AUTHOR wrote, so the read undoes what the
+ * wire did.
  *
  *  `&amp;` LAST, because doing it first would turn `&amp;lt;` into `&lt;` and
  *  then into `<`, inventing a bracket the author never typed. */
@@ -339,19 +338,17 @@ export function computeMentions(channel: string, text: string, sender: string): 
     // counted them anyway, so a delivery claimed a mention that notified
     // nobody. Measured on a message of mine whose fence carried the words
     // `preserve EVERY @name`: the delivery came back with `name` in its mention
-    // list, and no such agent exists (model-failure-research, 2026-08-27).
-    // THE SAME NAME PATTERN `denormalize` CONVERTS, so what this records and what
-    // Slack notifies are the same string. Splitting on whitespace and trimming
-    // non-word characters kept a possessive: `@alignment_benchmark's` converted
-    // to that agent's id and recorded `alignment_benchmark's`, a name nobody
-    // has, so the person was pinged while their ledger owed nothing
-    // (model-failure-research, 2026-08-27).
-    // THE WHOLE PATTERN `denormalize` USES, its leading boundary included. I
-    // took the name half and dropped the boundary, so `ret@4096` recorded 4096
-    // and an email address recorded its domain: mentions of things that are no
-    // handle, in the same ledger that holds a real one (model-failure-research,
-    // 2026-08-27). `<` sits with the name characters so an already-converted
-    // `<@U123>` is left to the entity reader.
+    // list, and no such agent exists. THE SAME NAME PATTERN `denormalize`
+    // CONVERTS, so what this records and what Slack notifies are the same
+    // string. Splitting on whitespace and trimming non-word characters kept a
+    // possessive: `@alignment_benchmark's` converted to that agent's id and
+    // recorded `alignment_benchmark's`, a name nobody has, so the person was
+    // pinged while their ledger owed nothing. THE WHOLE PATTERN `denormalize`
+    // USES, its leading boundary included. I took the name half and dropped the
+    // boundary, so `ret@4096` recorded 4096 and an email address recorded its
+    // domain: mentions of things that are no handle, in the same ledger that
+    // holds a real one. `<` sits with the name characters so an
+    // already-converted `<@U123>` is left to the entity reader.
     for (const m of proseOf(text).matchAll(/(?:^|[^A-Za-z0-9._<-])@([A-Za-z0-9._-]+)/g)) {
       const name = (m[1] ?? "").replace(/[._-]+$/, "");
       if (name) out.add(name);
@@ -450,10 +447,10 @@ export class SlackBackend {
    *  config entry is an ALIAS for its name. */
   /** operator, teammate, human, or agent, on EVERY line.
    *
-   *  The operator, 2026-08-26: "Scramble should very clearly indicating whether
-   *  the speaker is a HUMAN or an AGENT." That half is never in doubt: a
-   *  `bot_id` on the event is Slack telling us an app spoke, and its absence is
-   *  Slack telling us a person did.
+   * The operator: "Scramble should very clearly indicating whether the speaker
+   * is a HUMAN or an AGENT." That half is never in doubt: a `bot_id` on the
+   * event is Slack telling us an app spoke, and its absence is Slack telling us
+   * a person did.
    *
    *  WHICH human takes a config entry. `humanUserId` names the person who
    *  authorized this session, so `operator` and `teammate` separate only where
@@ -481,9 +478,9 @@ export class SlackBackend {
   }
 
   /** Is this agent IN that thread? A reply inside a thread you started, or
-   *  answered in, is addressed to you whether or not it names you: that is how
-   *  Slack treats a thread for a human, and matching only on the name misses
-   *  every threaded answer to something you said (operator, 2026-08-21).
+   * answered in, is addressed to you whether or not it names you: that is how
+   * Slack treats a thread for a human, and matching only on the name misses
+   * every threaded answer to something you said.
    *
    *  Answered from Slack's own record, so it stays
    *  right across restarts, across machines, and for threads that predate this
@@ -531,14 +528,14 @@ export class SlackBackend {
    *  `denormalize` leaves an unknown name as literal text. Same shape as the
    *  channel map, which was also a hand-kept copy of something Slack holds.
    *
-   *  WHICH OF THE TWO MENTION PATHS THIS IS FOR, since they are separate and I
-   *  conflated them: the Slack ENTITY drives the notification a HUMAN gets, and
-   *  this is the path that was broken. The `mentioned` stamp that wakes an AGENT
-   *  is computed by computeMentions from the text's `@name` tokens, after inbound
-   *  entities have been normalized back to names, so a literal name wakes an
-   *  agent perfectly well and always did. The receiving agent measured exactly
-   *  that and corrected me: "From inside the agent that was supposed to have
-   *  missed those messages, nothing was missed" (2026-08-22).
+   * WHICH OF THE TWO MENTION PATHS THIS IS FOR, since they are separate and I
+   * conflated them: the Slack ENTITY drives the notification a HUMAN gets, and
+   * this is the path that was broken. The `mentioned` stamp that wakes an AGENT
+   * is computed by computeMentions from the text's `@name` tokens, after
+   * inbound entities have been normalized back to names, so a literal name
+   * wakes an agent perfectly well and always did. The receiving agent measured
+   * exactly that and corrected me: "From inside the agent that was supposed to
+   * have missed those messages, nothing was missed".
    *
    *  So: a gap here costs a person their notification, and costs an agent
    *  nothing.
@@ -635,11 +632,11 @@ export class SlackBackend {
   /** The Slack channel id for a scramble channel name, under an agent's own
    *  credential, or undefined when it cannot be resolved.
    *
-   *  Public so the STATUS path resolves the same way the post path does. It read
-   *  a hand-kept map and nothing else, so a channel absent from the map (every
-   *  channel an agent was invited into without a config edit) and a map entry
-   *  gone stale both ended as `status: channel_not_found`, in a feature that has
-   *  already been silently dead once for that exact error (2026-08-21). */
+   * Public so the STATUS path resolves the same way the post path does. It read
+   * a hand-kept map and nothing else, so a channel absent from the map (every
+   * channel an agent was invited into without a config edit) and a map entry
+   * gone stale both ended as `status: channel_not_found`, in a feature that has
+   * already been silently dead once for that exact error. */
   async channelIdFor(agent: string, name: string): Promise<string | undefined> {
     const r = await this.slackChannelFor(this.tokenOrDefault(agent), name);
     return r.id;
@@ -723,12 +720,12 @@ export class SlackBackend {
    *  channel ABSENT from it is asked about through conversations.info, and the
    *  raw id stands in when even that is refused.
    *
-   *  It used to return undefined for an unmapped channel and the message was
-   *  dropped, silently and with nothing reported, so inviting an agent to a new
-   *  channel delivered NOTHING until someone hand-edited slack.json (operator,
-   *  2026-08-22). An agent that has been invited somewhere should hear it, and a
-   *  name it cannot look up is a naming problem, and the message still goes
-   *  through. Cached per id. */
+   * It used to return undefined for an unmapped channel and the message was
+   * dropped, silently and with nothing reported, so inviting an agent to a new
+   * channel delivered NOTHING until someone hand-edited slack.json. An agent
+   * that has been invited somewhere should hear it, and a name it cannot look
+   * up is a naming problem, and the message still goes through. Cached per id.
+   * */
   private async channelNameFor(token: string, id: string): Promise<string> {
     const cached = this.channelNameCache.get(id);
     if (cached !== undefined) return cached;
@@ -773,8 +770,7 @@ export class SlackBackend {
       // named the error and nothing else, and an agent measured that a direct
       // reactions.add with what it believed were the same inputs answered
       // ok:true. Neither of us could tell from that line which channel id went
-      // out, or under whose credential, so the report could go no further
-      // (2026-08-25).
+      // out, or under whose credential, so the report could go no further.
       //
       // The token is named by its SOURCE, never printed: an agent's own token
       // and the config default are different apps, and which one acted is the
@@ -790,9 +786,9 @@ export class SlackBackend {
 
   /** REWRITE ONE MESSAGE THAT IS ALREADY IN THE CHANNEL.
    *
-   *  Asked for by the operator, 2026-08-26: "Agents should be able to edit and
-   *  delete messages." Slack lets a bot token edit only what that token posted,
-   *  and it says which, so the refusal names the credential that acted.
+   * Asked for by the operator: "Agents should be able to edit and delete
+   * messages." Slack lets a bot token edit only what that token posted, and it
+   * says which, so the refusal names the credential that acted.
    *
    *  The text goes through `denormalize` exactly as a post does, so an `@name`
    *  in an edit notifies the same person it would have notified in the send. */
@@ -840,12 +836,12 @@ export class SlackBackend {
 
   /** Every channel this agent is a MEMBER of, by name.
    *
-   *  The sweep used to walk `cfg.channels`, a hand-kept map in a config several
-   *  agents share and edit. On 2026-08-22 a peer removed two entries while
-   *  testing name resolution, and my own `message check` stopped covering the
-   *  channel the operator talks to me in: it reported "none of the 3 configured
-   *  channels are readable" and swept nothing that mattered, while the listener
-   *  kept delivering, so nothing looked broken.
+   * The sweep used to walk `cfg.channels`, a hand-kept map in a config several
+   * agents share and edit. On a peer removed two entries while testing name
+   * resolution, and my own `message check` stopped covering the channel the
+   * operator talks to me in: it reported "none of the 3 configured channels are
+   * readable" and swept nothing that mattered, while the listener kept
+   * delivering, so nothing looked broken.
    *
    *  Membership is a fact Slack holds. Asking it is one call, and it cannot fall
    *  out of date the way a map maintained by hand does. */
@@ -969,20 +965,20 @@ export class SlackBackend {
       }
       // A THREAD_TS NAMING A REPLY IS HOISTED, silently. Slack has no nested
       // threads, so it puts the message in that reply's ROOT and answers with
-      // the root's ts. Measured: aiming at a reply put the message in the
-      // root thread and returned the root's thread_ts, so a check for "did it
-      // thread at all" passes while the message is in a different conversation
-      // than the one asked for. A peer hit this on the same commit I had
-      // measured, and saw no warning (2026-08-22).
+      // the root's ts. Measured: aiming at a reply put the message in the root
+      // thread and returned the root's thread_ts, so a check for "did it thread
+      // at all" passes while the message is in a different conversation than
+      // the one asked for. A peer hit this on the same commit I had measured,
+      // and saw no warning.
       if (landed !== thread) {
         return {
           ok: true,
           ...(typeof r.data.ts === "string" ? { ts: r.data.ts } : {}),
           // WHERE THE MESSAGE CAME TO REST, for whoever reads it back. The
-          // read-back asks conversations.replies for the ROOT, and the root here
-          // is the one Slack picked. An agent
-          // threaded under a reply and the read-back answered "slack has no
-          // message at <ts>" for a message sitting in the channel (2026-08-25).
+          // read-back asks conversations.replies for the ROOT, and the root
+          // here is the one Slack picked. An agent threaded under a reply and
+          // the read-back answered "slack has no message at <ts>" for a message
+          // sitting in the channel.
           thread: landed,
           problem:
             `posted to ${channel} in thread ${landed}, and NOT in ${thread} as asked: Slack has no ` +
@@ -1001,10 +997,10 @@ export class SlackBackend {
 
   /** READ ONE MESSAGE BACK FROM SLACK BY ITS ts, as Slack stored it.
    *
-   *  A send's exit code says Slack accepted something. It says nothing about
-   *  what the channel now holds, and between the two sit the rewriter, mention
-   *  conversion, and Slack's own formatting. Three agents wrote their own
-   *  read-back wrappers today, and one asked for it here (2026-08-25).
+   * A send's exit code says Slack accepted something. It says nothing about
+   * what the channel now holds, and between the two sit the rewriter, mention
+   * conversion, and Slack's own formatting. Three agents wrote their own
+   * read-back wrappers today, and one asked for it here.
    *
    *  `oldest` is inclusive and `latest` exclusive, so a one-message window needs
    *  `inclusive=true` with both ends at the same ts. */
@@ -1021,19 +1017,20 @@ export class SlackBackend {
     // A THREAD REPLY IS ABSENT FROM conversations.history, so verifying one
     // answered "slack has no message at <ts>" while `message read` found it and
     // its text was intact. An agent measured that on its own threaded reply and
-    // kept its wrapper for the case (2026-08-25). A reply is read through
-    // conversations.replies on its ROOT, which is the ts the send threaded under.
+    // kept its wrapper for the case. A reply is read through
+    // conversations.replies on its ROOT, which is the ts the send threaded
+    // under.
     const threaded = thread !== undefined && thread !== "";
     const base = threaded
       ? `${REPLIES_URL}?channel=${encodeURIComponent(resolved.id)}&${WITH_METADATA}` +
         `&ts=${encodeURIComponent(thread)}&limit=200`
       : `${HISTORY_URL}?channel=${encodeURIComponent(resolved.id)}&${WITH_METADATA}` +
         `&oldest=${encodeURIComponent(ts)}&latest=${encodeURIComponent(ts)}&inclusive=true&limit=1`;
-    // A REPLY PAST THE FIRST PAGE IS STILL IN THE CHANNEL. conversations.replies
-    // returns the thread OLDEST-FIRST, so the reply just posted is on the LAST
-    // page, and a single 200-reply request answers "slack has no message at
-    // <ts>" for a message sitting in the thread. This is the same false negative
-    // that made a sender post twice, one page further out (2026-08-26).
+    // A REPLY PAST THE FIRST PAGE IS STILL IN THE CHANNEL.
+    // conversations.replies returns the thread OLDEST-FIRST, so the reply just
+    // posted is on the LAST page, and a single 200-reply request answers "slack
+    // has no message at <ts>" for a message sitting in the thread. This is the
+    // same false negative that made a sender post twice, one page further out.
     let row: { ts?: string; text?: string } | undefined;
     let cursor = "";
     let pages = 0;
@@ -1067,9 +1064,9 @@ export class SlackBackend {
     // on, and only `<@U…>` in the RAW text is one.
     //
     // Counting `@name` tokens in the text conflates them: a mention that failed
-    // to convert still reads as a mention, which is the exact defect that shipped
-    // this evening, so the check would have reported a live mention for a name
-    // notifying nobody (2026-08-25).
+    // to convert still reads as a mention, which is the exact defect that
+    // shipped this evening, so the check would have reported a live mention for
+    // a name notifying nobody.
     const entities = [...stored.matchAll(/<@([A-Z0-9]+)>/g)].map((m) => this.roster[m[1] ?? ""] ?? (m[1] ?? ""));
     const text = await this.normalize(t.token, stored);
     return { ok: true, text, mentions: [...new Set(entities)] };
@@ -1078,13 +1075,13 @@ export class SlackBackend {
   /** Upload a file to a channel, through the SAME resolution and the SAME
    *  mention conversion a plain post gets.
    *
-   *  It went around both. `attachmentUpload` read `cfg.channels[target]` itself,
-   *  so a channel this agent is in but the config does not map failed with a
-   *  short "no Slack channel" while a plain send to that channel worked; and the
-   *  text rode to Slack as `initial_comment` without denormalize, so a message
-   *  opening with someone's name stored the name LITERALLY and notified nobody.
-   *  A peer agent measured both on a live channel (2026-08-22) and named the
-   *  shape: "the upload path skips what plain send does."
+   * It went around both. `attachmentUpload` read `cfg.channels[target]` itself,
+   * so a channel this agent is in but the config does not map failed with a
+   * short "no Slack channel" while a plain send to that channel worked; and the
+   * text rode to Slack as `initial_comment` without denormalize, so a message
+   * opening with someone's name stored the name LITERALLY and notified nobody.
+   * A peer agent measured both on a live channel and named the shape: "the
+   * upload path skips what plain send does."
    *
    *  So the upload lives here now, beside post(), because what they share is not
    *  a helper both call. It is the same question, asked once: which channel, and
@@ -1153,11 +1150,11 @@ export class SlackBackend {
    *  under the acting agent's own credential (`token`). */
   private async normalize(token: string, text: string): Promise<string> {
     // A BROADCAST ADDRESSES EVERY AGENT IN THE CHANNEL, and arrived as raw text
-    // that matched nothing. The operator wrote `<!channel> ensure everything you
-    // write to files are English`, and it reached no agent's inbox: it came in
-    // with `mentions: []` and `mentioned: false`, so every agent saw it only on
-    // the 15-minute sweep, if at all. Three agents measured that independently
-    // against their own inbox and wake logs (2026-08-22).
+    // that matched nothing. The operator wrote `<!channel> ensure everything
+    // you write to files are English`, and it reached no agent's inbox: it came
+    // in with `mentions: []` and `mentioned: false`, so every agent saw it only
+    // on the 15-minute sweep, if at all. Three agents measured that
+    // independently against their own inbox and wake logs.
     //
     // AND THE COMPLIANCE LOOKED LIKE SUCCESS. All three acted on that broadcast
     // within minutes, which from outside is indistinguishable from delivery
@@ -1210,7 +1207,7 @@ export class SlackBackend {
       // agent in it, inside the delivery path. Three agents in one room each
       // downloaded the same 41MB archive addressed to one of them, on a
       // filesystem at 99%, and each download delayed a delivery that was not
-      // theirs (2026-08-22).
+      // theirs.
       if (f.url_private && wanted) {
         const r = await downloadFile(this.fetch, f.url_private, token, this.filesDir, fileId, name);
         if (r.ok) entry.path = r.path;
@@ -1237,10 +1234,10 @@ export class SlackBackend {
     // conversations.replies per threaded row to compute a value nobody reads.
     wantThreadWake = false,
   ): Promise<{ delivery: Delivery | undefined; problems: string[] }> {
-    // AN INVITE IS NEWS. Being added to a channel reaches a human's attention, and
-    // an agent that learns it only by overhearing later traffic has already
-    // missed whatever it was added for (operator, 2026-08-22). Delivered as a
-    // line addressed to this agent, so the inbox wakes on it.
+    // AN INVITE IS NEWS. Being added to a channel reaches a human's attention,
+    // and an agent that learns it only by overhearing later traffic has already
+    // missed whatever it was added for. Delivered as a line addressed to this
+    // agent, so the inbox wakes on it.
     if (ev.type === "member_joined_channel") {
       if (as === "" || ev.user === undefined || ev.user !== this.userIdFor(as)) {
         return { delivery: undefined, problems: [] };
@@ -1268,12 +1265,12 @@ export class SlackBackend {
         problems: [],
       };
     }
-    // `app_mention` CARRIES A MENTION AND WAS BEING DROPPED. Anything whose type
-    // was not `message` returned no delivery, so an app subscribed to
+    // `app_mention` CARRIES A MENTION AND WAS BEING DROPPED. Anything whose
+    // type was not `message` returned no delivery, so an app subscribed to
     // app_mention had mentions arriving on its socket and scramble discarded
-    // every one: the mention is live on the wire while the inbox sits silent.
-    // A fourth agent found it on an app it had adopted, which subscribes to
-    // app_mention and to none of the message events (2026-08-22).
+    // every one: the mention is live on the wire while the inbox sits silent. A
+    // fourth agent found it on an app it had adopted, which subscribes to
+    // app_mention and to none of the message events.
     //
     // Both types carry the same fields, so both make the same delivery. An app
     // subscribed to BOTH sends a channel mention twice, once each, which is what
@@ -1548,7 +1545,7 @@ export class SlackBackend {
         // not say which host or commit wrote it, and a status line inside a
         // thread read as an ordinary message. Measured on two threaded replies
         // whose delivery rows carry `origin: None` while the same agent's
-        // top-level lines carry theirs (2026-08-26).
+        // top-level lines carry theirs.
         `${REPLIES_URL}?channel=${encodeURIComponent(slackChannel)}&${WITH_METADATA}` +
           `&ts=${encodeURIComponent(rootTs)}`,
         { headers: { authorization: `Bearer ${token}` } },

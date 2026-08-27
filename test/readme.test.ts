@@ -34,8 +34,8 @@ function parseContract(): Map<string, Set<string>> {
     // MERGED, never replaced. The key is the first word, and the contract has
     // several rows per verb: `message send`, `message read`, `message react`.
     // Replacing kept only the last row's flags, so a flag documented on
-    // `message send` failed this check because a later `message` row had none of
-    // it (2026-08-25).
+    // `message send` failed this check because a later `message` row had none
+    // of it.
     const already = verbs.get(verb) ?? new Set<string>();
     for (const f of flags) already.add(f);
     verbs.set(verb, already);
@@ -210,7 +210,7 @@ describe("the app manifest the onboarding script builds", () => {
     // Without this one an invite delivers NOTHING and nothing reports it: Slack
     // sends no event an app has not subscribed to, so being added to a channel
     // is news the agent never hears. Every app created before it was added kept
-    // three events until `doctor` learned to compare (operator, 2026-08-22).
+    // three events until `doctor` learned to compare.
     expect(BOT_EVENT_NAMES).toContain("member_joined_channel");
   });
 
@@ -219,7 +219,7 @@ describe("the app manifest the onboarding script builds", () => {
     // NOT false. apps.developerInstall with an org-level credential produces an
     // enterprise install whatever team_id is passed, and an org install whose
     // manifest says org_deploy_enabled:false receives NO events while every
-    // REST call keeps working. Measured live on 2026-08-21.
+    // REST call keeps working. Measured live.
     expect(onboard).toContain("org_deploy_enabled: true");
     expect(onboard).not.toContain("org_deploy_enabled: false,");
   });
