@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
 # The ONE way to commit by hand in this checkout.
 #
-# Exists because a four-line commit to a skill file DELETED a landed unit: 297 lines across
+# Exists because a four-line commit to a skill file DELETED a committed unit: 297 lines across
 # src/slack-backend.ts, its tests and a reproducer. A lane merge had advanced main's ref while I
 # held this checkout, and git's index still described the PREVIOUS HEAD for every path, so `git add
 # <one file>` plus a bare `git commit` recorded old-index-plus-my-file, which is a revert of the
-# merge for every path that differed. The gate stayed green at 324 tests because the deleted feature
-# took its tests with it. (postmortem: akrust log/postmortems/
+# merge for every path that differed. All 324 tests passed after the deletion, since the deleted
+# feature took its tests with it. (postmortem: akrust log/postmortems/
 # `-my-commit-reverted-a-landed-unit-from-a-stale-index.md`)
 #
-# usage: scripts/land.sh -F - <path> [<path> ...]  <<'MSG' ... MSG   (PREFER THIS)
-#        scripts/land.sh -m "<message>" <path> [<path> ...]
+# usage: `scripts/land.sh -F - <path> [<path> ...]  <<'MSG' ... MSG`   (PREFER THIS)
+#        `scripts/land.sh -m "<message>" <path> [<path> ...]`
+#
 #
 # PREFER -F WITH A QUOTED HEREDOC. A -m message is a shell argument, so a backtick in it runs as a
 # command before this script ever sees it: a message mentioning `slack` executed the Slack CLI and
@@ -78,11 +79,11 @@ echo "$STAGED" | sed 's/^/  /'
 #    (a) A net deletion in a NAMED path, the signature of the reverting commit
 #        that deleted 297 lines and added 17.
 #    (b) A path NOT named that differs from HEAD, which is how a lane merge
-#        landing under this checkout announces itself: the worktree copy is
+#        arriving under this checkout announces itself: the worktree copy is
 #        older than main, and committing it later would revert the merge. This
 #        fired with src/cli.ts at +3 -15 and caught exactly that,
 #        minutes after the same class had already cost a restore.
-# The PATHS array, not "$@": the arg loop above shifted "$@" empty, and passing
+# The PATHS array carries the paths here. The arg loop above shifted "$@" empty, and passing
 # it meant this block diffed the whole tree while believing it diffed the named
 # paths. It warned correctly by accident, which is not a mechanism.
 python3 - "${PATHS[@]}" <<'PYEOF' || fail "see the deletion summary above"
@@ -113,7 +114,7 @@ if heavy:
     print("land: `git diff HEAD -- <path>` and look before committing again.")
 
 # The unnamed paths. A worktree copy that is BEHIND HEAD means a lane merge
-# landed under this checkout, and committing that copy later reverts the merge.
+# arrived under this checkout, and committing that copy later reverts the merge.
 others = [(p, a, r) for p, a, r in numstat([]) if p not in paths and r > a]
 if others:
     print("land: WARNING, these paths are not in this commit and your worktree copy")

@@ -1,4 +1,4 @@
-// test/origin.test.ts — WHERE AN AGENT RUNS, published on the message itself.
+// test/origin.test.ts: WHERE AN AGENT RUNS, published on the message itself.
 //
 // The operator: "Does each agent record its hostname and working directory on
 // scramble and an agent may know its same directory peers?" It did not, and the
@@ -37,8 +37,8 @@ describe("an origin is built from what this process can read", () => {
   });
 
   test("an unknown commit is ABSENT, never a placeholder", () => {
-    // A checkout has no installed sha. An absent field is honest; a made-up one
-    // would be read by a peer as a fact about which code is running.
+    // A checkout has no installed sha. An absent field claims nothing, and a
+    // made-up one would be read by a peer as a fact about which code is running.
     expect(originOf("h1", "/w")).toEqual({ host: "h1", dir: "/w" });
     expect(originOf("h1", "/w", "")).toEqual({ host: "h1", dir: "/w" });
   });
@@ -79,7 +79,7 @@ describe("an origin is built from what this process can read", () => {
     // be read as fact by every peer and by whoever is restarting the fleet.
     expect(runtimeOf(() => undefined)).toBeUndefined();
     expect(runtimeOf(() => "")).toBeUndefined();
-    // A version that is not a version is left out, and the name still lands.
+    // A version that is not a version is left out, and the name still arrives.
     expect(runtimeOf((n) => ({ CLAUDECODE: "1", AI_AGENT: "claude-code_dev_agent" })[n])).toEqual({
       name: "claude-code",
     });
@@ -234,8 +234,8 @@ describe("the peers record", () => {
   test("A DAMAGED LINE IS COUNTED AND NAMED, and the rows around it survive", () => {
     // Six agents append to one file on a shared filesystem. An agent reported a
     // line no parser could read there, along with EIO on the write, and every
-    // reader had been stepping over that line in silence: the surface said "here
-    // are the peers" and never "one line of this file is damaged".
+    // reader had been stepping over that line in silence: the surface said
+    // `here are the peers` and never `one line of the record is damaged`.
     const dir = scratch();
     const p = join(dir, "peers.jsonl");
     mkdirSync(dir, { recursive: true });
@@ -395,7 +395,7 @@ describe("the peers report", () => {
 
   test("without a known origin, --same-dir reports everyone and hides nothing", () => {
     // This build has no hostname seam, so it cannot know its own directory. It
-    // says what it knows about others instead of filtering against a guess.
+    // says what it knows about others, where filtering would need a guess.
     expect(peersReport(rows, undefined, true)).toContain("2 peer(s)");
   });
 });
