@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Install scramble into a path YOU hold, at a commit you can name.
 #
-#   bash scripts/install.sh              # into ~/.local/share/scramble
-#   SCRAMBLE_HOME=/somewhere bash scripts/install.sh
+#   bash scripts/install.sh                      # into ~/.local/share/scramble
+#   bash scripts/install.sh --sandbox /tmp/try   # a throwaway copy, shared launcher untouched
 #
 # WHY THIS EXISTS. `bun link` puts a symlink chain from the agent's PATH straight into this
 # checkout: ~/.bun/bin/scramble -> node_modules/scramble -> the checkout itself, and bun runs `src`
@@ -23,7 +23,27 @@ cd "$(dirname "$0")/.."
 
 fail() { echo "install: REFUSED: $*" >&2; exit 1; }
 
+# A SANDBOX INSTALL MOVES NOTHING SHARED. `SCRAMBLE_HOME` alone looked like this
+# and is half of it: it moves where the copy is written and leaves the launcher at
+# its shared path, so an agent verifying a build in /tmp pointed every agent on
+# their host at a /tmp directory they were about to delete. Their words: "The
+# SCRAMBLE_HOME setting looks like one, but it handles only half of the write
+# operations."
+#
+# One flag owns the intent and sets both halves.
+SANDBOX=""
+if [ "${1:-}" = "--sandbox" ]; then
+  SANDBOX="${2:-}"
+  [ -n "$SANDBOX" ] || fail "--sandbox needs a directory: bash scripts/install.sh --sandbox /tmp/try"
+fi
+
 git rev-parse --git-dir >/dev/null 2>&1 || fail "this directory is not a git checkout"
+
+# HALF AN ISOLATION IS THE HAZARD, so the pair is required together. A host with
+# its own layout sets both and passes; a verification run wants --sandbox.
+if [ -z "$SANDBOX" ] && [ -n "${SCRAMBLE_HOME:-}" ] && [ -z "${SCRAMBLE_BIN:-}" ]; then
+  fail "SCRAMBLE_HOME is set and SCRAMBLE_BIN is not, so the copy would go to \$SCRAMBLE_HOME while the shared launcher keeps pointing every agent on this host at it. Use: bash scripts/install.sh --sandbox <dir>, or set both."
+fi
 
 # THE SOURCE IS HEAD, NEVER THE WORKING TREE, so an edit in progress cannot reach
 # an installed copy and cannot block anybody's install either. This refused a dirty
@@ -42,7 +62,8 @@ if [ -n "$DIRTY" ]; then
 fi
 
 SHA="$(git rev-parse --short HEAD)"
-ROOT="${SCRAMBLE_HOME:-$HOME/.local/share/scramble}"
+ROOT="${SANDBOX:+$SANDBOX/home}"
+ROOT="${ROOT:-${SCRAMBLE_HOME:-$HOME/.local/share/scramble}}"
 DEST="$ROOT/$SHA"
 
 mkdir -p "$DEST" || fail "cannot create $DEST"
@@ -62,7 +83,8 @@ printf '%s\n' "$SHA" > "$DEST/src/COMMIT"
 
 ln -sfn "$DEST" "$ROOT/current" || fail "cannot point $ROOT/current at $DEST"
 
-BIN="${SCRAMBLE_BIN:-$HOME/.bun/bin}"
+BIN="${SANDBOX:+$SANDBOX/bin}"
+BIN="${BIN:-${SCRAMBLE_BIN:-$HOME/.bun/bin}}"
 mkdir -p "$BIN" || fail "cannot create $BIN"
 # REMOVE BEFORE WRITING. The name being replaced is usually the `bun link` symlink, and `>` follows
 # a symlink to its target: the first run of this script wrote the launcher THROUGH
