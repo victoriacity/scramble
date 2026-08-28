@@ -44,7 +44,11 @@ export interface RewriteConfig {
   timeoutMs: number;
 }
 
-export const DEFAULT_TIMEOUT_MS = 5000;
+/** MEASURED, from this host against the configured LiteLLM: a cold call on a
+ *  1293-character draft took 12282 ms, and the two calls after it returned in 92
+ *  and 47 ms from the service's cache. Five seconds refused the send on any draft
+ *  the model had not seen, and the refusal read as an endpoint failure. */
+export const DEFAULT_TIMEOUT_MS = 60000;
 const GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta";
 const FIREWORKS_BASE = "https://api.fireworks.ai/inference/v1";
 const DEFAULT_MODELS: Record<Provider, string> = {
@@ -296,11 +300,27 @@ export async function rewriteWith(
   const { url, init } = request({ ...cfg, key: cfg.key }, prompt);
   const control = new AbortController();
   const timer = setTimeout(() => control.abort(), cfg.timeoutMs);
+  const started = performance.now();
   let res: Response;
   try {
     res = await fetch(url, { ...init, signal: control.signal });
   } catch (e) {
-    return { ok: false, why: `the rewrite call failed: ${e instanceof Error ? e.message : String(e)}` };
+    // OUR OWN CEILING IS NOT THE ENDPOINT'S FAULT. This reported "the rewrite
+    // call failed: The operation was aborted." for a call that the service was
+    // still answering, and the send prints that line while refusing to post, so
+    // the reader goes looking at an endpoint that is up. The number that stopped
+    // it belongs in the sentence.
+    const ms = Math.round(performance.now() - started);
+    if (control.signal.aborted) {
+      return {
+        ok: false,
+        why:
+          `the rewrite call passed this build's ${cfg.timeoutMs} ms ceiling after ${ms} ms on a ` +
+          `${prompt.length}-character prompt, and nothing here says the service failed. ` +
+          `SCRAMBLE_REWRITE_TIMEOUT_MS raises the ceiling.`,
+      };
+    }
+    return { ok: false, why: `the rewrite call failed after ${ms} ms: ${e instanceof Error ? e.message : String(e)}` };
   } finally {
     clearTimeout(timer);
   }

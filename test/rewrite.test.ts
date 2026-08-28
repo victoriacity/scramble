@@ -161,7 +161,10 @@ describe("the call", () => {
     const thrown = await rewriteWith(async () => {
       throw new Error("socket hung up");
     }, cfg, "x");
-    expect(thrown).toEqual({ ok: false, why: "the rewrite call failed: socket hung up" });
+    // THE ELAPSED TIME COMES WITH IT, so a reader can tell a hung socket at 3 ms
+    // from one at 40 seconds.
+    expect(!thrown.ok && thrown.why).toContain("the rewrite call failed after");
+    expect(!thrown.ok && thrown.why).toContain("socket hung up");
     expect(await rewriteWith(async () => new Response("", { status: 503 }), cfg, "x")).toEqual({
       ok: false,
       why: "the rewrite call answered 503",
@@ -193,7 +196,23 @@ describe("the call", () => {
       "x",
     );
     expect(r.ok).toBe(false);
-    expect(!r.ok && r.why).toContain("the rewrite call failed");
+    // THE CEILING IS OURS AND THE MESSAGE SAYS SO. This read "the rewrite call
+    // failed: The operation was aborted." while the service was still answering,
+    // and the send prints that line while refusing to post, which sends the reader
+    // to an endpoint that is up. A cold call measured 12282 ms on this host.
+    expect(!r.ok && r.why).toContain("passed this build's 20 ms ceiling");
+    expect(!r.ok && r.why).toContain("1-character prompt");
+    expect(!r.ok && r.why).toContain("nothing here says the service failed");
+    expect(!r.ok && r.why).toContain("SCRAMBLE_REWRITE_TIMEOUT_MS");
+    // AND A SLOW CALL UNDER THE CEILING IS NOT AN ABORT: the same shape with room
+    // to answer comes back ok, so the branch above is the ceiling and never the
+    // service.
+    const fine = await rewriteWith(
+      async () => new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: "out" }] } }] }), { status: 200 }),
+      { key: "k", provider: "gemini" as const, model: "m", url: "https://g", timeoutMs: 5000 },
+      "x",
+    );
+    expect(fine).toEqual({ ok: true, text: "out" });
   });
 });
 
