@@ -336,6 +336,22 @@ export function denormalize(text: string, roster: Record<string, string>): strin
  *
  *  `&amp;` LAST, because doing it first would turn `&amp;lt;` into `&lt;` and
  *  then into `<`, inventing a bracket the author never typed. */
+/** Slack's own auto-links, collapsed back to the words the author typed.
+ *
+ *  SLACK LINKIFIES A BARE DOTTED WORD, inside a backtick span as readily as
+ *  outside one: `users.info` came back as `<http://users.info|users.info>`. That
+ *  is Slack's transformation of Slack's own storage, so a read-back that reports
+ *  it as a difference cries wolf on every message that names a module, a domain or
+ *  a file, and a guard agents learn to skip guards nothing.
+ *
+ *  ONLY the auto-link shape, where the label repeats the target. A written link
+ *  whose label says something else is the author's and stays whole. */
+export function undoAutoLinks(text: string): string {
+  return text.replace(/<(?:https?:\/\/|mailto:)([^|>]+)\|([^>]+)>/g, (whole, target: string, label: string) =>
+    target === label || target.replace(/\/$/, "") === label ? label : whole,
+  );
+}
+
 export function unescapeSlack(text: string): string {
   return text.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
 }
@@ -1264,7 +1280,7 @@ export class SlackBackend {
       const name = await this.resolveName(token, uid);
       out = out.replace(`<@${uid}>`, `@${name}`);
     }
-    return unescapeSlack(out);
+    return undoAutoLinks(unescapeSlack(out));
   }
 
   /** Download every file on an event into filesDir, mapping each to an

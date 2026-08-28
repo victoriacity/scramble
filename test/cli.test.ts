@@ -6,7 +6,7 @@ import type { ChannelStore } from "../src/store";
 import { createStore } from "../src/store";
 import { createHandler } from "../src/server";
 import { WORD_LIMIT } from "../src/language";
-import { KNOWN_ENV, unknownEnvNote, hashVerdict, textHash, differenceLine, main, parseBind, loadSlackConfig, slackConfigPath, staleConfigWarning, staleListeners, pickStale, staleListenerProblem, readProcesses, liveListeners, stillAlive, watchForNewerInstall, listenerCommit, listenersBehind, processesReadable, type Io } from "../src/cli";
+import { KNOWN_ENV, unknownEnvNote, hashVerdict, textHash, differenceLine, keyed, main, parseBind, loadSlackConfig, slackConfigPath, staleConfigWarning, staleListeners, pickStale, staleListenerProblem, readProcesses, liveListeners, stillAlive, watchForNewerInstall, listenerCommit, listenersBehind, processesReadable, type Io } from "../src/cli";
 import { SCOPE_NAMES, BOT_EVENT_NAMES } from "../src/app-manifest";
 import { readTierBlock } from "../src/rewrite";
 
@@ -1217,6 +1217,15 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     expect(await main(["rewrites", "--near", "--as", "dev"], some.io)).toBe(0);
     expect(some.writes.join(" ")).toContain("2 send(s) measured against an earlier draft");
     expect(some.writes.join(" ")).toContain("0.710  ts 3.3 against 2.2 in general");
+  });
+
+  test("every line of a multi-line diagnostic carries its own key", () => {
+    // THREE AGENTS FILTERED THIS OUTPUT IN ONE NIGHT and each lost the lines under
+    // a `verify:` line: two greps anchored on the key, one `tail -4`. A filter
+    // keyed on `verify:` now keeps the whole block.
+    const out = keyed("verify:", "general holds text that DIFFERS.\nFirst line that differs (2):\n  sent:   a\n  stored: b\n");
+    expect(out.split("\n").filter((l) => l !== "").every((l) => l.startsWith("verify: "))).toBe(true);
+    expect(out).toContain("verify:   sent:   a");
   });
 
   test("the verify names the first line that differs", () => {

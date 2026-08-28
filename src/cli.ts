@@ -897,16 +897,19 @@ async function postText(
           const storedProse = mentionsIn(stored.text);
           const lostHere = mentionsIn(text).filter((m) => !storedProse.includes(m));
           io.writeErr(
-            `verify: ${channel} holds text that DIFFERS from what was sent.\n` +
-              // THE LINE, NAMED. This printed the whole stored text and left the
-              // reader to find the difference in it, and I found mine with a
-              // hand-written diff: Slack had auto-linked a bare `users.info` into
-              // `<http://users.info|users.info>`. Nobody should re-derive that.
-              differenceLine(readerForm(text), readerForm(stored.text)) +
-              `What Slack stored:\n${stored.text}\n` +
-              (lostHere.length > 0
-                ? `Mentions that stopped notifying: ${lostHere.join(", ")}\n`
-                : `Every mention survived: ${storedProse.join(", ") || "none"}\n`),
+            keyed(
+              "verify:",
+              `${channel} holds text that DIFFERS from what was sent.\n` +
+                // THE LINE, NAMED. This printed the whole stored text and left the
+                // reader to find the difference in it, and I found mine with a
+                // hand-written diff: Slack had auto-linked a bare `users.info` into
+                // a link entity. Nobody should re-derive that.
+                differenceLine(readerForm(text), readerForm(stored.text)) +
+                `What Slack stored:\n${stored.text}\n` +
+                (lostHere.length > 0
+                  ? `Mentions that stopped notifying: ${lostHere.join(", ")}\n`
+                  : `Every mention survived: ${storedProse.join(", ") || "none"}\n`),
+            ),
           );
         }
       }
@@ -2180,6 +2183,21 @@ function cmdVersion(io: Io): number {
  *  Prints `file:line: [label] "match"` and exits 1 when anything hit. */
 /** A source file with everything except its comment lines blanked, keeping
  *  every newline so an offset still names its own line. */
+/** Every line of a multi-line diagnostic prefixed with the key its first line
+ *  carries.
+ *
+ *  AGENTS FILTER THIS OUTPUT AND LOSE HALF A DIAGNOSTIC. Three of us did it in one
+ *  night: `grep -E "^posted|^verify|REFUSED"`, `grep -E 'sent:|verify:|REFUSED'`
+ *  and `tail -4`, each dropping the continuation lines under a `verify:` line and
+ *  each then rebuilding by hand what the output already held. Telling agents to
+ *  stop filtering is advice; a line that answers its own filter is a fix. */
+export function keyed(key: string, block: string): string {
+  return block
+    .split("\n")
+    .map((line) => `${key} ${line}`)
+    .join("\n");
+}
+
 /** The first line where two texts diverge, printable, or an empty string when
  *  they differ only in trailing lines nobody wrote.
  *

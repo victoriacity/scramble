@@ -7,6 +7,7 @@ import {
   SlackBackend,
   computeMentions,
   unescapeSlack,
+  undoAutoLinks,
   denormalize,
   readerBroadcasts,
   isStatusLine,
@@ -143,6 +144,22 @@ function makeTimed(
 }
 
 // --- computeMentions ------------------------------------------------------
+
+describe("undoAutoLinks", () => {
+  test("an auto-link collapses to the word the author typed, and a written link stays whole", () => {
+    // MEASURED ON A MESSAGE I SENT: a bare `users.info` inside a backtick span
+    // came back as `<http://users.info|users.info>`, and the read-back guard
+    // reported the message as DIFFERING from what was sent. Every message naming a
+    // module or a domain would have done the same.
+    expect(undoAutoLinks("falls through to <http://users.info|users.info> and renders")).toBe("falls through to users.info and renders");
+    expect(undoAutoLinks("`<http://users.info|users.info>`")).toBe("`users.info`");
+    expect(undoAutoLinks("<https://example.com/|example.com>")).toBe("example.com");
+    expect(undoAutoLinks("<mailto:a@b.c|a@b.c>")).toBe("a@b.c");
+    // A LINK THE AUTHOR WROTE KEEPS ITS LABEL, since the label carries their words.
+    expect(undoAutoLinks("<https://example.com/docs|the docs>")).toBe("<https://example.com/docs|the docs>");
+    expect(undoAutoLinks("nothing to collapse")).toBe("nothing to collapse");
+  });
+});
 
 describe("unescapeSlack", () => {
   // Slack stores `<`, `>` and `&` escaped, so a message carrying `--target
