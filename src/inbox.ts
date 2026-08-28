@@ -382,8 +382,24 @@ export interface SentRow {
  *  survives is what the message is ABOUT, which is what a retry repeats. Fenced
  *  blocks stay in, since an evidence table is the part a retry copies verbatim. */
 export function contentWords(text: string): string[] {
+  // CJK TEXT CARRIES NO SPACES, so a word filter written for ASCII reduced a
+  // Chinese message to its identifiers: 166 Chinese characters left 20 tokens,
+  // every one of them a number or a path. Two unrelated Chinese reports then
+  // scored 0.500 on shared shas alone, and two tellings of one thing in Chinese
+  // scored 0. An agent who writes in Chinese measured both directions.
+  //
+  // CHARACTER BIGRAMS stand in for segmentation: no dictionary, and a shared
+  // phrase shows up as shared bigrams. A run of one character keeps the
+  // character.
+  const cjk = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uac00-\ud7af]+/g;
+  const grams: string[] = [];
+  for (const run of text.match(cjk) ?? []) {
+    if (run.length === 1) grams.push(run);
+    for (let i = 0; i + 1 < run.length; i += 1) grams.push(run.slice(i, i + 2));
+  }
   const words = text
     .toLowerCase()
+    .replace(cjk, " ")
     .replace(/[^a-z0-9_./-]+/g, " ")
     .split(" ")
     // EDGE PUNCTUATION IS NOT PART OF A WORD, and an inner dot or slash is: a
@@ -396,7 +412,7 @@ export function contentWords(text: string): string[] {
     // reading `peers 9, damaged 0` and `peers 10, damaged 1` shared every
     // surviving word and scored 1.000, which would have refused the second one.
     .filter((w) => w.length >= 4 || /[0-9]/.test(w));
-  return [...new Set(words)].sort();
+  return [...new Set([...words, ...grams])].sort();
 }
 
 /** How much of the SMALLER set the two share, 0 to 1.

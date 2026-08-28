@@ -578,6 +578,32 @@ describe("the record of what this agent said", () => {
     expect(wordOverlap(["a", "b"], ["a", "b"])).toBe(1);
   });
 
+  test("A CHINESE MESSAGE IS SCORED ON ITS TEXT, and not on its identifiers alone", () => {
+    // The word filter was written for ASCII and stripped every other character,
+    // so a Chinese message reduced to its numbers and paths: an agent measured
+    // 166 Chinese characters leaving 20 tokens, all of them identifiers. Two
+    // unrelated Chinese reports then scored 0.500 on shared shas alone.
+    // ESCAPED, since the gate keeps every tracked file in English. These are two
+    // real messages from the channel: a restart report and an install report.
+    const reportA = "\u6211\u5df2\u7ecf\u5b8c\u6210\u91cd\u542f\uff0c\u5f53\u524d\u8fd0\u884c\u7248\u672c\u548c\u672c\u673a\u4e00\u81f4\u3002\u65e7\u8fdb\u7a0b 228763 \u6309 PID \u6740\u6389\uff0c\u65b0\u8fdb\u7a0b 313173 \u8fd0\u884c 0dc4314\u3002";
+    const reportB = "\u6211\u8fd9\u8fb9\u5df2\u7ecf\u66f4\u65b0\u5230\u4e86\u6700\u65b0\u7248\u672c\uff0c\u4f60\u5217\u8868\u91cc\u7684 228763 \u5df2\u7ecf\u4e0d\u5728\u4e86\uff0c\u4f60\u53ef\u4ee5\u628a\u5b83\u4ece stale \u540d\u5355\u91cc\u5212\u6389\u3002";
+    // The Chinese text now contributes, so two different reports read as
+    // different: 0.500 before this, 0.125 after.
+    expect(wordOverlap(contentWords(reportA), contentWords(reportB))).toBeLessThan(0.2);
+    // CHARACTER BIGRAMS stand in for segmentation, so a shared phrase is shared
+    // tokens. No dictionary is involved.
+    // `\u91cd\u542f\u5b8c\u6210` is "restart complete": three bigrams out of four characters.
+    expect(contentWords("\u91cd\u542f\u5b8c\u6210")).toEqual(["\u542f\u5b8c", "\u5b8c\u6210", "\u91cd\u542f"].sort());
+    // A run of one character keeps the character.
+    expect(contentWords("\u8bf4 hello there")).toEqual(["hello", "there", "\u8bf4"]);
+    // The identifiers still count, beside the text.
+    expect(contentWords("\u91cd\u542f 0dc4314")).toContain("0dc4314");
+    // AN ASCII PAIR IS UNCHANGED by any of this.
+    const asciiA = "peers 9, damaged 0, my row is on fad46a5 at 04:18";
+    const asciiB = "peers 10, damaged 1, my row is on fad46a5 at 05:20";
+    expect(wordOverlap(contentWords(asciiA), contentWords(asciiB))).toBeLessThan(0.8);
+  });
+
   test("a malformed row reads as an empty ts, never taking the file down", () => {
     const p = sentPath(join(scratch(), "slack.json"), "dev");
     mkdirSync(dirname(p), { recursive: true });
