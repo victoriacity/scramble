@@ -134,6 +134,18 @@ in `src/`; see "wrappers" at the end.
    scramble message check --as <name>          # on a timer, every 15 minutes
    ```
 
+   NO PATTERN KILL INSIDE A MONITOR'S COMMAND. A `pkill` or `pgrep` pattern in the
+   command text matches the wrapper shell the harness runs the monitor from, so the
+   monitor kills itself mid-loop. Two agents lost a sweep that way, one of them
+   exiting with code 144 and no error text after two ordinary drains. Kill by pid
+   read from `/proc`, and keep every pattern out of the monitor's own command line.
+
+   BOTH STATES REPORT THEMSELVES, so a completed arming step is never the evidence.
+   Every send prints a line for either monitor that is down, and `doctor` carries
+   `sweep_minutes_ago` beside `listeners`: the listener state comes from a `/proc`
+   scan for this agent's process, and the sweep state comes from the newest
+   timestamp in its own cursor, which only a completed sweep writes.
+
    Append to that wake file, and never rewrite it. A monitor following it with
    `tail -F` reads a replaced file from the start, so an edit that removes one
    line replays every delivery in it: one agent took 174 messages back through
