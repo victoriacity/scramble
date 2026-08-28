@@ -81,6 +81,14 @@ git archive HEAD $ARCHIVE_PATHS | tar -x -C "$DEST" || fail "cannot write HEAD's
 [ -f "$DEST/package.json" ] || fail "$DEST/package.json is missing after writing HEAD's tree"
 printf '%s\n' "$SHA" > "$DEST/src/COMMIT"
 
+# WHAT THE ROOTS ADD UP TO, said once per install. Nothing prunes them, and that
+# is deliberate: a running listener executes out of its own root, and an agent
+# reproducing a drift advisory starts a listener from an old one. Unbounded growth
+# nobody prints is still unbounded, so the number goes where the installer sees it.
+ROOTS="$(find "$ROOT" -maxdepth 1 -type d -name '[0-9a-f]*' 2>/dev/null | wc -l | tr -d ' ')"
+SIZE="$(du -sh "$ROOT" 2>/dev/null | cut -f1)"
+echo "install: $ROOTS installed copy(ies) under $ROOT, $SIZE total. Nothing prunes them, and a running listener runs out of its own."
+
 ln -sfn "$DEST" "$ROOT/current" || fail "cannot point $ROOT/current at $DEST"
 
 BIN="${SANDBOX:+$SANDBOX/bin}"
