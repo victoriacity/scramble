@@ -82,6 +82,19 @@ shift || true
 if [ "$#" -gt 0 ]; then
   if git ls-remote origin >/dev/null 2>"$WORK/lsremote.err"; then
     for OLD in "$@"; do
+      # A FETCH BY OBJECT ID TAKES ALL 40 CHARACTERS. An abbreviation fails for a
+      # reason that has nothing to do with the object being present, so the same
+      # commit read as served with its full id and as gone with seven characters,
+      # and the second run printed CLEAN. A short argument is a caller error and
+      # reports as unknown.
+      case "$OLD" in
+        [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
+        *)
+          echo "verify: $OLD is not a 40-character object id, and a fetch by id needs all 40, so this lookup is unknown"
+          OLD_UNKNOWN=$((OLD_UNKNOWN + 1))
+          continue
+          ;;
+      esac
       if git fetch --quiet origin "$OLD" 2>/dev/null; then
         COUNT="$(git rev-list --count FETCH_HEAD 2>/dev/null || echo 0)"
         echo "verify: the host still serves $OLD by sha, and that fetch carries $COUNT commit(s)"
