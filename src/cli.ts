@@ -1,9 +1,9 @@
-// src/cli.ts: the agent-facing CLI. Every command prints ONE JSON line per
-// message to stdout and sends all diagnostics to stderr. All IO flows through
-// the injected `io` seams so tests drive main() with a fake io and the
-// in-process handler from src/server.ts as fetch, with no child process, no
-// socket and no real delay. Process argv and the real daemon bind live in
-// src/bin.ts, which no test imports.
+// src/cli.ts provides the agent-facing command-line interface. Every command
+// prints one JSON line per message to stdout and sends all diagnostics to
+// stderr. All I/O flows through the injected `io` seams, so tests drive
+// main() with mock I/O and the in-process handler from src/server.ts as fetch,
+// with no child process, no socket, and no real delay. Process argv and the
+// real daemon binding live in src/bin.ts, which no test imports.
 import {
   copyFileSync,
   existsSync,
@@ -35,46 +35,56 @@ import { createHash } from "node:crypto";
 import { tierFor, unclassified, type Tier } from "./tier";
 import { credentialsPath, firstCredential, freshCliToken } from "./slack-credential";
 
-/** How long a draft counts as already sent. Ten minutes covers the retry an
- *  agent makes after reading a warning as a failure, and it is short enough that
- *  saying the same thing again in a later conversation goes through. */
+/**
+ *  A draft counts as already sent for ten minutes. This duration covers the retry
+ *  an agent makes after reading a warning as a failure, and it is short enough that
+ *  saying the same thing again in a later conversation goes through.
+ */
 const DUPLICATE_WINDOW_MS = 10 * 60 * 1000;
 
-/** How many cited timestamps one send checks. A message carrying an evidence
- *  table cites a handful; a cap keeps a long one from spending twenty API calls
- *  after the message has already gone out. What it skips is printed. */
+/**
+ *  Each send limits the number of cited timestamps it checks. A message carrying
+ *  an evidence table cites a handful of them, and a cap keeps a long table from
+ *  spending twenty API calls after the message has already gone out. The system
+ *  prints the timestamps it skips.
+ */
 const CITED_TS_CAP = 6;
 
-/** How much of its content words a draft may share with something this agent
- *  already sent to the same channel inside the window.
+/**
+ *  This threshold defines the fraction of content words a draft message may share
+ *  with an earlier message sent by the agent to the same channel inside the window.
  *
- *  MEASURED, on four pairs, with the containment score this uses:
+ *  Measurements on four pairs using this containment score:
  *
- *    a reworded retry of one report      0.833
- *    the identical draft                 1.000
- *    two status reports, different runs  0.429
- *    two unrelated messages              0.000
+ *  a reworded retry of one report 0.833
+ *  the identical draft 1.000
+ *  two status reports, different runs 0.429
+ *  two unrelated messages 0.000
  *
- *  0.81 is the ONLY value that separates every labelled pair, real and hand-made
- *  alike: the highest pair anybody wanted sent measured 0.800, a hand-made retry
- *  measured 0.833, and the one confirmed duplicate measured 0.968. A wider margin
- *  above 0.800 costs the 0.833 case, and whether a real message sits there is
- *  unanswered. `CALIBRATION` in src/inbox.ts holds every labelled pair with who
- *  measured it, and a row with no ts is a pair nobody sent.
+ *  The score 0.81 is the only threshold that separates every labeled pair across
+ *  both synthetic and real test cases: the highest pair intended for delivery
+ *  measured 0.800, a synthetic retry measured 0.833, and the single confirmed
+ *  duplicate measured 0.968. A wider margin above 0.800 fails to capture the 0.833
+ *  case, and whether a real message falls in that range remains unconfirmed.
+ *  `CALIBRATION` in `src/inbox.ts` stores each labeled pair alongside its
+ *  measurer, where a row lacking a timestamp represents an unsent pair.
  *
- *  A SHORT DRAFT IS SCORED ON EVERY TOKEN AT 0.85. It has too few content words
- *  for the other scale, and the real duplicate two agents confirmed, one line
- *  sent twice 127 seconds apart, held 6 and 5 content words: it was never scored
- *  at all while the threshold debate ran. Measured on six labelled short pairs:
+ *  The system evaluates a short draft across every token against a 0.85 threshold
+ *  because the draft contains too few content words for the primary metric. A
+ *  confirmed duplicate where two agents sent a line twice 127 seconds apart
+ *  contained 6 and 5 content words, so the earlier evaluation never scored that
+ *  case during threshold discussions. Measurements across six labeled short pairs:
  *
- *    the real duplicate            0.889   refused
- *    one thing retyped             0.800   sent
- *    two short status reports      0.667   sent
- *    an addendum to a line         0.571   sent
- *    two unrelated one-liners      0.500   sent
- *    two different topics          0.000   sent
- *  Refusing a legitimate second report would teach agents to pass `--again` by
- *  reflex, which retires the guard. */
+ *  the real duplicate 0.889 refused
+ *  one thing retyped 0.800 sent
+ *  two short status reports 0.667 sent
+ *  an addendum to a line 0.571 sent
+ *  two unrelated one-liners 0.500 sent
+ *  two different topics 0.000 sent
+ *
+ *  Refusing a legitimate second report would train agents to pass `--again` by
+ *  reflex, which disables the guard.
+ */
 const NEAR_DUPLICATE_OVERLAP = { content: 0.81, short: 0.85 };
 import {
   chooseText,
@@ -136,47 +146,71 @@ const DEFAULT_URL = "http://127.0.0.1:7737";
 const MAX_BACKOFF = 2000; // ms cap on reconnect delay
 
 export interface Io {
-  /** stdout: carries JSON message lines ONLY (one line per call). */
+  /**
+   *  stdout carries only JSON message lines, with one line per call.
+   */
   write(line: string): void;
-  /** stderr: diagnostics only. Message lines go to stdout. */
+  /**
+   *  The command emits only diagnostics to stderr and writes message lines to
+   *  stdout.
+   */
   writeErr(line: string): void;
   fetch(input: string, init?: RequestInit): Promise<Response>;
   env(name: string): string | undefined;
   cwd(): string;
-  /** injectable wait so tests need no real delay. */
+  /**
+   *  The wait is injectable so tests need no real delay.
+   */
   sleep(ms: number): Promise<void>;
-  /** the daemon bind seam; the real wiring (a port bind) lives in src/bin.ts. */
+  /**
+   *  The daemon exposes a binding interface, and `src/bin.ts` binds the port.
+   */
   serve(store: ChannelStore, opts: ServeOptions): Promise<number>;
-  /** The socket factory for the slack backend's Socket Mode stream. The real
-   *  wiring (bun's WebSocket) lives in src/bin.ts; tests inject a fake so
-   *  next/listen touch no socket. */
+  /**
+   *  This module provides the socket factory for the Slack backend's Socket Mode
+   *  stream. The production implementation uses Bun's `WebSocket` in `src/bin.ts`.
+   *  Tests inject a fake socket so `next` and `listen` touch no socket.
+   */
   createSocket?(url: string): SlackSocket;
-  /** read ALL of stdin (the message body for the mirror `message send`). The
-   *  real read lives in src/bin.ts; tests inject a fake. When absent, `message
-   *  send` reads stdin as empty and reports it. */
+  /**
+   *  The command reads all of standard input as the message body for the mirror
+   *  `message send`. The production read logic resides in src/bin.ts, and tests
+   *  inject a fake. When standard input is absent, `message send` reads standard
+   *  input as empty and reports it.
+   */
   readStdin?(): Promise<string>;
-  /** The directory this CLI's source sits in, so `version` can read the COMMIT
-   *  file an install writes beside it. The real value comes from src/bin.ts;
-   *  absent under test, which reads as a checkout. */
+  /**
+   *  This path points to the directory where this CLI's source sits, so `version`
+   *  can read the COMMIT file an install writes beside it. The runtime value comes
+   *  from src/bin.ts. The value is absent under test, which reads as a checkout.
+   */
   moduleDir?(): string;
-  /** This machine's hostname, for the origin an agent publishes on its messages.
-   *  A seam so a test is deterministic, and absent means this build publishes no
-   *  origin at all. */
+  /**
+   *  This value sets this machine's hostname for the origin an agent publishes on
+   *  its messages. It provides a seam so a test is deterministic, and its absence
+   *  means this build publishes no origin at all.
+   */
   hostname?(): string;
-  /** EVERY ENVIRONMENT NAME THIS PROCESS WAS GIVEN, so a misspelled override can
-   *  be reported. `io.env` answers one name at a time and can never notice a name
-   *  nothing asks for. Absent means the check stays quiet. */
+  /**
+   *  The system tracks every environment variable name provided to this process so
+   *  that it can report misspelled overrides. Because `io.env` inspects one name at
+   *  a time, it never detects a variable that nothing queries. If a variable is
+   *  absent, the check stays quiet.
+   */
   envNames?(): string[];
 }
 
-/** Every `SCRAMBLE_` name this code reads. A name outside this list is a typo or
- *  a leftover, and until now it was ignored in silence.
+/**
+ *  This section lists every `SCRAMBLE_` name that this code reads. Any name
+ *  outside this list is a typo or a leftover, and the system previously ignored
+ *  such names in silence.
  *
- *  An agent pointed a check at a copy of a file with `SCRAMBLE_CONFIG`, which
- *  nothing reads: the command read the production file, answered `damaged: 0`,
- *  and that answer was true of the file it read. They nearly filed a bug saying
- *  the field did not work, and reading `slackConfigPath` is what stopped them. An
- *  override that misses reads exactly like a clean result. */
+ *  An agent pointed a check at a copy of a file with `SCRAMBLE_CONFIG`. Because
+ *  nothing reads that name, the command read the production file and answered
+ *  `damaged: 0`, which was true of the file it read. The agent nearly filed a bug
+ *  saying that the field did not work, and reading `slackConfigPath` stopped them.
+ *  An override that misses reads exactly like a clean result.
+ */
 export const KNOWN_ENV = [
   "SCRAMBLE_BACKEND",
   "SCRAMBLE_BIN",
@@ -199,14 +233,16 @@ export const KNOWN_ENV = [
   "SCRAMBLE_URL",
 ];
 
-/** The line to print for any `SCRAMBLE_` name this build does not read, with the
- *  nearest name it does read. Empty when every name is known. */
+/**
+ *  The build prints this line for any `SCRAMBLE_` name it does not read, along
+ *  with the nearest name it reads. This line is empty when every name is known.
+ */
 export function unknownEnvNote(names: string[], known: string[] = KNOWN_ENV): string {
   const unknown = names.filter((n) => n.startsWith("SCRAMBLE_") && !known.includes(n)).sort();
   if (unknown.length === 0) return "";
   const nearest = (name: string): string => {
-    // The known name sharing the longest prefix, which catches a dropped or added
-    // word: SCRAMBLE_CONFIG against SCRAMBLE_SLACK_CONFIG, SCRAMBLE_KEY against
+    // The known name that shares the longest prefix catches a dropped or added word,
+    // as with SCRAMBLE_CONFIG against SCRAMBLE_SLACK_CONFIG, and SCRAMBLE_KEY against
     // SCRAMBLE_REWRITE_KEY.
     const shared = (a: string): number => {
       let i = 0;
@@ -223,10 +259,12 @@ export function unknownEnvNote(names: string[], known: string[] = KNOWN_ENV): st
     .join("\n");
 }
 
-/** The CLI owns --bind string parsing. The one interpretation site: it turns a
- *  `--bind` value ("host:port", "port", or "host") into typed hostname/port
- *  fields that serve() consumes. A malformed value is reported, never silently
- *  defaulted. */
+/**
+ *  The CLI parses the `--bind` string as the single interpretation site. It
+ *  converts a `--bind` value formatted as `"host:port"`, `"port"`, or `"host"` into
+ *  typed hostname and port fields that `serve()` consumes. The CLI reports any
+ *  malformed value and never falls back to a silent default.
+ */
 export interface BindSpec {
   hostname?: string;
   port?: number;
@@ -245,7 +283,8 @@ export function parseBind(raw: string): { ok: true; spec: BindSpec } | { ok: fal
       return { ok: false, error: `invalid port in --bind: ${portStr}` };
     return { ok: true, spec: { hostname: host === "" ? undefined : host, port } };
   }
-  // No colon: a bare port (all digits) or a bare hostname.
+  // A value without a colon specifies either a bare port containing all digits or a
+  // bare hostname.
   if (/^\d+$/.test(raw)) {
     const port = Number(raw);
     if (!Number.isInteger(port) || port < 0 || port > 65535)
@@ -260,10 +299,12 @@ interface Parsed {
   positionals: string[];
 }
 
-/** Flags that take NO value. Without this list the parser eats the next word as
- *  the flag's value, so `lint --comments a.ts b.ts` silently linted only b.ts:
- *  the file it was asked about first became the value of `--comments`. Any
- *  value-less flag followed by a positional has that shape. */
+/**
+ *  These flags take no value. Without this list, the parser treats the next word
+ *  as the flag's value, so `lint --comments a.ts b.ts` silently linted only b.ts
+ *  because the first requested file became the value of `--comments`. Every
+ *  valueless flag followed by a positional argument behaves this way.
+ */
 const BOOLEAN_FLAGS = new Set([
   "again",
   "comments",
@@ -273,8 +314,9 @@ const BOOLEAN_FLAGS = new Set([
   "dates",
   "json",
   "near",
-  // `--why` is NOT here: `inbox close --why <text>` takes the reason it stores
-  // on every row. `scramble rewrite --why` reads its own argv, so both work.
+  // This command does not include `--why`. The `inbox close --why <text>` command
+  // takes the reason it stores on every row, and `scramble rewrite --why` reads its
+  // own argv, so both work.
   "verify",
   "no-verify",
   "same-dir",
@@ -321,7 +363,12 @@ function readConfig(io: Io): { url?: string; token?: string } {
   }
 }
 
-/** Config precedence: --url/--token flag > env > workspace config.json > localhost. */
+/**
+ *  Configuration resolution follows this order of precedence: the `--url` and
+ *  `--token` flags override environment variables, environment variables override
+ *  the workspace `config.json` file, and the `config.json` file overrides the
+ *  `localhost` default.
+ */
 function resolveConfig(
   flags: Map<string, string>,
   io: Io,
@@ -357,10 +404,12 @@ function intFlag(flags: Map<string, string>, name: string, fallback: number): nu
   return Number.isFinite(n) ? n : fallback;
 }
 
-/** The mirrored-verb `--target`: a channel name with NO leading '#'. A scramble
- *  channel may contain '/' (that is how `dm/<a>/<b>` works), so a sigil would be
- *  ambiguous. A target that starts with '#' is REJECTED, with the reason, and
- *  a missing --target is reported with what the caller saw. */
+/**
+ *  The `--target` flag accepts a channel name without a leading '#'. A channel
+ *  may contain '/' (which is how `dm/<a>/<b>` works), so a sigil would be
+ *  ambiguous. The command rejects a target that starts with '#' and provides the
+ *  reason, and it reports a missing `--target` with what the caller saw.
+ */
 function requireTarget(flags: Map<string, string>, io: Io): { ok: true; channel: string } | { ok: false } {
   const target = flags.get("target");
   if (target === undefined || target === "") {
@@ -376,40 +425,49 @@ function requireTarget(flags: Map<string, string>, io: Io): { ok: true; channel:
   return { ok: true, channel: target };
 }
 
-/** The `.scramble/cursor.json` seam for `message check`: the store keeps no
- *  per-agent delivery cursor, so the CLIENT holds it, keyed by agent name. Read
- *  on entry, advanced to the highest seq drained on exit. An absent file or an
- *  absent key reads as 0. */
+/**
+ *  The store does not keep a per-agent delivery cursor, so the client maintains
+ *  this state in `.scramble/cursor.json` for `message check`, keyed by agent name.
+ *  The client reads the cursor on entry and advances it on exit to the highest
+ *  sequence number drained. An absent file or an absent key reads as 0.
+ */
 const CURSOR_FILE = "cursor.json";
 
-/** Where the drain cursor lives.
+/**
+ *  The system stores the drain cursor based on the active backend.
  *
- * BESIDE THE CONFIG for the slack backend, because the cursor belongs to the
- * AGENT and not to whatever directory it was invoked from. Keyed by cwd, the
- * same agent sweeping from two places has two cursors and re-drains whole
- * channels: moving a sweep monitor onto the installed CLI changed its cwd, and
- * the next sweep re-delivered the entire history of two channels, hundreds of
- * lines, until the harness suppressed it for rate.
+ *  The Slack backend places the cursor beside the configuration file, because the
+ *  cursor belongs to the agent across all invocation directories. When keyed by
+ *  the current working directory, the same agent sweeping from two locations
+ *  produces two cursors and re-drains whole channels. Moving a sweep monitor onto
+ *  the installed CLI changed its working directory, and the next sweep re-delivered
+ *  the entire history of two channels, spanning hundreds of lines, until the
+ *  harness suppressed it for rate.
  *
- *  The local backend keeps its cwd-relative file, since a local daemon's store
- *  is per workspace. When the config-side file is absent and a cwd one exists,
- *  the cwd one is read, so an existing agent does not re-drain once on upgrade. */
+ *  The local backend keeps its working-directory-relative file, since a local
+ *  daemon maintains its store per workspace. When the configuration-side file is
+ *  absent and a working-directory file exists, the system reads the
+ *  working-directory file, so an existing agent does not re-drain once on upgrade.
+ */
 function cursorPath(io: Io, agent: string, forWrite = false): string {
-  // ONE FILE PER AGENT, the way the inbox ledger is. A single shared file beside
-  // the config looked fine because the keys inside it are per agent, and it is
-  // not: the peer agent read the previous version and found the step I missed.
-  // The FIRST agent to sweep from a fresh cwd creates the shared file, and from
-  // that moment every other agent on the host resolves to it, finds no key of
-  // its own, reads 0, and re-drains full history. The same flood, one step
-  // later, once per agent. A shared file also makes two sweeps a read-modify-
-  // write race over each other's cursors.
+  // Each agent uses its own file, matching the structure of the inbox ledger. A
+  // single shared file beside the configuration appeared acceptable because the
+  // keys inside it are partitioned per agent, but it is not: the peer agent read
+  // the previous version and identified an omitted step. The first agent that
+  // sweeps from a fresh working directory creates the shared file. From that
+  // moment, every other agent on the host resolves to that file, finds no key of
+  // its own, reads 0, and re-drains the full history. This creates the same
+  // flood one step later, once per agent. A shared file also subjects two sweeps
+  // to a read-modify-write race over each other's cursors.
   const mine = join(dirname(slackConfigPath(io)), "cursors", `${agent}.json`);
   if (existsSync(mine)) return mine;
-  // MIGRATION, and READ ONLY. The cwd copy is what this agent used before, so it
-  // is read while no per-agent file exists yet; the WRITE goes to the per-agent
-  // path regardless, which is what ends the coupling. Returning the cwd path for
-  // writes too would keep every existing agent on a cwd-keyed cursor forever,
-  // and the whole defect was that the cwd is not a property of the agent.
+  // During migration, the copy in the current working directory is read-only. The
+  // agent used this copy previously, so the agent reads it while no per-agent file
+  // exists yet. The agent writes to the per-agent path regardless, which ends the
+  // coupling. Returning the current working directory path for writes would keep
+  // every existing agent on a cursor keyed by the current working directory
+  // forever, and the defect was that the current working directory is not a
+  // property of the agent.
   const local = join(io.cwd(), ".scramble", CURSOR_FILE);
   return forWrite ? mine : existsSync(local) ? local : mine;
 }
@@ -427,29 +485,39 @@ function writeCursor(io: Io, name: string, seq: number): void {
   const p = cursorPath(io, name, true);
   let j: Record<string, number> = {};
   try {
-    // READ FROM WHERE THE VALUES ARE, which on a first write after migration is
-    // still the old file: reading the new (absent) one would drop every cursor
-    // this agent already had and re-drain everything exactly once.
+    // The agent reads from the file where the values exist. On a first write after
+    // migration, the old file still holds these values. Reading from the absent new
+    // file would drop every cursor this agent already had and re-drain everything
+    // exactly once.
     j = JSON.parse(readFileSync(cursorPath(io, name), "utf8")) as Record<string, number>;
   } catch {
-    /* absent cursor file is a fresh ledger */
+    /**
+     *  An absent cursor file is a fresh ledger.
+     */
   }
   j[name] = seq;
-  // THE DIRECTORY OF THE FILE BEING WRITTEN. This made the cwd `.scramble`
-  // whatever path `p` resolved to, so on a host where the cursor lives beside
-  // the config the write would fail for a directory that does not exist yet.
+  // The system used the directory of the file being written. This made the current
+  // working directory `.scramble` whatever path `p` resolved to, so on a host where
+  // the cursor lives beside the config, the write would fail for a directory that
+  // does not exist yet.
   mkdirSync(dirname(p), { recursive: true });
   writeFileSync(p, JSON.stringify(j));
 }
 
-/** A message rendered for THIS agent: an agent-scoped Delivery already carries
- *  `mentioned`; a channel-scoped Message gets it stamped from its mentions list. */
+/**
+ *  When rendering a message for this agent, an agent-scoped delivery already
+ *  carries `mentioned`, and a channel-scoped message stamps `mentioned` from its
+ *  mentions list.
+ */
 function render(agentStream: boolean, name: string, m: Message & { mentioned?: boolean }): Record<string, unknown> {
   if (agentStream) return m as unknown as Record<string, unknown>;
   return { ...m, mentioned: m.mentions.includes(name) };
 }
 
-/** Read an NDJSON stream, emitting one hook per line, until the stream ends. */
+/**
+ *  The parser reads an NDJSON stream and emits one hook per line until the stream
+ *  ends.
+ */
 async function drainStream(
   res: Response,
   agentStream: boolean,
@@ -486,10 +554,12 @@ async function cmdPost(argv: string[], io: Io): Promise<number> {
   return postText(channel, text, flags, io, backend);
 }
 
-/** Local-backend: one message posted through the daemon. One JSON line per
- *  crossing, nothing on a clean send with no crossing. When `files` are given
- *  (from `--attach`), they ride the POST body so the stored message carries
- *  them. */
+/**
+ *  The local backend posts one message through the daemon. It outputs one JSON line
+ *  for each crossing, and emits nothing on a clean send with no crossing. When the
+ *  operator passes `files` using `--attach`, the client includes them in the POST
+ *  body so the stored message carries them.
+ */
 async function postLocalCore(
   channel: string,
   text: string,
@@ -517,11 +587,14 @@ async function postLocalCore(
   return 0;
 }
 
-/** Upload every `--attach` file to the target and let the FIRST one carry the
- *  message text, which is what makes Slack attach the file to the message.
+/**
+ *  The command uploads every `--attach` file to the target and attaches the
+ *  message text to the first file, which causes Slack to attach the file to the
+ *  message.
  *
- *  It answers in the shape `post` answers, so the send path treats an attachment
- *  send and a plain send the same way from here on. */
+ *  The response matches the structure returned by `post`, so the send path treats
+ *  an attachment send and a plain send the same way from this point forward.
+ */
 async function uploadAsMessage(
   paths: string[],
   channel: string,
@@ -558,34 +631,42 @@ async function uploadAsMessage(
   };
 }
 
-/** Post one message under whichever backend the run selects. The mirrored verb
- *  (`message send`) and the alias (`post <channel> <text>`) share this path so
- *  the backend switch sits below the verb parsing. `files` rides the local
- *  store's message when `message send --attach` produced them; the slack
- *  backend attaches by its own upload flow (files are uploaded to the target
- *  before the text send). */
-/** The register a channel calls for, set by the operator.
+/**
+ *  This command posts one message to whichever backend the run selects. Both the
+ *  `message send` verb and the `post <channel> <text>` alias share this path, so
+ *  the backend switch sits below verb parsing. When `message send --attach`
+ *  produces files, `files` travels with the local store's message. The Slack
+ *  backend attaches files through its own upload workflow, which uploads files to
+ *  the target before sending the message text.
+ */
+/**
+ *  The operator sets the register a channel calls for.
  *
- * The operator: "Channel classification should be manually done by the
- * operator." I had built this from the membership, counting people against
- * agents, and the ruling came the same hour. A channel with no entry gets the
- * careful register and a line naming the command that sets one. */
+ *  The operator manually classifies each channel. The system previously determined
+ *  this from membership by counting people against agents. A channel with no entry
+ *  gets the careful register and a line naming the command that sets one.
+ */
 function channelTier(channel: string, io: Io): { tier: Tier; why: string } {
   return tierFor(channel, loadSlackConfig(io)?.tiers);
 }
 
-/** The rewrite attempt, with its one retry: the model's answer put through the
- *  guards, and asked again with what it broke.
+/**
+ *  The system runs the rewrite attempt with one retry. It tests the model's
+ *  answer against the guards and queries the model again with what it broke.
  *
- *  `postText` calls this on the way to Slack and `scramble rewrite` calls it
- *  with nowhere to send, so the preview an author reads is the same code path
+ *  `postText` calls this process on the way to Slack, and `scramble rewrite` calls
+ *  it with nowhere to send, so the preview an author reads uses the same code path
  *  their message takes. A preview built from a second copy of these steps would
- *  drift away from the send and lie about it. */
-/** The instruction the model was given, WITHOUT the author's draft.
+ *  drift away from the send and misrepresent the output.
+ */
+/**
+ *  The system supplies instructions to the model without the author's draft.
  *
- *  A rewrite shares long spans with the draft on purpose, so the draft is left
- *  out of what the answer is checked against. What remains is the orders, and an
- *  answer repeating a span of those is quoting them into the channel. */
+ *  Rewrites intentionally share long spans with the draft, so the evaluation
+ *  excludes the draft when checking the answer. Only the instructions remain, and
+ *  an answer that repeats spans from them quotes those instructions into the
+ *  channel.
+ */
 function instructionOf(template: string, register?: string): string {
   return register === undefined || register === "" ? template : `${template}\n\n${register}`;
 }
@@ -597,7 +678,7 @@ async function attemptRewrite(
 ): Promise<{ chosen: RewriteChoice; retried: boolean; retriedWhy?: string; configured: boolean }> {
   const cfg = rewriteConfig(io.env);
   const template = cfg.key === undefined ? undefined : readPromptTemplate(io.moduleDir ? io.moduleDir() : "src");
-  // A CALL THAT NEVER ANSWERED IS TRIED ONCE MORE. Measured on my own send: the
+  // The system retries an unanswered call once. During a measured send, the
   // model timed out at 20s, the send refused, and the same text went through on
   // the next attempt seconds later. A timeout says nothing about the message,
   // so spending the whole send on one slow call is the wrong price.
@@ -613,11 +694,10 @@ async function attemptRewrite(
       : template.ok
         ? chooseText(text, await ask(composePrompt(template.text, text, register)), instructionOf(template.text, register))
         : chooseText(text, { ok: false, why: template.why });
-  // ONE MORE ATTEMPT, WITH WHAT IT BROKE. Every guard fires on something the
-  // MODEL did, so the model is the party that can fix it, and the author is
-  // left holding a refusal for a mistake somebody else made. Two agents wrote
-  // prose that avoided a banned form on purpose, watched the rewriter put it
-  // back, and sent nothing.
+  // This attempt documents the resulting failures. Every guard fires on an action
+  // the model took, so the model can resolve the issue, while the author receives a
+  // refusal for an error produced elsewhere. Two agents deliberately wrote prose
+  // that avoided a banned form, observed the rewriter restore it, and sent nothing.
   if ("refuse" in chosen && chosen.retry !== undefined && template !== undefined && template.ok) {
     const why = guardName(chosen.why);
     io.writeErr(`rewrite: ${chosen.retry} Asking once more.`);
@@ -635,12 +715,14 @@ async function attemptRewrite(
   return { chosen, retried: false, configured: template !== undefined };
 }
 
-/** Post one message under whichever backend the run selects. The mirrored verb
- *  (`message send`) and the alias (`post <channel> <text>`) share this path so
- *  the backend switch sits below the verb parsing. `files` rides the local
- *  store's message when `message send --attach` produced them; the slack
- *  backend attaches by its own upload flow (files are uploaded to the target
- *  before the text send). */
+/**
+ *  This command posts one message to whichever backend the run selects. Both the
+ *  `message send` verb and the `post <channel> <text>` alias share this path, so
+ *  the backend switch sits below verb parsing. When `message send --attach`
+ *  produces files, `files` travels with the local store's message. The Slack
+ *  backend attaches files through its own upload workflow, which uploads files to
+ *  the target before sending the message text.
+ */
 async function postText(
   channel: string,
   text: string,
@@ -650,41 +732,42 @@ async function postText(
   files?: Attachment[],
   attachPaths: string[] = [],
 ): Promise<number> {
-  // THE CHOKE POINT: every verb that puts this agent's prose in front of a
-  // person funnels through here, so the language check sits here and `post`
-  // cannot be the way around what `message send` enforces. `message send` checks
-  // once more BEFORE it uploads an attachment, which is not a second mechanism
-  // but the same one called earlier, so a refused message does not leave a file
-  // in the channel with no message to go with it.
-  // WHAT THE AUTHOR TYPED, kept before the rewriter replaces it. The duplicate
-  // check hashes this, since one draft rewrites differently every run.
+  // Every action that displays this agent's prose to a person passes through this
+  // point. The language check runs here, so `post` cannot bypass the rules that
+  // `message send` enforces. The `message send` command executes this same check
+  // earlier, before it uploads an attachment, so a refused message does not leave a
+  // file in the channel without an accompanying message.
+  //
+  // The system preserves the original text the author typed before the rewriter
+  // replaces it. The duplicate check hashes this text, since a single draft
+  // rewrites differently on every run.
   const draft = text;
   const postRefusal = languageRefusal(lintLanguage(text));
   if (postRefusal !== "") {
     io.writeErr(postRefusal);
     return 1;
   }
-  // THE SAME DRAFT INTO THE SAME CHANNEL, TWICE, IS REFUSED, and this runs
-  // BEFORE the rewriter. Measured after the `posted:` line shipped: two
-  // byte-identical copies 27 seconds apart reached a third agent's inbox. An
-  // agent asked for this shape in these words: "A retry after a genuine post
-  // must be a no-op, for example by setting an idempotency key on the draft
-  // hash".
+  // The system refuses duplicate submissions of the same draft to the same channel,
+  // and this check runs before the rewriter. In a measurement taken after the
+  // `posted:` line shipped, two byte-identical copies reached a third agent's inbox
+  // 27 seconds apart. A retry after a genuine post must become a no-op, so the
+  // system sets an idempotency key on the draft hash.
   //
-  // The DRAFT is hashed, since one draft rewrites differently every run, so a
-  // digest of the posted text would let every duplicate through. `--again` sends
-  // it anyway, for the case where saying the same thing twice is the intent.
+  // The system hashes the draft because a single draft rewrites differently on each
+  // run, so a digest of the final posted text would permit duplicate deliveries.
+  // The `--again` flag sends the draft anyway when the sender intends to post the
+  // same content twice.
   const sender = nameFor(flags, io);
   const digest = createHash("sha256").update(draft).digest("hex").slice(0, 16);
-  // WHAT THIS SEND MEASURED, recorded whether or not it crossed the threshold, so
-  // the distribution accumulates in the field. The number this guard uses rests
-  // on corpus runs three agents did by hand.
+  // This send measured and recorded whether or not it crossed the threshold, so
+  // the distribution accumulates in the field. The number this guard uses rests on
+  // corpus runs three agents did by hand.
   let closest: { row: SentRow; overlap: number; scale: "content" | "short" } | undefined;
-  // MEASURED ON EVERY SEND, `--again` included. Recording only what went out
-  // records the negative class alone: every row is a message the author meant to
-  // send. The `--again` re-sends are the labelled FALSE POSITIVES, the one class
-  // that says where the threshold is wrong, and an agent named the gap the hour
-  // this shipped.
+  // The system measures every send, including sends with `--again`. Recording only
+  // outbound messages captures the negative class alone, because every row is a
+  // message the author intended to send. The `--again` re-sends are the labeled
+  // false positives, which is the class that indicates where the threshold is
+  // incorrect, and an agent identified this gap the hour the system shipped.
   closest = closestSaid(
     readSentRows(sentPath(slackConfigPath(io), sender)),
     channel,
@@ -708,11 +791,11 @@ async function postText(
       );
       return 1;
     }
-    // ONE THING SAID TWICE UNDER DIFFERENT WORDING is the duplicate the digest
-    // misses. An agent reported one end-to-end run twice, 127 seconds apart,
-    // naming the same ports and the same three images in different sentences:
-    // 0.970 word overlap by their measure, and the digest passed it because no
-    // two bytes lined up. A reader of the channel sees two reports of one run
+    // The digest misses duplicate content when different wording describes the same
+    // event. An agent reported one end-to-end run twice, 127 seconds apart, naming the
+    // same ports and the same three images in different sentences. The text carried a
+    // 0.970 word overlap by measurement, and the digest passed it because no two
+    // bytes lined up. A reader of the channel still receives two reports for one run
     // either way.
     const said =
       closest !== undefined &&
@@ -728,25 +811,24 @@ async function postText(
       return 1;
     }
   }
-  // A MODEL REWRITES WHAT GOES OUT, when one is configured. Asked for directly:
-  // "For every sentence gone through scramble message, using Gemini 3.7 flash to
-  // rewrite it to professional product and technical communication standards."
+  // A configured model rewrites outgoing messages. For every sentence processed
+  // through the scramble message routine, Gemini 3.7 Flash rewrites the text to
+  // meet professional product and technical communication standards.
   //
-  // My objection was that a rewriter can change what a claim SAYS. The answer
-  // that settled it: an agent that already publishes wrong claims gets no new
-  // failure mode from this, so the argument reduces to "rewriting does not fix
-  // that".
+  // A rewriter can change what a claim says. An agent that already publishes
+  // incorrect claims gains no new failure mode from this, so the argument reduces
+  // to the fact that rewriting does not fix that problem.
   //
-  // The message ALWAYS goes: a missing key, a timeout or a bad answer costs the
-  // rewrite. Nothing changes silently: when a rewrite is sent, the sender's own
-  // words are printed beside it. And the rewrite passes the same rules the
-  // sender's words did, or it is dropped in favour of the words that passed.
-  // THE CHANNEL DECIDES THE REGISTER, and the operator decides the channel:
-  // "Channel classification should be manually done by the operator". The
-  // matching block rides on the instruction the model already gets, and a
-  // channel with no tier gets the careful one. SAID ONLY WHERE IT ACTS. With no
-  // model configured there is no rewrite to carry a register, and the line
-  // would sit ahead of whatever the send reports next, including a failure.
+  // The message always transmits. A missing key, a timeout, or a bad response costs
+  // the rewrite. Nothing changes silently: when the system sends a rewrite, it
+  // prints the sender's original words beside it. The rewrite must pass the same
+  // rules that the sender's words passed, or the system drops the rewrite in favour
+  // of the words that passed. The channel determines the register, and the operator
+  // classifies the channel manually. The matching block attaches to the instruction
+  // the model already receives, and a channel with no tier receives the careful
+  // one. The output appears only where the rewrite acts. With no model configured,
+  // no rewrite carries a register, and the line would sit ahead of whatever the
+  // send reports next, including a failure.
   const rewriteOn = rewriteConfig(io.env).key !== undefined;
   const decided = channelTier(channel, io);
   if (rewriteOn) io.writeErr(`register: ${decided.tier} for ${channel} (${decided.why}).`);
@@ -759,12 +841,13 @@ async function postText(
     io,
     registerBlock.ok ? registerBlock.text : undefined,
   );
-  // A REWRITE THAT CANNOT BE USED STOPS THE SEND. The author's own words used to
-  // go out here, which published exactly the prose the rewrite exists to
-  // replace.
-  // ONE ROW PER SEND THAT MET THE REWRITER. Every claim about whether the
-  // rewriter helps has been a single case somebody remembered, on a feature now
-  // running on every send from two hosts.
+  // An unusable rewrite stops the send. The system previously transmitted the
+  // author's original words at this point, which published the exact prose that the
+  // rewrite exists to replace.
+  //
+  // The log records one row for each send that encountered the rewriter. Every
+  // claim about whether the rewriter helps has been a single remembered case, on a
+  // feature that now runs on every send from two hosts.
   const noteRewrite = (outcome: "sent" | "unchanged" | "retried" | "refused" | "skipped", why?: string): void => {
     if (rewriteConfig(io.env).key === undefined) return;
     try {
@@ -794,15 +877,16 @@ async function postText(
   const thread = flags.get("thread") ?? undefined;
   const status = statusTracker(io, backend, nameFor(flags, io));
   await settleStatus(status?.clearExpired());
-  // THE UPLOAD RUNS AFTER THE GUARDS AND THE REWRITE, for both backends. It ran
-  // in the verb and returned before any of them, so a send carrying a file
-  // printed nothing, checked no duplicate and rewrote nothing: one agent posted
-  // an identical draft twice, seven seconds apart, and deleted the copy by hand.
+  // Both backends run the upload after the guards and the rewrite. The upload
+  // previously ran inside the verb and returned before any of them ran, so a send
+  // carrying a file printed nothing, checked no duplicate, and rewrote nothing. One
+  // agent posted an identical draft twice, seven seconds apart, and deleted the copy
+  // by hand.
   //
-  // On Slack the upload POSTS the message, since the text rides as the file's
-  // comment, so it answers in the shape `post` answers and everything after it
-  // is shared. On the local backend it records the file and the post below
-  // carries it.
+  // On Slack, the upload posts the message, since the text travels as the file's
+  // comment, so it returns a response in the shape `post` answers and shares
+  // everything after it. On the local backend, the upload records the file and the
+  // post below carries it.
   const uploaded =
     attachPaths.length > 0
       ? await uploadAsMessage(attachPaths, channel, text, flags, io, backend, nameFor(flags, io), thread)
@@ -819,96 +903,103 @@ async function postText(
       io.writeErr(s.error ?? "slack backend unavailable");
       return 1;
     }
-    // AN ATTACHMENT TAKES THE SAME ROAD. `--attach` used to upload from the verb
-    // and return before this function ran, so a send carrying a file skipped the
-    // duplicate guard, the rewriter and every line this prints: an agent posted
-    // one draft twice, seven seconds apart, with no output either time, and
-    // deleted the copy by hand. The upload posts the message, so it stands where
-    // the post call stands and everything after it is shared.
+    // An attachment follows the same path. The `--attach` flag used to upload
+    // from the command verb and return before this function ran, so sending a file
+    // skipped the duplicate guard, the rewriter, and every line this function prints.
+    // An agent posted one draft twice, seven seconds apart, with no output either
+    // time, and deleted the copy by hand. The upload posts the message, so it stands
+    // where the post call stands, and everything after it is shared.
     const r = uploaded !== undefined ? uploaded : await s.backend.post(channel, text, from, thread);
     if (!r.ok) {
       io.writeErr(`post failed: ${r.error}`);
       return 1;
     }
-    // SLACK HAS THE MESSAGE. Said first, said always, with the ts, because
-    // everything printed after this point is a note about the message, and an
-    // agent that reads a note as a failure sends again.
+    // The CLI always states first that Slack received the message, along with the
+    // timestamp `ts`, because everything printed after this point is a note about
+    // the message, and an agent that reads a note as a failure sends the message
+    // again.
     //
-    // MEASURED THE SAME HOUR: one agent posted a reply twice after the CLI
-    // printed only the unread-messages warning, and another posted the same
-    // progress report FIVE times because a stale read-back convinced them
-    // nothing had gone out (ts 1787715115 / 1787715130 and 1787715280 through
-    // 1787715629). Neither output ever said the word posted.
+    // During measurements taken in the same hour, one agent posted a reply twice
+    // after the CLI printed only the unread-messages warning, and another agent
+    // posted the same progress report FIVE times because a stale read-back
+    // convinced it that nothing had gone out (ts 1787715115 / 1787715130 and
+    // 1787715280 through 1787715629). Neither output ever included the word posted.
     io.writeErr(
       `posted: ${channel} at ts ${r.ts ?? "unknown"}${r.thread === undefined ? "" : ` in thread ${r.thread}`}. ` +
         `Slack has it. Anything below is a note about the message, and NONE of it means resend.`,
     );
-    // A post that arrived somewhere other than where it was aimed is REPORTED.
-    // A clean exit says nothing about where it went.
+    // The system marks a post as REPORTED when it arrives at an unintended destination.
+    // A clean exit provides no information about where the post went.
     if (r.problem !== undefined) io.writeErr(`slack: ${r.problem}`);
-    // `--verify` READS THE MESSAGE BACK. A send's exit code says Slack accepted
-    // something; it says nothing about what the channel holds. Between the two
-    // sit the rewriter, mention conversion, and Slack's own formatting. Three
-    // agents wrote their own read-back wrappers today, and one asked me to own
-    // this one.
+    // The `--verify` flag reads the message back from the channel. A send's exit code
+    // indicates that Slack accepted a payload, but it does not report what the channel
+    // holds. The rewriter, mention conversion, and Slack's own formatting modify the
+    // text between submission and storage. Three agents wrote their own read-back
+    // wrappers to verify delivery.
     //
-    // On a difference it prints the STORED TEXT WHOLE, at that agent's request:
-    // a line diff is useless when the rewriter rephrases throughout, since every
-    // line reports as changed.
-    // VERIFIED BY DEFAULT WHERE THE REWRITE IS ON. A rewritten send posts text
-    // the author never saw, so the question "what does the channel hold" applies
-    // to every one of them, and three agents wrote their own read-back wrapper
-    // for exactly that. A flag people have to remember is a check that holds
-    // until they are busy, which is the argument that put the language rules in
-    // the send.
+    // When the text differs, the command prints the stored text in full. A line diff
+    // fails when the rewriter rephrases throughout, because every line reports as
+    // changed. Verification runs by default when rewriting is active. A rewritten send
+    // posts text that the author never saw, so the channel contents must be verified
+    // for every send, which led three agents to write their own read-back wrappers. An
+    // opt-in flag remains effective only until operators are busy, which is why the
+    // send command enforces the language rules directly.
     //
-    // `--no-verify` skips it, and `--verify` asks for it where the rewrite is
-    // off.
+    // The `--no-verify` flag skips verification, and `--verify` enables it when the
+    // rewriter is disabled.
     const verifying = flags.has("no-verify")
       ? false
       : flags.has("verify") || rewriteConfig(io.env).key !== undefined;
-    // ONE FORM BOTH SIDES ARE PUT INTO before the comparison: the broadcast
-    // entity rendered the way a reader sees it, Slack's escapes undone, and the
-    // edges trimmed.
+    // Before comparing them, the system puts both sides into a single format: it
+    // renders the broadcast entity as a reader sees it, undoes Slack's escapes, and
+    // trims the edges.
     const readerForm = (t: string): string => unescapeSlack(readerBroadcasts(t)).trim();
     if (verifying) {
       if (r.ts === undefined) {
         io.writeErr(`verify: slack returned no ts for this message, so nothing can be read back.`);
       } else {
-        // THE ROOT SLACK CHOSE: a thread_ts naming a reply
-        // is hoisted into that reply's root, and the read-back has to ask about
-        // the root that holds the message.
+        // Slack hoists a `thread_ts` that names a reply into that reply's root
+        // message, and the read-back must query the root that holds the message.
         const stored = await s.backend.storedMessage(channel, r.ts, from, r.thread ?? thread);
         if (!stored.ok) {
           io.writeErr(`verify: could not read the message back: ${stored.error}`);
-          // COMPARED IN THE READER'S FORM ON BOTH SIDES. The read-back renders
-          // `<!channel>` as `@channel` and undoes Slack's `&lt;`, so a draft
-          // written with either form read back as a difference and this line
-          // printed DIFFERS twice over messages Slack held exactly. A verify that
-          // cries wolf is a verify agents learn to skip.
+          // The system compares text in the reader's format on both sides. The
+          // read-back
+          // renders `<!channel>` as `@channel` and undoes Slack's `&lt;`, so a draft
+          // written
+          // in either form read back as a difference, and this line printed DIFFERS
+          // twice
+          // over messages Slack held exactly. Agents learn to skip a verification check
+          // that raises false alarms.
         } else if (readerForm(stored.text) === readerForm(text)) {
-          // A MENTION IS LIVE WHEN SLACK MADE AN ENTITY OF IT. A name that
-          // failed to convert sits in the text and notifies nobody, so a count
-          // taken from the text would have called it live.
+          // A mention is live when Slack makes an entity of it. A name that fails to
+          // convert
+          // remains in the text and notifies nobody, so a count taken from the text
+          // would
+          // have called it live.
           const silent = mentionsIn(text).filter((m) => !stored.mentions.includes(m.slice(1)));
           io.writeErr(
             `verify: ${channel} holds exactly what was sent, ${stored.mentions.length} mention(s) live` +
               (silent.length > 0 ? `, and ${silent.join(", ")} notified NOBODY.` : `.`),
           );
         } else {
-          // COMPARED IN PROSE ON BOTH SIDES. A raw `includes` finds a mention
-          // inside a backtick span, where it notifies nobody, which is the exact
-          // defect the rewrite guard was built for an hour earlier and which I
-          // wrote again here.
+          // Both sides compare prose. A raw `includes` finds a mention inside a
+          // backtick
+          // span, where it notifies nobody. The rewrite guard was built an hour earlier
+          // for
+          // this exact defect, which was reintroduced here.
           const storedProse = mentionsIn(stored.text);
           const lostHere = mentionsIn(text).filter((m) => !storedProse.includes(m));
           io.writeErr(
             (
               `verify: ${channel} holds text that DIFFERS from what was sent.\n` +
-                // THE LINE, NAMED. This printed the whole stored text and left the
-                // reader to find the difference in it, and I found mine with a
-                // hand-written diff: Slack had auto-linked a bare `users.info` into
-                // a link entity. Nobody should re-derive that.
+                // The output names the line directly. The previous version printed the
+                // full
+                // stored text and left the reader to find the difference. A
+                // hand-written diff
+                // showed that Slack had auto-linked a bare `users.info` into a link
+                // entity, and
+                // nobody should have to re-derive that.
                 differenceLine(readerForm(text), readerForm(stored.text)) +
                 `What Slack stored:\n${stored.text}\n` +
                 (lostHere.length > 0
@@ -918,18 +1009,19 @@ async function postText(
           );
         }
       }
-      // A CITATION THAT POINTS AT NOTHING, reported while the sender is still
-      // here. An agent cited `1787656658.009669` for a line Slack holds at
-      // `1787656658.009699`, hand-copied from a notification preview, and the
-      // reader spent a search finding what was meant. Four investigations in one
-      // day turned on an exact ts.
+      // The system reports citations that point to missing records while the sender
+      // remains present. An agent cited `1787656658.009669` for a line Slack holds at
+      // `1787656658.009699` after hand-copying the value from a notification preview,
+      // and the reader spent a search finding what was meant. Four investigations in
+      // one day turned on an exact timestamp.
       //
-      // A NOTE, never a refusal: the message is already in the channel, and a ts
-      // from another channel is a legitimate citation this cannot check. The
-      // detector is the whole second, which no correct citation trips.
+      // The system issues an advisory note and allows the message: the message is
+      // already in the channel, and a timestamp from another channel is a legitimate
+      // citation this tool cannot check. The detector checks the whole second, which no
+      // correct citation trips.
       const cites = citedTimestamps(text).filter((c) => c !== r.ts);
-      // THE CAP SAYS WHAT IT DROPPED. A bound nobody prints reads as full
-      // coverage, which is how a `tail -1` on a smoke diagnostic hid a failure in
+      // The cap reports what it dropped. An unprinted limit appears to provide full
+      // coverage, which is how running `tail -1` on a smoke diagnostic hid a failure in
       // this workspace.
       if (cites.length > CITED_TS_CAP) {
         io.writeErr(`cite: checked the first ${CITED_TS_CAP} of ${cites.length} cited ts, and left ${cites.slice(CITED_TS_CAP).join(", ")} unchecked.`);
@@ -937,9 +1029,10 @@ async function postText(
       for (const cited of cites.slice(0, CITED_TS_CAP)) {
         const look = await s.backend.citedMessage(channel, cited, from);
         if (look.error !== undefined) continue;
-        // WHO WROTE THE MESSAGE YOU CITED. I attributed an incident to the wrong
-        // agent while pointing at its ts, and the agent I named corrected me. The
-        // author is read on the same call that checks the digits.
+        // Verify who wrote the cited message. An operator attributed an incident to the
+        // wrong agent while referencing its timestamp, and the named agent corrected
+        // the
+        // attribution. The same call that checks the timestamp digits reads the author.
         if (look.exact) {
           if (look.author !== undefined) io.writeErr(`cite: ${cited} in ${channel} was written by ${look.author}.`);
           continue;
@@ -956,8 +1049,9 @@ async function postText(
       hash: digest,
       channel,
       at: new Date().toISOString(),
-      // THE WORDS THE DRAFT WAS ABOUT, so the next send can see a rewording of
-      // it. The digest alone catches a byte-identical resend and nothing else.
+      // The system retains the words the draft was about, so the next send can see a
+      // rewording of it. The digest alone catches a byte-identical resend and nothing
+      // else.
       words: allWords(draft),
       ...(closest === undefined
         ? {}
@@ -965,18 +1059,20 @@ async function postText(
             near: {
               score: Number(closest.overlap.toFixed(3)),
               ts: closest.row.ts,
-              // THE OVERRIDE IS THE LABEL. A send that went out under `--again`
-              // above the threshold is a refusal the author overruled, which is
-              // the only field evidence that the number is too low.
+              // The override serves as the label. A message sent under `--again` above
+              // the
+              // threshold is a refusal that the author overruled, which is the only
+              // field
+              // evidence that the number is too low.
               ...(flags.has("again") ? { again: true } : {}),
             },
           }),
     });
     if (status !== undefined) await settleStatus(replyStatus(status, channel, from));
-    // AND LAST, because a pipe cuts from the end. Three agents independently
-    // ran this output through `tail -4`, `tail -3` and `tail -2`, each losing
-    // the `posted:` line, and two of them sent the message again. The same ts,
-    // printed at both ends, survives a truncation from either side.
+    // Finally, a pipe cuts from the end. Three agents independently ran this output
+    // through `tail -4`, `tail -3` and `tail -2`, each losing the `posted:` line, and
+    // two of them sent the message again. The same timestamp, printed at both ends,
+    // survives a truncation from either side.
     io.writeErr(`sent: ${channel} at ts ${r.ts ?? "unknown"}. Slack has it. Nothing above asks you to send it again.`);
     return 0;
   }
@@ -996,7 +1092,10 @@ function streamUrls(base: string, name: string, channels: string[], since: numbe
   return [`${base}/agents/${encodeURIComponent(name)}/stream?since=${since}`];
 }
 
-/** Open every stream at the shared cursor, read concurrently, report a clean stop. */
+/**
+ *  The client opens every stream at the shared cursor, reads concurrently, and
+ *  reports a clean stop.
+ */
 async function listenOnce(
   io: Io,
   urls: string[],
@@ -1035,8 +1134,8 @@ async function cmdListen(argv: string[], io: Io): Promise<number> {
   const status = statusTracker(io, "local");
   const stopTicker = status ? status.startExpiryTicker(2000, io.sleep) : undefined;
   const addressedOnly = flags.has("addressed");
-  // A LISTENER IS THE LONGEST-LIVED THING AN AGENT RUNS, so its start is where
-  // this agent's own runtime, directory and session reach the record.
+  // A listener is the longest-lived process an agent runs, so starting the listener
+  // records the agent's runtime, directory, and session.
   recordSelf(io, name);
   const drift = watchForNewerInstall(io);
   let lastSeq = 0;
@@ -1093,7 +1192,9 @@ async function cmdNext(argv: string[], io: Io): Promise<number> {
         try {
           await res.body.cancel();
         } catch {
-          /* stream teardown only */
+          /**
+           *  The system tears down the stream only.
+           */
         }
         return undefined;
       }
@@ -1147,7 +1248,9 @@ async function cmdHistory(argv: string[], io: Io): Promise<number> {
   return historyRead(channel, since, flags, io, backend);
 }
 
-/** Local-backend read: one JSON line per message from the channel catch-up. */
+/**
+ *  The local backend reads one JSON line per message from the channel catch-up.
+ */
 async function historyLocal(
   channel: string,
   since: number,
@@ -1167,10 +1270,12 @@ async function historyLocal(
   return 0;
 }
 
-/** Read a channel's history under whichever backend the run selects. The mirrored
- *  verb (`message read --target <channel>`) and the alias (`history <channel>`) share
- *  `--since`/`--after` as the same cursor and both dispatch here, so the backend
- *  switch stays below the verb parsing. */
+/**
+ *  The command reads a channel's history under whichever backend the run selects.
+ *  The mirrored verb (`message read --target <channel>`) and the alias
+ *  (`history <channel>`) share `--since`/`--after` as the same cursor and both
+ *  dispatch here, so the backend switch stays below the verb parsing.
+ */
 async function historyRead(
   channel: string,
   since: number,
@@ -1184,13 +1289,13 @@ async function historyRead(
       io.writeErr(s.error ?? "slack unavailable");
       return 1;
     }
-    // This caller (src/cli.ts) builds BOTH the status manager (which reads the
-    // ledger) and the slack backend, so the living-status ts is read here and
-    // handed in, which keeps the backend out of where the ledger lives.
+    // The caller in `src/cli.ts` builds both the status manager (which reads the
+    // ledger) and the Slack backend, so it reads the living-status timestamp here and
+    // passes it in, which keeps the backend isolated from the ledger location.
     const r = await s.backend.history(channel, since > 0 ? String(since) : undefined, nameFor(flags, io));
     for (const p of r.problems) io.writeErr(`slack: ${p}`);
     if (r.code !== 0) {
-      // ONE channel was asked for by name here, so its refusal IS the answer.
+      // The request specified one channel by name here, so its refusal is the answer.
       io.writeErr(`read failed: ${r.error}`);
       return 1;
     }
@@ -1210,9 +1315,12 @@ async function cmdJoin(argv: string[], io: Io): Promise<number> {
   return joinChannel(channel, flags, io);
 }
 
-/** Join a channel as THIS agent: scaffold `.scramble/`, read the persona, and
- *  register (name + persona + channel) with the daemon. Shared by the alias
- *  (`join <channel>`) and the mirror (`channel join --target <channel>`). */
+/**
+ *  To join a channel as the current agent, the command scaffolds `.scramble/`,
+ *  reads the persona, and registers the agent name, persona, and channel with
+ *  the daemon. Both the `join <channel>` alias and the
+ *  `channel join --target <channel>` command share this routine.
+ */
 async function joinChannel(
   channel: string,
   flags: Map<string, string>,
@@ -1237,9 +1345,9 @@ async function joinChannel(
     io.writeErr(`join failed (${res.status})`);
     return 1;
   }
-  // A successful join should tell the joining agent where to look without
-  // hunting: the join procedure and the conversational rules. These go to
-  // stderr (stdout stays JSON-only per the CLI contract).
+  // A successful join should direct the joining agent to the join procedure and the
+  // conversational rules without requiring a search. The system writes this
+  // information to stderr, because the CLI contract keeps stdout JSON-only.
   const repoDir = import.meta.dir ? join(import.meta.dir, "..") : io.cwd();
   io.writeErr(`joined ${channel} as ${name}; read the join procedure at ${join(repoDir, "JOIN.md")}`);
   io.writeErr(`the channel's rules live at ${join(repoDir, "skills", "scramble", "CONTRACT.md")}`);
@@ -1272,10 +1380,13 @@ async function cmdServe(argv: string[], io: Io): Promise<number> {
   return io.serve(store, opts);
 }
 
-/** Path the slack config is read from. SCRAMBLE_SLACK_CONFIG wins, else
- *  ~/.config/scramble/slack.json, else the workspace copy. The config holds
- *  BOT TOKENS, so the default is deliberately OUTSIDE the repo: this repo is
- *  public-bound, and a credential in a commit is readable in every clone. */
+/**
+ *  The system determines the Slack configuration path by checking
+ *  `SCRAMBLE_SLACK_CONFIG` first, then `~/.config/scramble/slack.json`, and finally
+ *  the workspace copy. The configuration holds bot tokens, so the default path is
+ *  deliberately outside the repository: this repository is public-bound, and a
+ *  credential in a commit is readable in every clone.
+ */
 export function slackConfigPath(io: Io): string {
   const explicit = io.env("SCRAMBLE_SLACK_CONFIG");
   if (explicit !== undefined && explicit.length > 0) return explicit;
@@ -1284,10 +1395,13 @@ export function slackConfigPath(io: Io): string {
   return join(io.cwd(), ".scramble", "slack.json");
 }
 
-/** Load the slack backend config. The config governs which channels map to which
- *  Slack channels, each agent's identity, and the app-level/bot tokens. Returns
- *  null when the file is absent or malformed (the caller reports it, naming the
- *  path it tried). */
+/**
+ *  This function loads the Slack backend configuration. The configuration governs
+ *  which channels map to which Slack channels, specifies each agent's identity,
+ *  and provides the app-level and bot tokens. The function returns null when the
+ *  file is absent or malformed, and the caller reports the failure, naming the
+ *  path it tried.
+ */
 export function loadSlackConfig(io: Io): SlackBackendConfig | null {
   try {
     const raw = readFileSync(slackConfigPath(io), "utf8");
@@ -1308,8 +1422,8 @@ export function loadSlackConfig(io: Io): SlackBackendConfig | null {
       appToken: typeof j.appToken === "string" ? j.appToken : undefined,
       filesDir: typeof j.filesDir === "string" ? j.filesDir : "",
       humanUserId: typeof j.humanUserId === "string" ? j.humanUserId : undefined,
-      // THE REGISTER OVERRIDE, carried through. A key the loader drops is a key
-      // the config claims to have and the code never sees.
+      // The system carries the register override through. When the loader drops a key,
+      // the configuration claims to have that key and the code never sees it.
       ...(typeof j.tiers === "object" && j.tiers !== null && !Array.isArray(j.tiers)
         ? { tiers: j.tiers as Record<string, string> }
         : {}),
@@ -1319,9 +1433,12 @@ export function loadSlackConfig(io: Io): SlackBackendConfig | null {
   }
 }
 
-/** The directory Slack attachments are downloaded into (and the local ledger
- *  lives in). The config's `filesDir` wins; the default keeps files OUT of the
- *  repo (public-bound), mirroring how the config keeps tokens out of the tree. */
+/**
+ *  This directory receives downloaded Slack attachments and houses the local
+ *  ledger. Setting `filesDir` in the config overrides the default location. The
+ *  default keeps files outside the public-bound repository, mirroring how the
+ *  config keeps tokens out of the tree.
+ */
 function slackFilesDir(io: Io): string {
   const cfg = loadSlackConfig(io);
   if (cfg !== null && cfg.filesDir !== "") return cfg.filesDir;
@@ -1329,18 +1446,25 @@ function slackFilesDir(io: Io): string {
   return home ? join(home, ".config", "scramble", "files") : join(io.cwd(), ".scramble", "files");
 }
 
-/** Build the slack BACKEND with the io seams. The config is read from the slack
- *  config path, and every outbound call/socket goes through io.fetch and
- *  io.createSocket, so tests need no token, network or socket. Returns an
- *  error string in place of a backend when the config or seams are missing. */
-// What a scramble agent's app must declare lives in one place, which the
-// onboarding script builds the manifest from and doctor checks a live app
-// against. It used to be a second hand-kept copy here, under a comment claiming
-// doctor compared the two; doctor never did, and the copies had diverged.
+/**
+ *  The builder constructs the Slack backend with the I/O seams. The system reads
+ *  configuration from the Slack configuration path, and routes every outbound call
+ *  and socket through `io.fetch` and `io.createSocket`, so tests need no token,
+ *  network, or socket. The builder returns an error string when the configuration
+ *  or seams are missing.
+ */
+// A single location defines what a scramble agent application must declare. The
+// onboarding script generates the manifest from this location, and doctor checks
+// a live application against it. A second manual copy previously existed here
+// beneath a comment asserting that doctor compared the two versions. Doctor never
+// compared them, and the copies had diverged.
 
-/** The one line an agent whose config is stale must see. Returned for the
- *  caller to print, so the caller decides the stream, and empty when nothing is
- *  wrong. */
+/**
+ *  This function returns the single line that an agent with a stale configuration
+ *  must see. It returns this message for the caller to print, so the caller
+ *  decides the output stream. The function returns an empty string when nothing is
+ *  wrong.
+ */
 export function staleConfigWarning(cfg: SlackBackendConfig | null, agent: string): string {
   if (cfg === null) return "";
   const entry = cfg.agents[agent];
@@ -1356,37 +1480,39 @@ export function staleConfigWarning(cfg: SlackBackendConfig | null, agent: string
 }
 
 
-/** TELL THE AGENT ITS OWN LISTENER HAS GONE STALE.
+/**
+ *  TELL THE AGENT ITS OWN LISTENER HAS GONE STALE.
  *
  *  One launcher serves every agent sharing a HOME, which is the arrangement this
- *  workspace wants: one version per machine, so everyone picks up the same
- *  update. The cost is that an install by ANY agent leaves every running
- *  listener behind, and the agent it happened to gets no signal. An agent was
- *  left behind twice in one day and learned it only by running doctor.
+ *  workspace wants so that one version runs per machine and everyone picks up the
+ *  same update. The cost is that an install by any agent leaves every running
+ *  listener behind, and the affected agent receives no signal. An agent was left
+ *  behind twice in one day and learned it only by running doctor.
  *
- *  The install prints the affected agents, which the INSTALLER reads. This is the
- *  half the stale agent reads: its own listener says so, on the stream that
- *  agent already watches, once per change.
+ *  The install prints the affected agents for the installer to read. The stale
+ *  agent reads its own half directly: its listener announces the change on the
+ *  stream that the agent already watches, once per change.
  *
- * IT RIDES THE DELIVERY STREAM, as a JSON line, for the same reason a delivery
- * does. Written to stderr, this notice reached an agent only when its launcher
- * merged the streams: one agent's launch line sent stderr to a second file its
- * monitor never read, so 58 notices reached nobody, and merging the streams
- * would have put prose into a file whose reader parses JSON (reported). A
- * signal whose arrival depends on shell wiring at each host arrives at some
- * hosts. Stdout is where the listener already writes the lines the agent reads,
- * and a JSON envelope survives a parsing reader.
+ *  The notice rides the delivery stream as a JSON line for the same reason a
+ *  delivery does. When written to stderr, this notice reached an agent only when its
+ *  launcher merged the streams. One agent's launch line sent stderr to a second file
+ *  that its monitor never read, so 58 notices reached nobody, and merging the
+ *  streams would have put prose into a file whose reader parses JSON (reported). A
+ *  signal whose arrival depends on shell wiring at each host arrives only at some
+ *  hosts. Stdout is where the listener already writes the lines the agent reads,
+ *  and a JSON envelope survives a parsing reader.
  *
- *  Every 30 seconds, which is far below the cost of a message and far above the
- *  rate anyone installs. */
+ *  The listener sends this notice every 30 seconds, which is far below the cost of
+ *  a message and far above the rate anyone installs.
+ */
 export function watchForNewerInstall(io: Io): { stop: () => void; tick: () => void } {
   const mine = (io.moduleDir ? readCommitFile(io.moduleDir()) : "") || installedCommit(io);
   let told = "";
-  // A REAL TIMER. `io.sleep` is stubbed instantaneous in
-  // tests, so a `while (!stopped) await io.sleep(...)` loop spins at full speed
-  // reading a file every iteration, and the suite stalled the first time this
-  // shipped that way. An interval fires on the clock and nothing else, and
-  // unref lets the process exit while it is pending.
+  // This implementation uses a real timer. Tests stub `io.sleep` to return
+  // instantaneously, so a `while (!stopped) await io.sleep(...)` loop spins at
+  // full speed and reads a file on every iteration, which stalled the suite the
+  // first time this shipped that way. An interval fires on the clock and nothing
+  // else, and unref allows the process to exit while it is pending.
   const tick = (): void => {
     const now = installedCommit(io);
     if (now !== "" && mine !== "" && now !== mine && now !== told) {
@@ -1409,17 +1535,19 @@ export function watchForNewerInstall(io: Io): { stop: () => void; tick: () => vo
   return { stop: () => clearInterval(timer), tick };
 }
 
-/** The commit subjects the last install recorded beside the installed copy's
- *  COMMIT, with the commit that install replaced.
+/**
+ *  The file records the commit subjects from the last install beside the
+ *  installed copy's COMMIT, together with the commit that the install replaced.
  *
- *  THE INSTALLER IS THE ONE AGENT WHO DOES NOT NEED THIS. One launcher serves
- *  every agent on a HOME, so an install by any of them moves the rest, and their
- *  only word for it is a drift advisory carrying two shas. An agent read three
+ *  The installer is the one agent who does not need this file. One launcher
+ *  serves every agent on a HOME, so an install by any agent moves the rest, and
+ *  their only notice is a drift advisory carrying two SHAs. An agent read three
  *  `git log` ranges by hand in one day to decide whether a listener of theirs was
  *  running code that mattered, and an installed copy has no checkout to read.
  *
- *  The file covers the MOST RECENT install only. A reader further behind than that
- *  hop is told so by the caller, which compares `from` against its own commit. */
+ *  The file covers the most recent install only. A reader further behind than that
+ *  hop is told so by the caller, which compares `from` against its own commit.
+ */
 export function installedChanges(io: Io): { from: string; lines: string[] } | undefined {
   const home = io.env("HOME");
   const root = io.env("SCRAMBLE_HOME") ?? (home === undefined ? "" : join(home, ".local", "share", "scramble"));
@@ -1436,20 +1564,26 @@ export function installedChanges(io: Io): { from: string; lines: string[] } | un
   return { from: head.slice(5).trim(), lines: rows.slice(1) };
 }
 
-/** What changed, as a printable block for a reader running `mine`, or an empty
- *  string when the installed copy records nothing. */
+/**
+ *  The output provides what changed as a printable block for a reader running
+ *  `mine`, or returns an empty string when the installed copy records nothing.
+ */
 export function changeBlock(mine: string, changes: { from: string; lines: string[] } | undefined): string {
   if (changes === undefined || changes.lines.length === 0) return "";
   const partial =
     changes.from === mine
       ? ""
       : ` The list covers the most recent install, which started at ${changes.from}, and you run ${mine}, so there may be more.`;
-  // NO PERIOD OF MY OWN AFTER THE LIST. Every subject here is a sentence and ends
-  // with one, and the live advisory read `...installed copy..` on its first run.
+  // Do not append a period after the list. Each entry here is a complete sentence
+  // that ends with a period, and the live advisory read `...installed copy..` on its
+  // first run.
   return ` ${changes.lines.length} commit(s) came with it, oldest first: ${changes.lines.join("; ")}${partial}`;
 }
 
-/** The commit written beside a copy's source, empty when there is none. */
+/**
+ *  The entry stores the commit written beside a copy's source, and remains empty
+ *  when there is none.
+ */
 function readCommitFile(dir: string): string {
   try {
     return readFileSync(join(dir, "COMMIT"), "utf8").trim();
@@ -1458,38 +1592,43 @@ function readCommitFile(dir: string): string {
   }
 }
 
-/** Where THIS process runs, or undefined when the host cannot be read.
+/**
+ *  This value indicates where this process runs, or remains undefined when the
+ *  host cannot be read.
  *
- *  Undefined means this build publishes NO origin, which is what an Io with no
- *  hostname seam knows. A guessed host would be worse than none: a peer
- *  reading it would believe it. */
+ *  An undefined value means this build publishes no origin, which is what an I/O
+ *  environment without a hostname interface knows. A guessed host would be worse
+ *  than no host, because a peer reading it would believe it.
+ */
 export function agentOrigin(io: Io, agent?: string): Origin | undefined {
   const host = io.hostname === undefined ? "" : io.hostname();
   if (host === "") return undefined;
   return originOf(host, io.cwd(), installedCommit(io), runtimeOf(io.env), agent);
 }
 
-/** WRITE THIS AGENT'S OWN ROW, so a crash leaves it on disk.
+/**
+ *  The agent writes its own row so a crash leaves it on disk.
  *
- *  The operator: "Scramble should store the agent runtime, work dir and session
- *  ids for each agent in case of a system restart or crash." Every row in this
- *  file came from a message a PEER sent, so the one agent whose runtime and
- *  session this process knows for certain was the one agent missing from it: a
- *  host that crashed took its own record with it, and the agents that recovered
- *  the file found everyone except themselves.
+ *  Scramble should store the agent runtime, working directory, and session IDs for
+ *  each agent in case of a system restart or crash. Every row in this file came
+ *  from a message a peer sent, so the one agent whose runtime and session this
+ *  process knows for certain was the one agent missing from it. A host that crashed
+ *  took its own record with it, and the agents that recovered the file found
+ *  everyone except themselves.
  *
- *  Called on the delivery verbs and on the send, which is every path an agent
- *  runs. Best-effort and reported: a record that cannot be written must not fail
- *  the work it describes. */
+ *  The agent calls this operation on the delivery verbs and on the send, which is
+ *  every path an agent runs. The operation is best-effort and reported, so a record
+ *  that cannot be written must not fail the work it describes.
+ */
 export function recordSelf(io: Io, agent: string): void {
   const mine = agentOrigin(io, agent);
   if (mine === undefined || agent === "") return;
   try {
-    // THE ROW CLAIMS THIS AGENT'S SLACK HANDLE, which the config already holds.
-    // Without it a row keyed on the handle waits for the agent to SEND before it
-    // retires, and an agent that upgrades and stays quiet keeps its two rows: two
-    // identities, one host, one directory, one session, which reads as two agents
-    // to anybody restoring the fleet.
+    // The row claims the agent's Slack handle, which the config already holds.
+    // Without this claim, a row keyed on the handle waits for the agent to send
+    // before it retires, and an agent that upgrades and stays quiet retains two
+    // rows. These two identities share one host, one directory, and one session,
+    // which appears as two agents to anyone restoring the fleet.
     const handle = loadSlackConfig(io)?.agents[agent]?.handle;
     recordPeer(
       peersPath(slackConfigPath(io)),
@@ -1525,18 +1664,22 @@ function slackBackend(io: Io): { backend?: SlackBackend; error?: string } {
   return { backend };
 }
 
-/** A real clock for the status tracker (a named function so coverage tracks it;
- *  the manager invokes it on every status lifecycle operation). */
+/**
+ *  The status tracker uses a real clock defined as a named function so coverage
+ *  tracks it. The manager invokes the clock on every status lifecycle operation.
+ */
 function statusNow(): number {
   return Date.now();
 }
 
-/** Build the status tracker for a run, or undefined when the operator disabled
- *  it (the one `SCRAMBLE_STATUS=off` switch). The Slack-mode tracker rides on
- *  the slack config's token and channel mapping; any other backend records the
- *  status locally so a reader (or a test) sees it. A missing or broken slack
- *  config yields a local-style record, because a status can never fail the verb
- *  it brackets. */
+/**
+ *  The system builds a status tracker for a run, or returns undefined when the
+ *  operator disables tracking with `SCRAMBLE_STATUS=off`. The Slack tracker uses
+ *  the token and channel mapping from the Slack configuration. Any other backend
+ *  records the status locally so a reader or a test sees it. A missing or broken
+ *  Slack configuration yields a local record, because a status can never fail the
+ *  operation it brackets.
+ */
 function statusTracker(io: Io, backend: "local" | "slack", agent?: string): StatusManager | undefined {
   if (io.env("SCRAMBLE_STATUS") === "off") return undefined;
   const raw = Number(io.env("SCRAMBLE_STATUS_TTL"));
@@ -1548,21 +1691,22 @@ function statusTracker(io: Io, backend: "local" | "slack", agent?: string): Stat
     const cfg = loadSlackConfig(io);
     if (cfg !== null) {
       channels = cfg.channels;
-      // THE ACTING AGENT'S OWN token. The status is posted into the agent's OWN
-      // channel, and the default app is a different app that is usually not in
-      // it: Slack answers channel_not_found, a failed status never fails the
-      // work it brackets, and the whole feature is silently dead for every
-      // agent that is not the default. That is what "assistant statuses do not
-      // work at all" was.
+      // The system uses the acting agent's own token. The status is posted into the
+      // agent's own channel, and the default app is a different app that is usually not
+      // in that channel. Slack returns `channel_not_found`, and a failed status never
+      // fails the work it brackets, which means the whole feature is silently dead for
+      // every non-default agent. This behavior is what caused assistant statuses to not
+      // work at all.
       token = (agent !== undefined ? cfg.agents[agent]?.token : undefined) ?? cfg.token;
     }
   }
-  // LIVE RESOLUTION for a channel the map does not hold. The map is a hand-kept
-  // copy of what Slack holds, and this is the fourth place in this repo where
-  // that copy went missing or stale: a channel an agent was invited into without
-  // a config edit resolved to nothing here while `message send` to the same name
-  // worked, since the post path asks Slack. Built lazily so a config with no
-  // Slack backend pays nothing.
+  // The system performs live resolution for a channel that the map does not hold.
+  // The map is a manually maintained copy of what Slack holds, and this is the
+  // fourth place in this repository where that copy went missing or stale. A channel
+  // an agent was invited into without a configuration edit resolved to nothing here,
+  // while `message send` to the same name worked, since the post path asks Slack.
+  // The system builds this lazily so a configuration with no Slack backend pays
+  // nothing.
   const resolve =
     mode === "slack" && agent !== undefined
       ? async (channel: string): Promise<string | undefined> => {
@@ -1584,12 +1728,14 @@ function statusTracker(io: Io, backend: "local" | "slack", agent?: string): Stat
   });
 }
 
-/** A delivery turns status ON for its channel when (and only when) the message
- *  is addressed to this agent. A message on a channel that will stay silent must
- *  not show the agent busy, so an unaddressed line sets nothing. The status is
- *  potentially awaited by a SHORT-LIVED verb (which would otherwise exit with the
- *  ledger write in flight); a failure is swallowed by the awaiting caller.
- *  Callers guard with a non-null status. */
+/**
+ *  A delivery turns status on for its channel if and only if the message is
+ *  addressed to this agent. A message on a channel that will stay silent must
+ *  not show the agent busy, so an unaddressed line sets nothing. A short-lived
+ *  verb potentially awaits the status, which would otherwise exit with the ledger
+ *  write in flight. The awaiting caller swallows any failure. Callers guard with
+ *  a non-null status.
+ */
 function deliverStatus(
   status: StatusManager,
   m: { channel?: unknown; mentioned?: unknown; thread?: unknown; ts?: unknown; id?: unknown },
@@ -1597,50 +1743,64 @@ function deliverStatus(
 ): Promise<void> {
   if (m.mentioned !== true) return Promise.resolve();
   if (typeof m.channel !== "string") return Promise.resolve();
-  // Slack's status hangs off a THREAD, so the thread this message belongs to is
-  // where the agent shows as working: the thread root when the message is a
-  // reply, and the message itself when it is top-level, since answering it
-  // starts that thread.
+  // Slack displays status on a thread, so the agent shows its working status on the
+  // thread that contains the message. The agent shows this status on the thread root
+  // when the message is a reply, and on the message itself when the message is
+  // top-level, since answering it starts that thread.
   const thread =
     typeof m.thread === "string" ? m.thread : typeof m.ts === "string" ? m.ts : undefined;
   return status.setOn(m.channel, agent, thread);
 }
 
-/** A reply by the agent clears the channel's active status as part of the same
- *  call. Returned so a short-lived verb can AWAIT the ledger write (the delete
- *  goes out, THEN status.json drops the record) before its process exits. */
+/**
+ *  The agent clears the channel's active status within the same call as its reply.
+ *  The call returns so a short-lived verb can await the ledger write before its
+ *  process exits, sending the delete operation before `status.json` drops the
+ *  record.
+ */
 function replyStatus(status: StatusManager, channel: string, agent: string): Promise<void> {
   return status.clearOn(channel, agent);
 }
 
-/** Await a status call, so a short-lived verb finishes the ledger write it fired
- *  (delivery set, reply clear, expiry sweep) before the process exits.
+/**
+ *  Await status calls so that short-lived operations finish the ledger writes
+ *  they started, such as setting delivery, clearing replies, or sweeping expiry,
+ *  before the process exits.
  *
- *  THE MANAGER OWNS "A STATUS NEVER FAILS THE WORK". It reports its Slack
- *  failures and its ledger-write failures on stderr and returns. A catch here
- *  used to sit on top of that promise, and once the manager kept its own promise
- *  the catch became unreachable: two guards for one failure, with the outer one
- *  positioned to hide a regression in the inner one. A rejection here now takes
- *  the verb down loudly, which names the owner that broke. */
+ *  The manager guarantees that status calls never fail the underlying work. It
+ *  reports Slack failures and ledger-write failures on stderr and returns. A
+ *  catch handler previously wrapped that promise. Once the manager handled its
+ *  own promise, that outer catch became unreachable, creating two guards for
+ *  one failure where the outer guard masked regressions in the inner one. A
+ *  rejection now terminates the command with an error, which identifies the
+ *  component that failed.
+ */
 async function settleStatus(p: Promise<unknown> | undefined): Promise<void> {
   if (p === undefined) return;
   await p;
 }
 
-/** The living-status message ts for a run, read from the status ledger by the
- *  caller (src/cli.ts) that builds BOTH the status manager and the slack
- *  backend, and it is handed into a read or a delivery so the backend filters a
- *  status line without knowing where the ledger lives. No status means no line
- *  hidden. */
+/**
+ *  The caller (`src/cli.ts`) builds both the status manager and the Slack
+ *  backend. It reads the status message timestamp for a run from the status ledger
+ *  and passes it into a read or delivery operation, so the backend filters a status
+ *  line without knowing where the ledger lives. If no status is present, no line is
+ *  hidden.
+ */
 
-/** A slack-backend `message check` cursor is a PER-CHANNEL map (channel name ->
- *  newest Slack ts), stored under a namespaced key in the same cursor.json so it
- *  never collides with the local backend's agent-keyed integer cursor. Slack has
- *  no global sequence, so the resume point it can support is a conversation ts
- *  per channel, kept client-side like the local cursor. */
+/**
+ *  The Slack backend `message check` cursor is a per-channel map of channel names
+ *  to their newest Slack timestamps. The system stores this map under a namespaced
+ *  key in the same `cursor.json` file so it never collides with the local backend's
+ *  agent-keyed integer cursor. Slack has no global sequence, so the resume point it
+ *  can support is a conversation timestamp per channel, kept client-side like the
+ *  local cursor.
+ */
 const SLACK_CURSOR_PREFIX = "slack:";
-/** The channels this agent was outside of at the last sweep, kept beside the
- *  cursor in the same file and read by the same reader. */
+/**
+ *  The same file stores the cursor beside the channels that this agent was outside
+ *  of during the last sweep, and the same reader reads them.
+ */
 const SLACK_SKIPPED_PREFIX = "slack-skipped:";
 
 function readSlackState(io: Io, name: string): { cursor: Record<string, string>; skipped: string[] } {
@@ -1653,7 +1813,10 @@ function readSlackState(io: Io, name: string): { cursor: Record<string, string>;
       skipped: Array.isArray(sk) ? sk.filter((x): x is string => typeof x === "string") : [],
     };
   } catch {
-    /* absent or corrupt cursor: a fresh per-channel ledger, drain from the start */
+    /**
+     *  If the cursor is absent or corrupt, the system creates a fresh per-channel
+     *  ledger and drains from the start.
+     */
   }
   return { cursor: {}, skipped: [] };
 }
@@ -1666,38 +1829,48 @@ function writeSlackCursor(io: Io, name: string, perChannel: Record<string, strin
   const p = cursorPath(io, name, true);
   let j: Record<string, unknown> = {};
   try {
-    // From where the values ARE; see the note in writeCursor.
+    // Values are taken from where they are. See the note in `writeCursor`.
     j = JSON.parse(readFileSync(cursorPath(io, name), "utf8")) as Record<string, unknown>;
   } catch {
-    /* absent cursor file is a fresh ledger */
+    /**
+     *  An absent cursor file is a fresh ledger.
+     */
   }
   j[`${SLACK_CURSOR_PREFIX}${name}`] = perChannel;
   if (skipped !== undefined) j[`${SLACK_SKIPPED_PREFIX}${name}`] = skipped;
-  // THE DIRECTORY OF THE FILE BEING WRITTEN. This made the cwd `.scramble`
-  // whatever path `p` resolved to, so on a host where the cursor lives beside
-  // the config the write would fail for a directory that does not exist yet.
+  // The system used the directory of the file being written. This made the current
+  // working directory `.scramble` whatever path `p` resolved to, so on a host where
+  // the cursor lives beside the config, the write would fail for a directory that
+  // does not exist yet.
   mkdirSync(dirname(p), { recursive: true });
   writeFileSync(p, JSON.stringify(j));
 }
 
-/** A Slack ts (`seconds.microseconds`) as a comparable number; -1 when it does
- *  not parse so it can never win a "newest" comparison. */
+/**
+ *  The parser converts a Slack ts (`seconds.microseconds`) into a comparable
+ *  number, and returns -1 when it does not parse so it can never win a "newest"
+ *  comparison.
+ */
 function slackTs(ts: string): number {
   const n = Number.parseFloat(ts);
   return Number.isFinite(n) ? n : -1;
 }
 
-/** The newer of two ts values; an undefined cursor counts as the oldest. */
+/**
+ *  The comparison selects the newer of two timestamp (`ts`) values. An undefined
+ *  cursor counts as the oldest timestamp.
+ */
 function newerTs(a: string | undefined, b: string): string {
   if (a === undefined || slackTs(b) > slackTs(a)) return b;
   return a;
 }
 
 async function slackCmdNext(argv: string[], io: Io): Promise<number> {
-  // A STALE CONFIG ANNOUNCES ITSELF ON THE PATH IT BREAKS. An agent onboarded
-  // before a fix keeps running and silently lacks it, so the delivery verbs, the
-  // ones a mention has to travel through, print the one line that names the
-  // repair. Costs nothing: it reads the config already being loaded.
+  // A stale configuration announces itself on the path it breaks. An agent
+  // onboarded before a fix keeps running and silently lacks it, so the delivery
+  // commands that a mention travels through print the one line that names the
+  // repair. This check costs nothing because it reads the configuration already
+  // being loaded.
   {
     const w = staleConfigWarning(loadSlackConfig(io), nameFor(parseArgs(argv).flags, io));
     if (w !== "") io.writeErr(w);
@@ -1715,9 +1888,9 @@ async function slackCmdNext(argv: string[], io: Io): Promise<number> {
   }
   const r = await s.backend.next(positionals, name, timeoutSec, (p) => io.writeErr(`slack: ${p}`));
   if (r.code === 64) return 64;
-  // code 1 means scramble could not look (the socket open was refused): the
-  // refusal was already reported on stderr, so surface it as a nonzero exit
-  // that a harness never mistakes for a quiet channel.
+  // Exit code 1 means scramble could not look because the socket open was refused.
+  // The refusal was already reported on stderr, so scramble surfaces a nonzero exit
+  // code that a harness never mistakes for a quiet channel.
   if (r.code === 1) return 1;
   if (r.line !== undefined) {
     if (status !== undefined) await settleStatus(deliverStatus(status, r.line, name));
@@ -1727,10 +1900,11 @@ async function slackCmdNext(argv: string[], io: Io): Promise<number> {
 }
 
 async function slackCmdListen(argv: string[], io: Io): Promise<number> {
-  // A STALE CONFIG ANNOUNCES ITSELF ON THE PATH IT BREAKS. An agent onboarded
-  // before a fix keeps running and silently lacks it, so the delivery verbs, the
-  // ones a mention has to travel through, print the one line that names the
-  // repair. Costs nothing: it reads the config already being loaded.
+  // A stale configuration announces itself on the path it breaks. An agent
+  // onboarded before a fix keeps running and silently lacks it, so the delivery
+  // commands that a mention travels through print the one line that names the
+  // repair. This check costs nothing because it reads the configuration already
+  // being loaded.
   {
     const w = staleConfigWarning(loadSlackConfig(io), nameFor(parseArgs(argv).flags, io));
     if (w !== "") io.writeErr(w);
@@ -1763,10 +1937,13 @@ async function slackCmdListen(argv: string[], io: Io): Promise<number> {
   }
 }
 
-/** Local-backend `message check`: drain the agent's pending messages and
- *  advance the client-side cursor. Slightly non-blocking: fetch the pending
- *  list, print one JSON line per message, record the highest seq in
- *  `.scramble/cursor.json`, exit 0. Nothing pending prints nothing and exits 0. */
+/**
+ *  The local-backend `message check` command drains the agent's pending messages
+ *  and advances the client-side cursor. The command is slightly non-blocking: it
+ *  fetches the pending list, prints one JSON line per message, records the highest
+ *  seq in `.scramble/cursor.json`, and exits 0. If nothing is pending, the command
+ *  prints nothing and exits 0.
+ */
 async function messageCheckLocal(flags: Map<string, string>, io: Io): Promise<number> {
   const name = nameFor(flags, io);
   const status = statusTracker(io, "local");
@@ -1792,21 +1969,24 @@ async function messageCheckLocal(flags: Map<string, string>, io: Io): Promise<nu
   return 0;
 }
 
-/** Slack-backend `message check`: drain every configured channel from the
- * agent's per-channel Slack cursor, exactly as the local path drains a pending
- * list, which makes this the direct mirror of `messageCheckLocal`. Slack has no
- * server-held per-agent inbox and no global sequence, so the cursor is the
- * conversation ts per channel, kept client-side in `.scramble/cursor.json`
- * under a namespaced key. Print one JSON line per drained message in the same
- * shape `listen` prints (with a `mentioned` flag for THIS agent), set the
- * working status for addressed lines exactly as the local path does, advance
- * the cursor to the newest line seen per channel, and exit 0. A broken or
- * missing config is REPORTED. */
+/**
+ *  The Slack backend for `message check` drains every configured channel starting
+ *  from the agent's per-channel Slack cursor, matching how the local path drains a
+ *  pending list, which makes this command the direct mirror of `messageCheckLocal`.
+ *  Because Slack has no server-held per-agent inbox and no global sequence, the
+ *  cursor is the conversation `ts` timestamp per channel, stored client-side in
+ *  `.scramble/cursor.json` under a namespaced key. The command prints one JSON line
+ *  for each drained message in the format that `listen` prints, includes a
+ *  `mentioned` flag for this agent, sets the working status for addressed lines
+ *  exactly as the local path does, advances the cursor to the newest line seen per
+ *  channel, and exits 0. The command reports a broken or missing configuration.
+ */
 async function messageCheckSlack(flags: Map<string, string>, io: Io): Promise<number> {
-  // A STALE CONFIG ANNOUNCES ITSELF ON THE PATH IT BREAKS. An agent onboarded
-  // before a fix keeps running and silently lacks it, so the delivery verbs, the
-  // ones a mention has to travel through, print the one line that names the
-  // repair. Costs nothing: it reads the config already being loaded.
+  // A stale configuration announces itself on the path it breaks. An agent
+  // onboarded before a fix keeps running and silently lacks it, so the delivery
+  // commands that a mention travels through print the one line that names the
+  // repair. This check costs nothing because it reads the configuration already
+  // being loaded.
   {
     const w = staleConfigWarning(loadSlackConfig(io), nameFor(flags, io));
     if (w !== "") io.writeErr(w);
@@ -1832,48 +2012,53 @@ async function messageCheckSlack(flags: Map<string, string>, io: Io): Promise<nu
   const ids = s.backend.identities(name);
   let unreachable = 0;
   let drained = 0;
-  // THE LINE COUNT, SAID BY THE DRAIN. `drained` counts CHANNELS, and nothing here
-  // stated how many lines went out, so I read the highest `seq` in the output as a
-  // count and published 211 for a tick that delivered 165: seq is per-drain and
-  // skips the lines the drain passes over, including this agent's own sends.
+  // The drain reports line counts. The metric `drained` counts channels, and nothing
+  // here stated how many lines went out, so the operator read the highest `seq` in
+  // the output as a count and published 211 for a tick that delivered 165. The `seq`
+  // value is per-drain and skips the lines the drain passes over, including this
+  // agent's own sends.
   let delivered = 0;
-  // What I have already said that today's rules would refuse.
+  // Today's rules reject earlier statements.
   const selfHits: string[] = [];
-  // WHAT THIS AGENT IS IN, unioned with what the config names. The sweep used to
-  // walk cfg.channels alone, a hand-kept map in a config several agents share:
-  // a peer removed two entries while testing resolution and this sweep stopped
-  // covering the channel the operator talks to me in, reporting "none of the 3
-  // configured channels are readable" while the listener kept delivering, so
-  // nothing looked broken. The config still contributes, because a name mapped
-  // there may be a DM or a conversation the listing does not return.
+  // The sweep inspects the union of the channels this agent is in and the channels
+  // named in the configuration. The sweep previously walked only `cfg.channels`,
+  // a manually maintained map in a configuration that several agents share. When a
+  // peer removed two entries while testing resolution, this sweep stopped covering
+  // the channel that the operator uses to talk to the agent. The sweep reported
+  // "none of the 3 configured channels are readable" while the listener continued
+  // delivering messages, so nothing looked broken. The configuration still
+  // contributes channels, because a name mapped there may be a direct message or a
+  // conversation that the channel listing does not return.
   const mine = await s.backend.myChannels(name);
   if (mine.problem !== undefined) io.writeErr(`slack: ${mine.problem}`);
-  // A CHANNEL THIS AGENT IS NOT IN IS NOT A FAULT, and it was reported as one. The config is shared
-  // by every agent on a host, so each sweep walked the other agents' channels and printed `slack:
-  // <name>: channel_not_found` for each, every time. An agent reported two such lines on every
-  // check, for channels it had never been in: "It reads like a fault every time".
+  // An agent missing from a channel is not a fault, although the system previously
+  // reported it as one. Because every agent on a host shares the configuration, each
+  // sweep walked channels belonging to other agents and printed
+  // `slack: <name>: channel_not_found` for each channel on every run. An agent
+  // reported two such lines on every check for channels it had never joined.
   //
-  // Classified with the membership listing this loop already fetched, and
-  // reported ONCE at the end. When that listing FAILED there is nothing to
-  // classify with, so every channel stays loud: a filter that cannot tell the
-  // two apart must not choose the quiet answer.
+  // The loop now classifies channels using the membership listing it already
+  // fetched, and reports once at the end of the run. When that listing fails, the
+  // loop has nothing to classify with, so every channel stays loud: a filter that
+  // cannot tell the two apart must not choose the quiet answer.
   const memberOf = new Set(mine.names);
   const canClassify = mine.problem === undefined;
   const notMine: string[] = [];
   for (const channel of [...new Set([...Object.keys(cfg.channels), ...mine.names])].sort()) {
     let newestOwn: string | undefined;
     const cursor = started[channel];
-    // `oldest` is inclusive in Slack, so re-filter to strictly-newer lines: the
+    // Slack treats `oldest` as inclusive, so re-filter for strictly newer lines. The
     // cursor line itself must not re-drain on a repeat `message check`.
     const r = await s.backend.history(channel, cursor === undefined ? undefined : cursor, name, true);
     for (const p of r.problems) io.writeErr(`slack: ${p}`);
     if (r.code !== 0) {
-      // ONE UNREACHABLE CHANNEL MUST NOT SILENCE THE REST. This loop walks EVERY
-      // configured channel, the config is shared by every agent on the host, and
-      // each is invited to different ones, so a channel this agent is not in is
-      // the normal case, with no fault behind it. Failing the whole drain there meant
-      // an agent with one uninvited channel drained NOTHING and said
-      // `read failed`, which a sweeping agent cannot tell from a quiet channel.
+      // An unreachable channel must not silence the remaining channels. This loop walks
+      // every configured channel. Every agent on the host shares the configuration, and
+      // each agent is invited to different channels, so a channel this agent is not in
+      // is the normal case with no fault behind it. Failing the entire drain there
+      // meant
+      // an agent with one uninvited channel drained nothing and reported `read failed`,
+      // which a sweeping agent cannot tell from a quiet channel.
       const notAMember =
         canClassify && !memberOf.has(channel) && /channel_not_found|not_in_channel/.test(r.error ?? "");
       if (notAMember) {
@@ -1888,38 +2073,41 @@ async function messageCheckSlack(flags: Map<string, string>, io: Io): Promise<nu
       cursor === undefined ? r.messages : r.messages.filter((m) => slackTs(m.ts) > slackTs(cursor));
     let newest: string | undefined = cursor;
     for (const m of fresh) {
-      // The cursor advances past EVERY fresh line, including a skipped one, so
-      // a repeated sweep never re-reads an own message forever.
+      // The cursor advances past every new line, including any skipped line, so a
+      // repeated sweep never re-reads its own message forever.
       newest = newerTs(newest, m.ts);
-      // The SAME identity set the backend delivers with: a mention of this
-      // agent's Slack handle addresses this agent, and computing it here from
-      // the name alone is what made a real mention arrive with mentioned:false.
-      // The BACKEND decides this for a drain, including a thread the agent is in,
-      // which a name match here cannot see. No local fallback: a second way to
-      // compute `mentioned` is a second answer that will disagree with the first.
+      // The system uses the same identity set that the backend delivers. A mention of
+      // this agent's Slack handle addresses the agent. Computing mention status locally
+      // from the name alone caused a real mention to arrive with mentioned:false. The
+      // backend determines this state for a drain, including thread membership that a
+      // local name match cannot see. The system provides no local fallback, because a
+      // second way to compute `mentioned` produces an answer that disagrees with the
+      // first.
       const mentioned = (m as { mentioned?: boolean }).mentioned === true;
       const line = { ...m, mentioned };
-      // `message check` is a DELIVERY verb: its drain hands the agent what has
-      // ARRIVED FOR it, and its own post has not arrived for anybody. Skip the
-      // line whose resolved sender is the draining agent, by the same name
-      // comparison `listen` and `next` use, so an agent sweeping does not read
-      // its own last message as new traffic. `message read` is a transcript and
-      // keeps every line. The DELIVERY drain is the only path that filters.
-      // `from` is the RESOLVED sender, which for an app is its handle, so
-      // comparing against the scramble name alone let an agent drain its own
-      // messages back.
+      // The `message check` command delivers messages that have arrived for an agent.
+      // Because an agent's own post has not arrived for anybody, the command skips the
+      // line whose resolved sender is the draining agent. It applies the same name
+      // comparison that `listen` and `next` use, so an agent sweeping does not read its
+      // own last message as new traffic. The `message read` command provides a
+      // transcript
+      // and keeps every line. The delivery drain is the only path that filters. The
+      // `from` field contains the resolved sender, which is an app's handle, so
+      // comparing against the scramble name alone let an agent drain its own messages
+      // back.
       if (ids.includes(m.from)) {
-        // MY OWN LINES ARE READ BACK AGAINST TODAY'S RULES. The sweep walks them
-        // anyway on its way past, and every rule in this file was added AFTER a
-        // message had already gone out carrying what it bans, so the messages
-        // already sent are the evidence for whether the newest rule was needed.
+        // The sweep reads these lines back against current rules during its pass. Every
+        // rule in this file was added after a message carrying what it bans had already
+        // gone out, so previously sent messages provide the evidence for whether the
+        // newest rule was needed.
         //
-        // The operator, having caught three of these in a row: "You need to
-        // understand this general pattern and use the message check to guard
-        // it." A rule that only guards the NEXT message leaves every earlier
-        // one standing in the channel, unmarked, as though it were fine. MY
-        // NEWEST LINE HERE ANSWERS EVERYTHING OLDER. A reply is a reply whether
-        // or not it went through this CLI while the ledger existed.
+        // Three consecutive occurrences require the message check to guard this general
+        // pattern. A rule that guards only the next message leaves every earlier
+        // message
+        // standing in the channel, unmarked, as though it were fine. The newest line
+        // here
+        // answers all older messages. A reply is a reply whether or not it went through
+        // this CLI while the ledger existed.
         newestOwn = newerTs(newestOwn, m.ts);
         const late = lintLanguage(m.text ?? "");
         if (late.length > 0) {
@@ -1943,15 +2131,16 @@ async function messageCheckSlack(flags: Map<string, string>, io: Io): Promise<nu
     }
     drained += 1;
   }
-  // THE SKIPPED SET RIDES WITH THE CURSOR, written by the same call, so the
-  // next sweep can tell a moved set from a standing one.
+  // The same call writes the skipped set with the cursor, so the next sweep can
+  // tell a moved set from a standing one.
   writeSlackCursor(io, name, next, [...notMine].sort());
-  // SAID ON EVERY SWEEP, zero included: a tick that delivered nothing is the state
-  // an agent wants confirmed, and a count nobody prints gets inferred from the
-  // records instead.
-  // `drained` COUNTS CHANNELS READ, and a channel with nothing new is one of them,
-  // so the line says read and never delivered-from: the first wording reported "from
-  // 1 channel" for a sweep that carried nothing.
+  // The output appears on every sweep, including sweeps with a count of zero. A tick
+  // that delivered nothing is the state an agent wants confirmed, and an unprinted
+  // count gets inferred from the records.
+  //
+  // `drained` counts channels read, and a channel with nothing new is one of them,
+  // so the line states that channels were read and omits delivery phrasing. The
+  // first wording reported "from 1 channel" for a sweep that carried nothing.
   io.writeErr(`check: ${delivered} line(s) delivered, ${drained} channel(s) read.`);
   if (selfHits.length > 0) {
     io.writeErr(
@@ -1961,31 +2150,33 @@ async function messageCheckSlack(flags: Map<string, string>, io: Io): Promise<nu
         `Correct them in the channel where they are still standing.`,
     );
   }
-  // ONE LINE FOR ALL OF THEM, AND ONLY WHEN THE SET CHANGES. This printed on
-  // every sweep, so a monitor guarding on `if [ -n "$out" ]` fired every tick:
-  // 123 of 187 ticks carried this line and nothing else. A line that repeats
-  // identically every fifteen minutes teaches its reader to skip the whole
-  // stream, which is where a real report goes to die.
+  // The process emits a single line for the full set, and only when the set changes.
+  // This line previously printed on every sweep, so a monitor guarding on
+  // `if [ -n "$out" ]` fired on every tick: 123 of 187 ticks carried this line and
+  // nothing else. A line that repeats identically every fifteen minutes teaches its
+  // reader to skip the entire stream, which obscures real reports.
   //
-  // The set is a standing fact about a shared config, so `doctor` prints it on
-  // every run and the sweep speaks when it MOVES: a channel this agent expected
-  // to be in stays findable, and the quiet ticks stay quiet.
+  // The set is a standing fact about a shared configuration, so `doctor` prints it
+  // on every run, and the sweep reports when the set changes: a channel this agent
+  // expected to be in stays findable, and the quiet ticks stay quiet.
   const skippedNow = [...notMine].sort();
   const setMoved = skippedNow.join("\u0000") !== startedSkipped.join("\u0000");
   if (notMine.length > 0 && setMoved) {
     io.writeErr(
       `slack: skipped ${notMine.length} channel(s) ${name} is not a member of: ${notMine.join(", ")}. ` +
         `The config is shared by the agents on this host, so these belong to another one. ` +
-        // THE LINE A HUMAN PASTES, already filled in. An agent read this list,
-        // learned a channel existed that it wanted, and had to ask which
-        // command to ask for; an app cannot add itself to a Slack conversation,
-        // so the only way in is a person typing this, and making them compose
-        // it is a round trip for nothing.
+        // The document provides the command line already filled in for a human to
+        // paste.
+        // An agent read this list, learned a channel existed that it wanted, and had to
+        // ask which command to request. An application cannot add itself to a Slack
+        // conversation, so a person must type this line, and making them compose it
+        // creates an unnecessary round trip.
         `If one of them is yours, ask a member of it to run:  /invite @${ids[1] ?? ids[0] ?? name}`,
     );
   }
-  // Every configured channel refused is a REPORT, never a silent exit 0: an
-  // agent invited to none of them must not read as a quiet workspace.
+  // The agent emits a REPORT whenever every configured channel is refused. It never
+  // exits silently with code 0, because an agent invited to none of the channels
+  // must not read as a quiet workspace.
   if (drained === 0 && unreachable > 0) {
     io.writeErr(
       `message check: none of the ${unreachable} configured channel(s) are readable by ${name}. ` +
@@ -1998,20 +2189,19 @@ async function messageCheckSlack(flags: Map<string, string>, io: Io): Promise<nu
 
 async function cmdMessageCheck(argv: string[], io: Io, backend: "local" | "slack"): Promise<number> {
   const { flags } = parseArgs(argv);
-  // THE SWEEP IS THE ACTIVE CALLER. It runs on a timer in every agent's
-  // harness, so the drift between a running listener and the installed copy is
-  // said here as well as watched by the listener. An agent whose listener fell
-  // six hours behind found out by running `doctor` for an unrelated reason, and
-  // their words for the gap: "the advisory needs an active caller more than it
-  // needs revised wording."
+  // The sweep operates as the active caller. It runs on a timer in every agent's
+  // harness, so this section reports the drift between a running listener and the
+  // installed copy, and the listener monitors that drift as well. An agent whose
+  // listener fell six hours behind discovered the gap by running `doctor` for an
+  // unrelated reason, demonstrating that the advisory requires an active caller.
   const code = backend === "slack" ? await messageCheckSlack(flags, io) : await messageCheckLocal(flags, io);
-  // AFTER THE DRAIN, so the drain's own report is what a reader sees first and
-  // these lines never sit ahead of a failure it names.
+  // This step runs after the drain, so the drain's own report is what a reader sees
+  // first and these lines never sit ahead of a failure it names.
   //
-  // THE SWEEP READS EACH LISTENER'S OWN COMMIT. My first version compared this
-  // process against the install, and a sweep launched from the shared launcher
-  // IS the install, so the line never fired: the caller I added was inert on
-  // every host that runs the launcher.
+  // The sweep reads each listener's own commit. An earlier version compared this
+  // process against the install. A sweep launched from the shared launcher is
+  // the install, so the line never fired, which means the added caller was inert
+  // on every host that runs the launcher.
   //
   // `listenersBehind` is the comparison `doctor` already makes, and it reads each
   // listener's own command line, which carries the commit directory it was
@@ -2030,9 +2220,9 @@ async function cmdMessageCheck(argv: string[], io: Io, backend: "local" | "slack
           changeBlock(behind[0]!.commit, installedChanges(io)),
       );
     }
-    // AND WHETHER ANYTHING IS ARMED AT ALL. Zero is the loud case: a listener on
-    // an older commit still delivers, and none at all means every mention waits
-    // for the next sweep.
+    // Verify whether anything is armed at all. A count of zero marks the loud case: a
+    // listener on an older commit still delivers, and having no listeners armed means
+    // every mention waits for the next sweep.
     if (liveListeners(procs, agentName).length === 0) {
       io.writeErr(
         `scramble: NO listener is running for ${agentName}, so nothing wakes this agent between ` +
@@ -2041,28 +2231,34 @@ async function cmdMessageCheck(argv: string[], io: Io, backend: "local" | "slack
       );
     }
   }
-  // WHAT IS STILL OWED, on every sweep. The timed check is the one thing that
-  // runs whatever the agent is doing, so the reminder about an unanswered
-  // message belongs here: "Inbox pending check can be done in the 15 minute
-  // message check monitor and prompt you any pending inbox item you have not
-  // replied. This avoids having to implement custom hook scripts for Claude and
-  // codex."
+  // The sweep reports what is still owed on every run. The timed check runs
+  // regardless of what the agent is doing, so the reminder about an unanswered
+  // message belongs in this check. The 15-minute message check monitor checks
+  // pending inbox items and prompts for any unanswered item. This avoids custom
+  // hook scripts for Claude and Codex.
   //
-  // It rides the drain, where a closing hook would be per client,
-  // and the same agent runs under more than one. The sweep is the product's own
-  // surface, so every client gets it.
+  // The check accompanies the drain. A closing hook would be per client, and the
+  // same agent runs under more than one client. Because the sweep is the product's
+  // own surface, every client receives it.
   //
-  // Printed AFTER the drain, so the lines just delivered are already counted,
-  // and on stderr, so the stdout contract stays one JSON line per message.
+  // The system prints the reminder after the drain, so the count includes the lines
+  // just delivered, and on stderr, so the stdout contract stays one JSON line per
+  // message.
   const owed = pendingInbox(inboxPath(slackConfigPath(io), nameFor(flags, io)));
   if (owed.length > 0) io.writeErr(pendingReport(owed, nameFor(flags, io)));
   return code;
 }
 
-/** The mirrored `message` family: `send`, `check`, `read`. Each dispatches to
- *  the selected backend below the verb parsing, and reports an unknown verb. */
-/** Collect every value passed for a REPEATABLE flag (`--attach a --attach b`),
- *  supporting both `--flag value` and `--flag=value` spellings. */
+/**
+ *  The mirrored `message` family consists of `send`, `check`, and `read`. Each
+ *  command dispatches to the selected backend below verb parsing and reports an
+ *  unknown verb.
+ */
+/**
+ *  The parser collects every value passed for a repeatable flag
+ *  (`--attach a --attach b`) and supports both `--flag value` and `--flag=value`
+ *  spellings.
+ */
 function collectValues(args: string[], flag: string): string[] {
   const out: string[] = [];
   for (let i = 0; i < args.length; i++) {
@@ -2078,15 +2274,19 @@ function collectValues(args: string[], flag: string): string[] {
 }
 
 type AttachResult =
-  /** `permalink` is Slack's link to the stored file, absent on the local
-   *  backend. The SEND path puts it in the message text, which is what makes
-   *  Slack attach the file to that message; without it the bytes sit in Slack's
-   *  storage attached to nothing. */
+  /**
+   *  `permalink` is Slack's link to the stored file and is absent on the local
+   *  backend. The SEND path places `permalink` in the message text, which makes Slack
+   *  attach the file to that message. Without it, the bytes sit in Slack's storage
+   *  attached to nothing.
+   */
   { ok: true; id: string; permalink?: string; ts?: string } | { ok: false; error: string };
 
-/** Upload one local file under the selected backend and return the file id the
- *  backend assigned (Slack's file id or a local ledger id). The `path` carries
- *  through so a session can read the bytes. */
+/**
+ *  Upload one local file to the selected backend and return the file id assigned
+ *  by that backend (a Slack file id or a local ledger id). The `path` carries
+ *  through so a session can read the bytes.
+ */
 async function attachmentUpload(
   path: string,
   targetChannel: string,
@@ -2098,10 +2298,10 @@ async function attachmentUpload(
   threadTs?: string,
 ): Promise<AttachResult> {
   if (backend === "slack") {
-    // THROUGH THE BACKEND, which owns channel resolution and mention conversion.
-    // This function used to read cfg.channels itself and hand the text to Slack
-    // raw, so an attach failed on a channel a plain send reached, and a name in
-    // the text notified nobody.
+    // Requests pass through the backend, which resolves channels and converts
+    // mentions. This function used to read cfg.channels itself and hand raw text to
+    // Slack, so an attach failed on a channel a plain send reached, and a name in the
+    // text notified nobody.
     const s = slackBackend(io);
     if (s.error !== undefined || s.backend === undefined) {
       return { ok: false, error: s.error ?? "slack backend unavailable" };
@@ -2114,9 +2314,12 @@ async function attachmentUpload(
   return { ok: true, id: r.record.id };
 }
 
-/** Resolve an attachment id to a local path, for `attachment view`: the local
- *  backend finds it in the filesDir ledger; the slack backend finds the file
- *  recorded there (inbound downloads arrive in filesDir under the file id). */
+/**
+ *  To resolve an attachment id to a local path for `attachment view`, the local
+ *  backend finds the entry in the filesDir ledger. The Slack backend locates the
+ *  file recorded there, where inbound downloads arrive in filesDir under their file
+ *  id.
+ */
 async function attachmentView(
   id: string,
   out: string | undefined,
@@ -2130,11 +2333,12 @@ async function attachmentView(
     if (out !== undefined) copyFileSync(rec.path, out);
     return { ok: true, path: finalPath };
   }
-  // NOT ON DISK: FETCH IT. Delivery no longer pulls the bytes of every file that
-  // passes through a channel, because three agents in one room each downloaded
-  // the same 41MB archive addressed to one of them, inside the delivery path, on
-  // a filesystem at 99%. The metadata always arrives, so the id on the line is
-  // enough to get the bytes when they are wanted.
+  // Fetch file contents on demand when data is not on disk. Delivery no longer
+  // downloads the bytes of every file that passes through a channel, because three
+  // agents in one room each downloaded the same 41MB archive addressed to one of
+  // them, inside the delivery path, on a filesystem at 99%. The metadata always
+  // arrives, so the id on the line is sufficient to fetch the bytes when they are
+  // wanted.
   if (backend !== "slack") return { ok: false, error: `no recorded attachment ${id}` };
   const cfg = loadSlackConfig(io);
   if (cfg === null) return { ok: false, error: `${slackConfigPath(io)} is missing or malformed` };
@@ -2161,9 +2365,11 @@ async function attachmentView(
   return { ok: true, path: finalPath };
 }
 
-/** The mirrored `attachment` verbs: `upload` and `view`, mirroring raft's
- *  grammar. `upload` prints the file id as one JSON line; `view` prints the
- *  path written. */
+/**
+ *  The mirrored `attachment` verbs, `upload` and `view`, mirror raft's grammar.
+ *  `upload` prints the file id as one JSON line, and `view` prints the path
+ *  written.
+ */
 async function cmdAttachment(args: string[], io: Io): Promise<number> {
   const { flags, positionals } = parseArgs(args);
   const sub = positionals[0];
@@ -2203,22 +2409,27 @@ async function cmdAttachment(args: string[], io: Io): Promise<number> {
   return 1;
 }
 
-/** `scramble version`: which commit this CLI IS, read from the COMMIT file the
- *  installer writes beside the source.
+/**
+ *  The `scramble version` command reports which commit this CLI is, reading the
+ *  value from the COMMIT file the installer writes beside the source.
  *
- *  An agent could not answer this before. `bun link` points the name on PATH at
- *  the maintainer's checkout, so `scramble` was whatever that tree happened to
- *  hold at the moment of the call, including a half-saved edit. The answer here
- *  says which copy is running and where it lives, and says RUNNING FROM A
- *  CHECKOUT when there is no COMMIT file, because that is the case where the
- *  version is a moving target. */
+ *  An agent could not answer this question before. `bun link` points the command
+ *  name on PATH at the maintainer's checkout, so `scramble` ran whatever that tree
+ *  held at the moment of the call, including a half-saved edit. The output now
+ *  states which copy is running and where that copy lives, and prints RUNNING FROM
+ *  A CHECKOUT when no COMMIT file exists, because the version is a moving target
+ *  in that case.
+ */
 function cmdVersion(io: Io): number {
   const dir = io.moduleDir ? io.moduleDir() : "";
   let commit = "";
   try {
     commit = readFileSync(join(dir, "COMMIT"), "utf8").trim();
   } catch {
-    /* no COMMIT file: this is a checkout, reported as such below */
+    /**
+     *  This directory contains no COMMIT file because this is a checkout, which the
+     *  output below reports as such.
+     */
   }
   if (commit === "") {
     io.write(JSON.stringify({ scramble: "running from a checkout", source: dir, commit: null }));
@@ -2232,29 +2443,35 @@ function cmdVersion(io: Io): number {
   return 0;
 }
 
-/** `scramble lint <file>...`, or the text on stdin: the SAME rules `message send`
- *  enforces, pointed at anything else worth checking.
+/**
+ *  The `scramble lint <file>...` command checks files or standard input against the
+ *  same rules that `message send` enforces.
  *
- * Operator: "the linter should be individually callable to check other
- * documents such as lark docs or markdown files." The rules belong to the send,
- * and a document going to the same people deserves the same reading, so the
- * verb reuses the rule list and owns no copy of it.
+ *  The command can run independently to check other documents, such as Lark docs or
+ *  Markdown files. Because a document going to the same audience requires the same
+ *  reading, the command reuses the rule list from `message send` and maintains no
+ *  copy of its own.
  *
- *  Prints `file:line: [label] "match"` and exits 1 when anything hit. */
-/** A source file with everything except its comment lines blanked, keeping
- *  every newline so an offset still names its own line. */
-/** One multi-line diagnostic/** One multi-line diagnostic, with its own key repeated onto every line after the
- *  first.
+ *  The command prints `file:line: [label] "match"` and exits with code 1 when any
+ *  rule matches.
+ */
+/**
+ *  The source file blanks all content except its comment lines and preserves
+ *  every newline, so an offset still names its own line.
+ */
+/**
+ *  A multi-line diagnostic repeats its own key on every line after the first.
  *
- *  THE EMITTER OWNS THIS. Call sites declare a key on the first line and stop
- *  there. I keyed the read-back block by
- *  hand and left three more bare, and an agent running the commands found two of
- *  them within the hour: `inbox pending` and `rewrites --near`. Any line the tool
- *  writes now carries the key its first line declares, which covers every block
- *  written from here on.
+ *  The emitter manages this repetition. Call sites declare a key on the first line
+ *  and stop there. When the read-back block was keyed by hand and three more
+ *  remained bare, an agent running the commands found two of them within the hour:
+ *  `inbox pending` and `rewrites --near`. Every line the tool writes now carries
+ *  the key declared on its first line, which covers every block written from this
+ *  point forward.
  *
- *  A first line with no `key:` prefix passes through untouched, and shows up in the
- *  output as a block a filter can still halve. */
+ *  A first line with no `key:` prefix passes through untouched, and shows up in
+ *  the output as a block a filter can still halve.
+ */
 export function autoKey(text: string): string {
   const first = text.split("\n", 1)[0] ?? "";
   const key = /^([a-z][a-z0-9-]*:)(?: |$)/.exec(first)?.[1];
@@ -2263,13 +2480,16 @@ export function autoKey(text: string): string {
   return [head, ...rest.map((line) => `${key} ${line}`)].join("\n");
 }
 
-/** The first line where two texts diverge, printable, or an empty string when
- *  they differ only in trailing lines nobody wrote.
+/**
+ *  The guard outputs the first printable line where two texts diverge, or an
+ *  empty string when they differ only in trailing lines that nobody wrote.
  *
- *  A GUARD PRINTS WHAT IT SAW, and "DIFFERS" with the whole stored text under it
- *  is a summary: the reader still has to find the divergence. Slack transforms
- *  what it stores (a bare `users.info` came back as an auto-link), and telling
- *  that apart from a dropped mention is the whole point of reading the line. */
+ *  A guard prints what it saw. Displaying "DIFFERS" with the whole stored text
+ *  under it provides a summary. The reader still has to find the divergence. Slack
+ *  transforms what it stores (a bare `users.info` came back as an auto-link), and
+ *  telling that apart from a dropped mention is the whole point of reading the
+ *  line.
+ */
 export function differenceLine(sent: string, stored: string): string {
   const a = sent.split("\n");
   const b = stored.split("\n");
@@ -2280,20 +2500,26 @@ export function differenceLine(sent: string, stored: string): string {
   return "";
 }
 
-/** The 16 hex of sha256 that a calibration row records for each of its two
- *  messages. */
+/**
+ *  A calibration row records 16 hexadecimal characters of the SHA-256 hash for
+ *  each of its two messages.
+ */
 export function textHash(text: string): string {
   return createHash("sha256").update(text).digest("hex").slice(0, 16);
 }
 
-/** Whether a re-read pair hashes to what the row recorded.
+/**
+ *  This check verifies whether a re-read pair produces the hash recorded in the
+ *  row.
  *
- *  A DIFFERENCE IS NOT DRIFT AND NOT A LIE. The recorded hash is of the payload a
- *  listener was handed; this reads the message back through `storedMessage`, which
- *  renders mentions and undoes Slack's escapes. Measured on the live table: both
- *  messages of one row match, one message of another row matches, and its
- *  neighbour differs while scoring exactly what it always did. So the verdict is
- *  reported and never counted as failure. */
+ *  A hash discrepancy represents an expected formatting change. The recorded hash
+ *  captures the payload delivered to a listener, while this check reads the message
+ *  back through `storedMessage`, which renders mentions and undoes Slack's escape
+ *  sequences. Measurements on the live table confirm that both messages in one
+ *  row match, one message in another row matches, and its neighbour differs while
+ *  scoring exactly what it always did. Therefore, the system reports the verdict
+ *  and never counts it as a failure.
+ */
 export function hashVerdict(
   recorded: [string, string] | undefined,
   read: string[],
@@ -2302,8 +2528,9 @@ export function hashVerdict(
 }
 
 export function maskToComments(text: string, style: "slash" | "hash" = "slash"): string {
-  // `hash` covers the shell scripts. Running that mask over TypeScript would read
-  // a private class field as prose, so the caller picks the style by extension.
+  // The `hash` style processes shell scripts. Running that mask over TypeScript
+  // would read a private class field as prose, so the caller selects the style by
+  // file extension.
   const opener = style === "hash" ? /^\s*#/ : /^\s*(\/\/|\*|\/\*)/;
   return text
     .split("\n")
@@ -2326,19 +2553,19 @@ async function cmdLint(argv: string[], io: Io): Promise<number> {
       try {
         sources.push({ name: p, text: readFileSync(p, "utf8") });
       } catch (e) {
-        // A FILE THAT COULD NOT BE READ IS A FAILURE, never a silent pass: a
-        // lint that skips what it cannot open reports clean on a typo.
+        // The system treats an unreadable file as a failure and refuses to pass
+        // silently,
+        // because a linter that skips files it cannot open reports clean on a typo.
         io.writeErr(`lint: cannot read ${p}: ${String(e)}`);
         return 1;
       }
     }
   }
-  // `--comments` LINTS THE COMMENT TEXT OF A SOURCE FILE. The operator, having
-  // read a banned form in a comment I had shipped an hour earlier: "Clean the
-  // comments first." Every rule here was written for prose a person reads, and
-  // a comment is prose a person reads.
+  // The `--comments` flag lints the comment text of a source file. Clean the
+  // comments because every rule here was written for prose a person reads, and a
+  // comment is prose a person reads.
   //
-  // Non-comment lines are blanked in place, so the offsets still name the real
+  // The tool blanks non-comment lines in place, so the offsets still name the real
   // line, and code that happens to contain a banned word (the rule table's own
   // patterns) is out of scope.
   const commentsOnly = argv.includes("--comments");
@@ -2346,14 +2573,14 @@ async function cmdLint(argv: string[], io: Io): Promise<number> {
   for (const src of sources) {
     const hash = /\.(sh|bash|py|toml|yml|yaml)$/.test(src.name);
     const text = commentsOnly ? maskToComments(src.text, hash ? "hash" : "slash") : src.text;
-    // THE REPO'S OWN TEXT TAKES THE REPO'S RULES. A file on disk is linted with
-    // CODE_RULES, which add the dated-log ban. Text piped in on stdin is a
-    // message, and a message may carry a date as evidence.
+    // The repository applies its own rules to its own text. The linter checks files on
+    // disk with CODE_RULES, which add the ban on dated logs. Text piped in on stdin is
+    // a message, and a message may carry a date as evidence.
     //
-    // `--dates` narrows the check to the dated-log rule, which is how the tests
-    // and the scripts are checked: the ban applies to every file the repo ships,
-    // and the prose rules had never run over those directories, where they find
-    // 121 older hits that are their own piece of work.
+    // The `--dates` flag restricts the check to the dated-log rule. The suite uses
+    // this option to verify the tests and the scripts, because the ban applies to
+    // every file the repository ships. The prose rules had never run over those
+    // directories, where they find 121 older hits that remain separate work.
     const rules = argv.includes("--dates") ? DATE_RULES : src.name === "(stdin)" ? undefined : CODE_RULES;
     for (const h of lintLanguage(text, rules)) {
       io.writeErr(`${src.name}:${lineOf(text, h.index)}: [${h.label}] ${JSON.stringify(h.match)}`);
@@ -2364,32 +2591,38 @@ async function cmdLint(argv: string[], io: Io): Promise<number> {
   return total === 0 ? 0 : 1;
 }
 
-/** `scramble peers [--same-dir]`: who else is running, on which host, in which
- *  directory.
+/**
+ *  The `scramble peers [--same-dir]` command reports which other agents run,
+ *  which host each agent runs on, and which directory each agent uses.
  *
- * The operator: "Does each agent record its hostname and working directory on
- * scramble and an agent may know its same directory peers?"
+ *  Each agent records its hostname and working directory on `scramble`, so an agent
+ *  may know its peers in the same directory.
  *
- * `--same-dir` matches HOST AND directory together. The path alone is not an
- * identity: two agents measured the SAME absolute path on two machines, backed
- * by different filesystems, and neither could see the other's files. Grouping
- * by path would have told them they shared a directory when they shared a
- * string. */
-/** `scramble rewrite [<file>]`: what the rewriter would make of this text.
+ *  The `--same-dir` flag matches the host and the directory together. The path
+ *  alone does not establish identity: two agents measured the same absolute path on
+ *  two machines backed by different filesystems, and neither could see the other's
+ *  files. Grouping by path would have told them they shared a directory when they
+ *  shared a string.
+ */
+/**
+ *  `scramble rewrite [<file>]` previews what the rewriter produces from the text.
  *
- *  Asked for by the operator about the instruction file itself: "Rewrite prompt
- *  itself again should go through rewriter." Nothing here can send, so an author
- *  can read the model's answer, and any file in the repo can be put through the
- *  rules it asks other people to follow.
+ *  The command cannot send messages, so an author can inspect the model's answer,
+ *  and the tool can run any file in the repository through the rules it enforces
+ *  for others, including the instruction prompt itself.
  *
- *  This writes no row to the ledger. That file counts sends that met the
- *  rewriter, and a preview is not a send. */
-/** Rewrite one repository document for an outside reader, one section per model
- *  call, and print the assembled document.
+ *  This command writes no row to the ledger. The ledger counts sends that met the
+ *  rewriter, while a preview produces text without sending.
+ */
+/**
+ *  The process rewrites a repository document for an outside reader, sends one
+ *  section per model call, and prints the assembled document.
  *
- *  A SECTION THE GUARDS REFUSE KEEPS ITS ORIGINAL TEXT, and the refusal prints on
- *  stderr naming the heading. A pass that silently dropped a section it could not
- *  rewrite would hand back a shorter document that reads as finished. */
+ *  If safety guards refuse a section, that section keeps its original text, and the
+ *  system prints the refusal to stderr with the heading name. Silently dropping a
+ *  section that the model cannot rewrite would produce an incomplete document that
+ *  appears finished.
+ */
 async function cmdRewriteDocument(text: string, name: string, io: Io, noGuards = false): Promise<number> {
   const dir = io.moduleDir ? io.moduleDir() : "src";
   const template = readDocumentTemplate(dir);
@@ -2397,11 +2630,11 @@ async function cmdRewriteDocument(text: string, name: string, io: Io, noGuards =
     io.writeErr(`document: ${template.why}`);
     return 1;
   }
-  // ONE INSTRUCTION FILE, AND NO CHANNEL REGISTER. The first version appended the
-  // external register block, which describes a Slack channel's audience: "holds
-  // people who do not read this repository, including cross-functional
-  // stakeholders". The model wrote that description into the document, the
-  // instruction-echo guard caught it, and every section of the first run came back
+  // Use a single instruction file without a channel register. The first version
+  // appended the external register block, which describes a Slack channel's audience
+  // as people who do not read this repository, including cross-functional
+  // stakeholders. The model wrote that description into the document, the
+  // instruction-echo guard detected it, and every section of the first run was
   // refused. The rules an outside reader needs live in prompts/document.md.
   const cfg = rewriteConfig(io.env);
   if (cfg.key === undefined) {
@@ -2420,10 +2653,10 @@ async function cmdRewriteDocument(text: string, name: string, io: Io, noGuards =
       continue;
     }
     let chosen = chooseText(section, said, instructionOf(template.text), { document: true });
-    // ONE MORE ASK, CARRYING WHAT THE GUARD SAW. Every guard here fires on
-    // something the MODEL did, so the model is the party that can fix it. The
-    // message path has asked twice since two agents watched the rewriter reinsert a
-    // banned form and lost the send for it.
+    // This request includes what the guard observed. Every guard triggers on an action
+    // the model took, so the model can fix it. The message path has made two requests
+    // since two agents observed the rewriter reinsert a banned form and lost the
+    // transmission because of it.
     if ("refuse" in chosen && chosen.retry !== undefined) {
       const again = await rewriteWith(io.fetch, cfg, `${composePrompt(template.text, section)}\n\n${chosen.retry}`);
       chosen = chooseText(section, again, instructionOf(template.text), { document: true });
@@ -2444,8 +2677,10 @@ async function cmdRewriteDocument(text: string, name: string, io: Io, noGuards =
   return 0;
 }
 
-/** The lines of a file with every comment run removed, which a comment rewrite has
- *  to leave untouched. */
+/**
+ *  A comment rewrite must leave untouched the lines of a file with every comment
+ *  run removed.
+ */
 function codeLines(text: string, style: "slash" | "hash"): string[] {
   const lines = text.split("\n");
   const drop = new Set<number>();
@@ -2455,11 +2690,14 @@ function codeLines(text: string, style: "slash" | "hash"): string[] {
   return lines.filter((_l, i) => !drop.has(i));
 }
 
-/** Rewrite every comment in a source file and print the file.
+/**
+ *  The program rewrites every comment in a source file and prints the file.
  *
- *  THE CODE IS COMPARED BEFORE ANYTHING IS PRINTED. A rewrite that reflowed a line
- *  of code would be a silent edit to a program, so the lines outside the comments
- *  are compared byte for byte and any difference refuses the whole file. */
+ *  The program compares the code before it prints anything. A rewrite that
+ *  reflowed a line of code would be a silent edit to a program, so the program
+ *  compares the lines outside the comments byte for byte and refuses the whole
+ *  file on any difference.
+ */
 async function cmdRewriteComments(text: string, name: string, io: Io, noGuards = false): Promise<number> {
   const dir = io.moduleDir ? io.moduleDir() : "src";
   const template = readDocumentTemplate(dir);
@@ -2513,9 +2751,9 @@ async function cmdRewriteComments(text: string, name: string, io: Io, noGuards =
 }
 
 async function cmdRewrite(argv: string[], io: Io): Promise<number> {
-  // THE PARSER KNOWS WHICH FLAGS TAKE A VALUE, and a hand-rolled "first argument
-  // without dashes" read `--tier external` as the file name and tried to open a
-  // file called external.
+  // The parser tracks which flags take a value. A custom implementation that
+  // inspected the first argument without dashes read `--tier external` as the file
+  // name and tried to open a file called external.
   const parsed = parseArgs(argv);
   const file = parsed.positionals[0];
   let text: string;
@@ -2530,10 +2768,9 @@ async function cmdRewrite(argv: string[], io: Io): Promise<number> {
     io.writeErr(`rewrite: ${file ?? "stdin"} is empty, so there is nothing to rewrite.`);
     return 1;
   }
-  // `--why` ASKS FOR THE DIAGNOSIS. The operator, about a refusal this tool
-  // prints: "Use gemini 3.7 to find why the communication is wrong." A rewrite
-  // hands back a better version and leaves the author guessing which habit
-  // produced the worse one.
+  // The `--why` flag requests the diagnosis. When this tool prints a refusal,
+  // gemini 3.7 finds why the communication is wrong. A rewrite returns a better
+  // version and leaves the author guessing which habit produced the worse one.
   if (argv.includes("--why")) {
     const cfg = rewriteConfig(io.env);
     if (cfg.key === undefined) {
@@ -2548,15 +2785,16 @@ async function cmdRewrite(argv: string[], io: Io): Promise<number> {
     io.write(said.text.endsWith("\n") ? said.text : `${said.text}\n`);
     return 0;
   }
-  // `--document` REWRITES A REPOSITORY DOCUMENT, section by section. The message
-  // instruction caps prose at 300 words and asks for a Slack message, so pointing
-  // it at a design document would delete most of the document. This path reads
-  // prompts/document.md, adds the register block, and sends one section per call.
+  // The `--document` flag rewrites a repository document section by section.
+  // Because the message instruction limits prose to 300 words and requests a Slack
+  // message, running it against a design document would delete most of the
+  // document. This path reads prompts/document.md, adds the register block, and
+  // transmits one section per call.
   if (argv.includes("--document")) {
     return cmdRewriteDocument(text, file ?? "stdin", io, argv.includes("--once"));
   }
-  // `--comments` REWRITES THE PROSE OF EVERY COMMENT and leaves every line of code
-  // byte for byte. A comment is prose a person reads.
+  // The `--comments` flag rewrites the prose of every comment and leaves every line
+  // of code byte for byte. A comment is prose that a person reads.
   if (argv.includes("--comments")) {
     return cmdRewriteComments(text, file ?? "stdin", io, argv.includes("--once"));
   }
@@ -2565,10 +2803,10 @@ async function cmdRewrite(argv: string[], io: Io): Promise<number> {
     io.writeErr(`rewrite: no model is configured; set SCRAMBLE_REWRITE_KEY to turn it on.`);
     return 1;
   }
-  // NO SEND FRAMING HERE. `chosen.refuse` ends with "Rewrite your message and
-  // send again", which is a lie in a verb that never sends. The guard's name and
-  // the model's answer come out of the same refusal, so the two readings cannot
-  // disagree about what happened.
+  // Do not include send framing here. The `chosen.refuse` output ends with
+  // "Rewrite your message and send again", which misstates the behavior of a verb
+  // that never sends. The guard's name and the model's answer come out of the same
+  // refusal, so the two readings cannot disagree about what happened.
   if ("refuse" in chosen) {
     if (chosen.attempt !== undefined) io.write(chosen.attempt);
     io.writeErr(`rewrite: the guards would stop this from going out: ${chosen.why}. Nothing was sent.`);
@@ -2583,27 +2821,30 @@ async function cmdRewrite(argv: string[], io: Io): Promise<number> {
   return 0;
 }
 
-/** `scramble rewrites`: what the rewriter has done on this host.
+/**
+ *  `scramble rewrites` reports what the rewriter has done on this host.
  *
- *  Every claim about whether the rewriter helps has been a single case somebody
- *  remembered. This counts the outcomes and names which guard fires most. */
+ *  Every claim about whether the rewriter helps has relied on a single case
+ *  someone remembered. This command counts the outcomes and identifies which guard
+ *  fires most often.
+ */
 async function cmdRewrites(argv: string[], io: Io): Promise<number> {
-  // `--as` NAMES ONE AGENT'S ROWS. Without it every agent on the host is
-  // counted, with their names on the first line, because the file is shared and
-  // an unnamed count reads as the reader's own.
+  // The `--as` flag selects rows for one named agent. Without `--as`, the command
+  // counts every agent on the host and places their names on the first line, because
+  // the file is shared and an unnamed count reads as the reader's own.
   const { flags } = parseArgs(argv);
-  // `--near` READS THE DUPLICATE SCORES this agent's sends measured. The
-  // threshold in use rests on corpus runs three agents did by hand, and an agent
-  // who writes English by the operator's rule cannot produce Chinese samples on
-  // request. They said the tool can gather them, so every send records what it
-  // measured and this reads the pile back.
-  // `--calibrate` RE-MEASURES EVERY MEASURED ROW FROM SLACK. An agent read the
-  // table, ran the same function I run, and named the flaw: two readers calling
-  // one function on one table measure the readers. The table held my synthetic
-  // pair labelled as the founding incident for an hour, and any number of
-  // agreeing readers would have reproduced that. A row that names its two
-  // messages can be fetched and scored again, which is the only reading that
-  // does not come from me.
+  // The `--near` flag reads the duplicate scores that message sends measured. The
+  // threshold in use rests on manual corpus runs that three agents performed, and
+  // an agent who writes English by the operator's rule cannot produce Chinese
+  // samples on request. The tool can gather these samples, so every send records
+  // what it measured, and `--near` reads the accumulated records back.
+  //
+  // The `--calibrate` flag re-measures every recorded row from Slack. When two
+  // readers execute the same function on one table, the operation measures the
+  // readers. The table held the agent's synthetic pair labeled as the founding
+  // incident for an hour, and any number of agreeing readers would have reproduced
+  // that label. The system can fetch and score any row that names its two messages
+  // again, which provides the only reading that does not originate from this agent.
   if (flags.has("calibrate")) {
     const who = flags.get("as") ?? nameFor(flags, io);
     const s = slackBackend(io);
@@ -2611,27 +2852,27 @@ async function cmdRewrites(argv: string[], io: Io): Promise<number> {
       io.writeErr(s.error ?? "slack unavailable");
       return 1;
     }
-    // EACH ROW NAMES ITS OWN CHANNEL, so this verb takes no target. `--target`
-    // was the fallback while rows carried only timestamps, and a test requires
-    // every measured row to carry a channel, which left the fallback and its
-    // refusal unreachable. A ts is unique inside one conversation, so the channel
-    // belongs to the row.
+    // Each row specifies its own channel, so this verb takes no target. The
+    // `--target` flag served as the fallback while rows carried only timestamps,
+    // and a test requires every measured row to carry a channel, which left the
+    // fallback and its refusal unreachable. A timestamp is unique inside one
+    // conversation, so the channel belongs to the row.
     let drifted = 0;
     let differing = 0;
     for (const row of CALIBRATION) {
       if (row.source !== "measured" || row.ts === undefined) continue;
-      // A ROW WHOSE MESSAGES ARE GONE IS NOT A FAILURE. The first message of the
-      // 0.968 pair was deleted after the duplicate report that named it, so the
-      // row stands on the reading taken while both messages lived, and a run that
-      // called that drift would cry wolf on every future run.
+      // A row remains valid when its messages are gone. The first message of the 0.968
+      // pair was deleted after the duplicate report that named it, so the row stands on
+      // the reading taken while both messages existed, and a run that marked that
+      // change as drift would raise false alarms on every future run.
       if (row.gone === true) {
         io.write(JSON.stringify({ calibrate: "gone", score: row.score, ts: row.ts, what: row.what }));
         continue;
       }
       const channel = row.channel!;
       const [a, b] = row.ts;
-      // THE THREAD ROOT COMES WITH THE ROW, since `conversations.history` omits
-      // replies and a reply read without its root answers "no such message".
+      // The row includes the thread root, since `conversations.history` omits replies
+      // and a reply read without its root answers "no such message".
       const first = await s.backend.storedMessage(channel, a, who, row.threads?.[0]);
       const second = await s.backend.storedMessage(channel, b, who, row.threads?.[1]);
       if (!first.ok || !second.ok) {
@@ -2649,11 +2890,11 @@ async function cmdRewrites(argv: string[], io: Io): Promise<number> {
       const again = pairScore(allWords(first.text), allWords(second.text));
       const moved = Math.abs(again.overlap - row.score) > 0.005 || (row.scale !== undefined && again.scale !== row.scale);
       if (moved) drifted += 1;
-      // THE HASH IS CHECKED HERE, and this line is what says which text it is a
-      // hash of. An agent recorded these from their wake files and another agent
-      // read two of them straight off Slack, which left the question open in
-      // prose. A score cannot answer it: an edit that swaps two words for two
-      // others moves no number the guard reads.
+      // The system verifies the hash at this step, and this line identifies the text
+      // the hash represents. One agent recorded these hashes from its wake files, and
+      // another agent read two of them directly from Slack, which left the question
+      // unresolved in prose. A score cannot answer it, because an edit that swaps two
+      // words for two others moves no number that the guard reads.
       const read = [first.text, second.text].map(textHash);
       const hashes = hashVerdict(row.sha, read);
       if (hashes === "differs") differing += 1;
@@ -2662,8 +2903,9 @@ async function cmdRewrites(argv: string[], io: Io): Promise<number> {
           calibrate: moved ? "drifted" : "holds",
           recorded: { score: row.score, scale: row.scale },
           measured: { score: Number(again.overlap.toFixed(3)), scale: again.scale },
-          // BOTH HASHES GO OUT EVERY TIME, matching or not, so a reader compares
-          // them against their own copy without running this again.
+          // The command outputs both hashes on every run, whether they match or differ,
+          // so
+          // a reader compares them against their own copy without running this again.
           hashes,
           sha: { recorded: row.sha, read },
           ts: row.ts,
@@ -2671,11 +2913,11 @@ async function cmdRewrites(argv: string[], io: Io): Promise<number> {
         }),
       );
     }
-    // ONE READING PER PAIR, HOWEVER MANY AGENTS RUN THIS. I cited a second
-    // agent's ceiling as independent support for a row, and their ceiling was the
-    // same two messages scored by the same function: three runs of one algorithm
-    // on one pair are three faithful executions. The line says so, so nobody
-    // counts agreement as evidence.
+    // Record one reading per pair, regardless of how many agents run the task. A
+    // second agent's ceiling provides no independent support for a row when that
+    // ceiling scores the same two messages with the same function. Three runs of one
+    // algorithm on one pair produce three faithful executions. The rule establishes
+    // this, so agreement across runs does not count as evidence.
     io.writeErr(
       drifted === 0
         ? "calibrate: every readable row scores what the table records. This is ONE reading of each pair: " +
@@ -2683,11 +2925,12 @@ async function cmdRewrites(argv: string[], io: Io): Promise<number> {
           "run and not a second measurement."
         : `calibrate: ${drifted} row(s) score something else now. The table is wrong, the code changed, or both.`,
     );
-    // A DIFFERING HASH IS NOT DRIFT. The recorded hash comes from the payload a
-    // listener was handed, and this read renders mentions and undoes Slack's
-    // escapes, so a row whose text carries either one hashes differently here
-    // while scoring exactly what it always did. The count says how many, and the
-    // row's own output says which.
+    // A mismatched hash does not indicate drift. The system generates the recorded
+    // hash from the payload delivered to a listener. Because this read operation
+    // renders mentions and reverses Slack escape sequences, a row containing either
+    // element produces a different hash here while retaining its original score. The
+    // count reports how many rows changed, and each row's output identifies which rows
+    // they are.
     if (differing > 0) {
       io.writeErr(
         `calibrate: ${differing} row(s) read back to a different hash. Compare the recorded hash against a wake ` +
@@ -2708,12 +2951,12 @@ async function cmdRewrites(argv: string[], io: Io): Promise<number> {
 async function cmdPeers(argv: string[], io: Io): Promise<number> {
   const { flags } = parseArgs(argv);
   const rows = readPeerFile(peersPath(slackConfigPath(io)));
-  // `--json` FOR A WATCHER, and it needs NO TOKEN AND NO NETWORK. This field
-  // went on `doctor` first, and the agent watching for a damaged line refused
-  // it with the right reason: doctor reads the app manifest, the stored token on
-  // their host expired, so a watcher shelling out to doctor every ten minutes
-  // depends on a command that already fails there. A question about a local file
-  // must be answerable from the local file.
+  // The `--json` output supports a watcher and requires no token and no network.
+  // This field was added to `doctor` first, and the agent watching for a damaged
+  // line refused it for a valid reason: `doctor` reads the app manifest, the stored
+  // token on their host expired, so a watcher shelling out to `doctor` every ten
+  // minutes depends on a command that already fails there. A question about a local
+  // file must be answerable from the local file.
   if (flags.has("json")) {
     io.write(
       JSON.stringify({
@@ -2728,25 +2971,29 @@ async function cmdPeers(argv: string[], io: Io): Promise<number> {
   return 0;
 }
 
-/** `scramble inbox pending --as <name>`: every line addressed to this agent that
- *  nothing has answered, one JSON object per line, and EXIT 1 while any is open.
+/**
+ *  `scramble inbox pending --as <name>` prints every line addressed to this agent
+ *  that nothing has answered, outputting one JSON object per line, and exits with
+ *  status 1 while any message remains open.
  *
- *  The exit code is the point. It is what a closing gate reads to refuse a turn
- *  that leaves someone waiting, so the obligation is counted per ITEM by the
- *  delivery path and not per turn by whoever is writing the turn. Empty exits 0
- *  and prints nothing. */
+ *  A closing gate reads this exit code to refuse a turn that leaves someone
+ *  waiting, so the delivery path counts the obligation per item independently of
+ *  the author writing the turn. If the inbox is empty, the command prints nothing
+ *  and exits with status 0.
+ */
 async function cmdInbox(argv: string[], io: Io): Promise<number> {
   const { flags, positionals } = parseArgs(argv);
   const sub = positionals[0] ?? "pending";
   const name = nameFor(flags, io);
   if (sub === "close") {
-    // MORE THAN ONE ID, because a thread of other people's work hands you a
-    // batch. I closed eight items one command at a time in ten minutes, which is
-    // the shape that teaches an agent to stop reading its own list.
+    // The command accepts more than one ID because a thread of other people's work
+    // hands the operator a batch. An operator closed eight items one command at a
+    // time in ten minutes, which is the pattern that teaches an agent to stop reading
+    // its own list.
     //
-    // The bulk case where the agent SPEAKS is already covered elsewhere: a reply
-    // in a channel closes everything older there. This is for the case where it
-    // says nothing, and the reason then covers every id in the call.
+    // The bulk case where the agent speaks is already covered elsewhere: a reply in a
+    // channel closes everything older there. This command serves the case where the
+    // agent says nothing, and the reason then covers every ID in the call.
     const ids = positionals.slice(1);
     const why = flags.get("why");
     if (ids.length === 0 || why === undefined || why.trim() === "") {
@@ -2765,8 +3012,8 @@ async function cmdInbox(argv: string[], io: Io): Promise<number> {
         continue;
       }
       failed += 1;
-      // EVERY ID IS REPORTED, and one failure never hides the rest: a batch that
-      // stopped at the first bad id would leave the others silently untouched.
+      // The system reports every ID, and one failure never hides the rest. A batch that
+      // stopped at the first bad ID would leave the others silently untouched.
       io.writeErr(
         r.why === "answered"
           ? `${id} was already answered by ${String(r.answeredBy)}, so there was nothing to close.`
@@ -2801,40 +3048,44 @@ async function cmdInbox(argv: string[], io: Io): Promise<number> {
   return 1;
 }
 
-/** WRITE A DELIVERED LINE, AND RECORD IT. The only way a delivery reaches
- *  stdout, so a line cannot be handed to an agent without the ledger knowing an
- *  answer is owed. `read` does not go through here: a transcript is not an
- *  inbox.
+/**
+ *  This path writes a delivered line to stdout and records it. Every delivery
+ *  reaches stdout only through this path, so the system cannot hand a line to an
+ *  agent without the ledger knowing an answer is owed. The `read` command does not
+ *  go through here, because a transcript is distinct from an inbox.
  *
- *  The recording is best-effort and never blocks the delivery: an unwritable
- *  ledger must not stop a message reaching the agent, since the message is the
- *  point and the ledger is the accounting. It is REPORTED, so an inbox that
- *  quietly counts nothing does not read as an inbox with nothing in it. */
+ *  Recording is best-effort and never blocks delivery. An unwritable ledger must
+ *  not stop a message from reaching the agent, since the message is the purpose
+ *  and the ledger is the accounting. The system reports the write, so an inbox that
+ *  quietly counts nothing does not read as an inbox with nothing in it.
+ */
 function emitDelivery(io: Io, agent: string, line: Record<string, unknown>, addressedOnly = false): void {
-  // THIS AGENT'S IDENTITIES: its scramble name and the Slack handle a mention
-  // resolves to, which differ (`scramble-dev` is mentioned as `scramble_dev`).
-  // Comparing against the name alone is what once made a real mention arrive
-  // with mentioned:false.
+  // This agent uses two identities: its scramble name and the Slack handle that a
+  // mention resolves to, which differ (`scramble-dev` is mentioned as
+  // `scramble_dev`). Comparing against the scramble name alone once caused a real
+  // mention to arrive with mentioned:false.
   const conf = loadSlackConfig(io)?.agents[agent];
   const handle = conf?.handle;
   const names = handle === undefined || handle === "" ? [agent] : [agent, handle];
-  // EVERY DELIVERED LINE IS RECORDED, addressed or not. Only the addressed ones
-  // are items owing a reply; the rest are the record that lets `inbox trace`
-  // tell "never reached me" apart from "reached me and woke nothing". Without
-  // that second row, the ledger's silence about a message has two meanings and
-  // no way to choose, which is what sent four agents grepping a
-  // text log for a timestamp.
-  // WHERE THE SENDER RUNS, recorded from its own stamp. Learned passively from
-  // any message, addressed or not, since knowing where a peer is does not depend
-  // on it talking to you.
+  // The system records every delivered line, whether addressed or unaddressed. Only
+  // addressed lines require a reply. The remaining lines provide the record that
+  // lets `inbox trace` distinguish "never reached me" from "reached me and woke
+  // nothing". Without that second row, the ledger's silence about a message carries
+  // two meanings with no way to choose between them, which caused four agents to
+  // grep a text log for a timestamp.
+  //
+  // The system records where the sender runs from the sender's own stamp. The
+  // system learns this location passively from any message, whether addressed or
+  // unaddressed, since knowing where a peer is does not depend on it talking to
+  // you.
   const from = typeof line.from === "string" ? line.from : "";
   const org = line.origin;
   if (from !== "" && from !== agent && typeof org === "object" && org !== null) {
     const o = org as Origin;
     if (typeof o.host === "string" && typeof o.dir === "string") {
       try {
-        // THE WRITER IS THIS AGENT, and the row is about `from`. Naming the file
-        // for the subject put every agent on a host into one peer's file.
+        // This agent writes the row, and the row records `from`. Naming the file after
+        // the subject placed every agent on a host into one peer's file.
         recordPeer(peersPath(slackConfigPath(io)), agent, from, o, new Date().toISOString());
       } catch (e) {
         io.writeErr(`peer record not written for ${from}: ${String(e)}`);
@@ -2842,12 +3093,13 @@ function emitDelivery(io: Io, agent: string, line: Record<string, unknown>, addr
     }
   }
   const addressed = isAddressed(line, names, readSent(sentPath(slackConfigPath(io), agent)));
-  // THE FILTER LIVES HERE, where `addressed` is computed, and never in a grep
-  // downstream. `scripts/inbox.sh` matched the literal `"mentioned":true`
-  // against the serialised line, which works only while the serialiser emits no
-  // space after that colon and the field keeps that name: add a space, reorder,
-  // rename, and the grep stops matching with no error and no exit, so an inbox
-  // goes quiet and looks calm. Every agent following JOIN.md inherited it.
+  // The system applies the filter where it computes `addressed`, and downstream
+  // grep commands must never perform this check. The script `scripts/inbox.sh`
+  // matched the literal `"mentioned":true` against the serialised line. That match
+  // works only while the serialiser emits no space after the colon and the field
+  // keeps that name. If the serialiser adds a space, reorders fields, or renames the
+  // field, the grep stops matching with no error and no exit, so an inbox goes
+  // quiet and looks calm. Every agent following JOIN.md inherited this pattern.
   if (!addressedOnly || addressed) io.write(JSON.stringify(line));
   try {
     recordInboxItem(inboxPath(slackConfigPath(io), agent), {
@@ -2855,9 +3107,9 @@ function emitDelivery(io: Io, agent: string, line: Record<string, unknown>, addr
       channel: String(line.channel ?? ""),
       from: String(line.from ?? ""),
       ...(typeof line.thread === "string" ? { thread: line.thread } : {}),
-      // THE NAMES THE LINE CARRIED, so `inbox trace` can say why this row is
-      // this agent's. The verdict without its evidence sent two agents guessing
-      // which mention opened six items.
+      // The line records the names it carried, so `inbox trace` can say why this row
+      // belongs to this agent. A verdict without its evidence caused two agents to
+      // guess which mention opened six items.
       ...(Array.isArray(line.mentions)
         ? { mentions: line.mentions.filter((m): m is string => typeof m === "string") }
         : {}),
@@ -2871,21 +3123,25 @@ function emitDelivery(io: Io, agent: string, line: Record<string, unknown>, addr
   }
 }
 
-/** EVERYTHING A SEND DOES ONCE SLACK HAS ACCEPTED IT, in one place.
+/**
+ *  EVERYTHING A SEND DOES ONCE SLACK HAS ACCEPTED IT, in one place.
  *
- *  Three things, and each was written at the post path and reached nowhere else:
- *  report what this send raced with, close what it answers, and remember its own
- *  ts so a reply to it is recognised as owed to this agent.
+ *  A send performs three actions after Slack accepts the message: it reports what
+ *  this send raced with, closes the item it answers, and records its own `ts` so
+ *  the system recognizes replies as owed to this agent. Each of these actions was
+ *  previously written only on the post path.
  *
- *  It lives here because a send carrying a FILE takes a different route: the
- *  upload posts the message, so the post path is skipped, and with it all three.
- *  My own ledger caught that, holding two questions I had answered with
- *  attachments.
+ *  This consolidation exists because a send carrying a file takes a different
+ *  route: the upload posts the message, which skips the post path and all three
+ *  actions. The ledger exposed this behavior when it retained two questions
+ *  answered with attachments.
  *
- *  Best-effort and reported: none of this may turn a delivered message into a
- *  failure. `ts` is absent when Slack reports no share for an upload, and then
- *  the close still runs against a wall-clock marker while the sent record is
- *  skipped, since an id nobody can look up is worse than no id. */
+ *  These actions are best-effort and reported, because none of them may turn a
+ *  delivered message into a failure. When Slack reports no share for an upload,
+ *  `ts` is absent; the close operation still runs against a wall-clock marker
+ *  while the system skips the sent record, since an id nobody can look up is worse
+ *  than no id.
+ */
 async function settleSend(
   io: Io,
   channel: string,
@@ -2901,45 +3157,52 @@ async function settleSend(
   },
 ): Promise<void> {
   const s = slackBackend(io);
-  // THE SEND IS THE OTHER PATH EVERY AGENT RUNS. An agent that speaks without
-  // ever starting a listener would be absent from the record it publishes to
-  // every peer.
+  // Every agent also runs the send path. An agent that speaks without ever
+  // starting a listener would be absent from the record it publishes to every peer.
   recordSelf(io, from);
   try {
     if (s.backend !== undefined) await reportCrossings(io, s.backend, channel, from, ts);
     closeInboxItems(inboxPath(slackConfigPath(io), from), channel, ts ?? new Date().toISOString(), thread);
-    // THE DRAFT RIDES WITH THE ts, so the next send of the same words can see
-    // this one and refuse.
+    // The draft carries the timestamp, so the next send of the same words can see
+    // this draft and refuse.
     if (ts !== undefined) recordSent(sentPath(slackConfigPath(io), from), ts, draft);
   } catch (e) {
     io.writeErr(`inbox ledger not updated after posting to ${channel}: ${String(e)}`);
   }
 }
 
-/** The guard's name, short enough for a ledger row. The model's attempt belongs
- *  on the screen and never in a counter. */
+/**
+ *  The guard's name remains short enough for a ledger row. The model's attempt
+ *  belongs on the screen and never in a counter.
+ */
 function guardName(why: string): string {
   return why.slice(0, 120);
 }
 
-/** Say what arrived in this channel between the last line this agent saw and the
- *  line it just sent.
+/**
+ *  The command reports what arrived in this channel between the last line this
+ *  agent saw and the line it just sent.
  *
- *  IT REPORTS AFTER THE SEND, and that is the only place it can work. Both of
- *  the day's collisions were sub-minute, 20 and 40 seconds apart, measured by one
- *  of the two agents: each was already writing when the other posted. Reading
- *  the channel first catches neither. The moment you speak is the first moment
- *  the race is decidable.
+ *  The command reports after the send, and that is the only place it can work. Both
+ *  collisions were under a minute, 20 and 40 seconds apart as measured by one of
+ *  the two agents, because each was already writing when the other posted. Reading
+ *  the channel first catches neither. The moment an agent speaks is the first
+ *  moment the race is decidable.
  *
- *  Bounded by the DELIVERY cursor, so it reports what this agent has not read.
- *  It repeats until a `message check` moves that cursor, which matches the
- *  state: those messages are still unread, and a sender about to write a
- *  second message on the same subject wants to know a second time.
+ *  The delivery cursor bounds the output, so the command reports what this agent
+ *  has not read. It repeats until a `message check` moves that cursor, which
+ *  matches the state: those messages are still unread, and a sender about to write
+ *  a second message on the same subject wants to know a second time.
  *
- *  Reported and never fatal: a failed lookup here must not turn a delivered
- *  message into an error, so it says what it could not do and stops. */
-/** How many crossed messages the send prints. The rest are counted and their
- *  oldest ts named, since a cap nobody prints reads as full coverage. */
+ *  Lookup failures are reported and are never fatal. A failed lookup here must not
+ *  turn a delivered message into an error, so the system reports what it could not
+ *  do and stops.
+ */
+/**
+ *  The send operation limits the number of crossed messages it prints. It counts
+ *  the remaining messages and includes the timestamp of the oldest one, since an
+ *  unprinted cap reads as full coverage.
+ */
 const CROSSINGS_CAP = 15;
 
 async function reportCrossings(
@@ -2956,10 +3219,11 @@ async function reportCrossings(
     io.writeErr(`crossings unread for ${channel}: ${r.error ?? "history failed"}`);
     return;
   }
-  // THIS AGENT'S OWN LINES ARE NOT CROSSINGS, and matching on the scramble name
-  // alone listed one of mine back to me: history carries the SLACK HANDLE, and
-  // `scramble-dev` posts as `scramble_dev`. Same mismatch that once marked a real
-  // mention as unaddressed. Caught on the first live run of this report.
+  // Lines produced by this agent are not crossings. Matching solely on the scramble
+  // name returned one of the agent's own lines, because history records the Slack
+  // handle, and `scramble-dev` posts as `scramble_dev`. This same mismatch
+  // previously marked a real mention as unaddressed. The first live run of this
+  // report caught the issue.
   const me = backend.identities(from);
   const crossed = r.messages.filter(
     (m) =>
@@ -2968,12 +3232,12 @@ async function reportCrossings(
       (cursor === undefined || slackTs(m.ts) > slackTs(cursor)),
   );
   if (crossed.length === 0) return;
-  // NEWEST FIRST AND CAPPED, WITH THE REMAINDER NAMED. The cursor this reads
-  // advances on a `message check` sweep, and an agent whose reading happens through
-  // a listener never runs one, so the block printed 165 lines on every send from
-  // this agent. A wall that size is what teaches agents to filter the output, which
-  // is the defect two of us reported tonight. The question it answers is whether
-  // somebody just made your point, and that lives in the newest lines.
+  // Order messages newest first, cap the output, and name the remainder. The read
+  // cursor advances during a `message check` sweep. An agent that reads through a
+  // listener never runs this sweep, so the block printed 165 lines on every send
+  // from this agent. Output of that size causes agents to filter the text, which is
+  // a defect. The block answers whether someone just made the point, and the newest
+  // lines provide that answer.
   const newest = [...crossed].sort((a, b) => slackTs(b.ts) - slackTs(a.ts));
   const shown = newest.slice(0, CROSSINGS_CAP);
   const lines = shown.map((m) => `  ${m.from}: ${(m.text ?? "").replace(/\s+/g, " ").slice(0, 100)}`);
@@ -2984,9 +3248,10 @@ async function reportCrossings(
         `\`scramble history ${channel}\` reads them.`,
     );
   }
-  // KEYED LIKE THE READ-BACK BLOCK. An agent filtering on `sent:|verify:|REFUSED`
-  // saw the count line and none of the messages under it, which is the block's
-  // whole content, and said so after a night of it.
+  // This block uses the same key structure as the read-back block. An agent
+  // filtering on `sent:|verify:|REFUSED` saw the count line and none of the
+  // messages below it, which make up the block's entire content, and reported this
+  // after running overnight.
   io.writeErr(
     `crossed: ${crossed.length} message(s) arrived in ${channel} before yours and you have not read them:\n` +
       `${lines.join("\n")}\n` +
@@ -3006,51 +3271,56 @@ async function cmdMessage(args: string[], io: Io, backend: "local" | "slack"): P
         io.writeErr("message send requires the message on stdin");
         return 1;
       }
-      // THE LANGUAGE RULES ARE CHECKED HERE, where the message leaves, and not by
-      // a chain the sender has to remember. The documented chain was draft-file
-      // then lint then send; I piped text straight in all day, the lint ran on
-      // nothing, and the operator read a long dash and told me the linting had
-      // failed. It had not failed. It had not run.
+      // The system checks language rules here, where the message leaves, so the sender
+      // does not have to track a multi-step chain. The documented chain created a draft
+      // file, ran the linter, and sent the message. When the sender piped text straight
+      // in all day, the linter ran on nothing. The operator observed a long dash and
+      // reported that linting had failed. The linter had not failed; the linter had not
+      // run.
       const refusal = languageRefusal(lintLanguage(text));
       if (refusal !== "") {
         io.writeErr(refusal);
         return 1;
       }
-      // LENGTH IS CHECKED HERE TOO, for the same reason the language rules are:
-      // a limit the sender has to remember is a limit that holds until the
-      // sender is busy. Operator: "We need to impose a message length limit in
-      // words. Maybe 200."
+      // The system checks length here as well, for the same reason it checks the
+      // language rules: a limit the sender has to remember is a limit that holds until
+      // the sender is busy. The system needs a message length limit in words, which
+      // may be 200 words.
       const tooLong = lengthRefusal(text);
       if (tooLong !== "") {
         io.writeErr(tooLong);
         return 1;
       }
-      // A REPLY GOES IN THE THREAD IT ANSWERS, by default: "shall we make inbox
-      // reply default to within the thread? Posting to the channel directly can
-      // be made a separate flag."
+      // By default, an inbox reply posts within the thread that it answers, and a
+      // dedicated flag handles posting directly to the channel.
       //
-      // The ledger already knows which item in this channel is unanswered, so
-      // the thread is READ from it. With something open and no
-      // --thread given, the reply threads under the newest open item, which is
-      // the one the conversation is on; with several open across threads, the
-      // reply closes them all anyway, since answering in the room answers the
-      // room. Nothing open means nothing to reply to, so it posts at channel
-      // level as before.
+      // The ledger tracks which item in this channel remains unanswered, so the system
+      // reads the target thread from the ledger. When an open item exists and the
+      // command
+      // receives no `--thread` flag, the reply threads under the newest open item that
+      // carries the active conversation. When multiple items remain open across
+      // threads,
+      // the reply closes all of them, since answering in the room resolves the entire
+      // room. When nothing is open, the command finds nothing to answer, so it posts at
+      // the channel level.
       //
-      // `--top-level` is the way out, and the chosen thread is REPORTED, because
-      // a message that quietly went somewhere other than where the sender
-      // pictured it is the defect this same day already produced once.
+      // The `--top-level` flag provides channel-level posting, and the system reports
+      // the chosen thread, because routing a message silently to an unexpected
+      // destination already produced a defect today.
       if (flags.get("thread") === undefined && !flags.has("top-level")) {
         const open = pendingInbox(inboxPath(slackConfigPath(io), nameFor(flags, io))).filter(
           (r) => r.channel === req.channel,
         );
-        // ONLY WHEN THERE IS ONE THING TO ANSWER. With several open the newest
-        // is a guess, and a wrong guess puts an answer inside someone else's
-        // conversation: the operator asked a question, another agent posted 13
-        // seconds later, and my answer to the operator went into that agent's
-        // thread. Several open means the sender knows which one this answers
-        // and the ledger does not, so it says so and stays at channel level,
-        // where a reader can at least see what it is about.
+        // The system replies in a thread only when one message awaits an answer. When
+        // several messages remain open, selecting the newest message is a guess, and an
+        // incorrect guess places an answer inside another conversation. In one
+        // instance,
+        // the operator asked a question, another agent posted 13 seconds later, and the
+        // answer to the operator went into that agent's thread. When several messages
+        // remain open, the sender knows which message the answer addresses and the
+        // ledger
+        // does not, so the ledger states this condition and stays at the channel level,
+        // where a reader can see what the message is about.
         if (open.length > 1) {
           io.writeErr(
             `posting at channel level: ${open.length} questions are open for you in ${req.channel}, ` +
@@ -3068,17 +3338,17 @@ async function cmdMessage(args: string[], io: Io, backend: "local" | "slack"): P
           );
         }
       }
-      // `--attach <path>` is repeatable, and the upload happens INSIDE the send
-      // path, after the language check, the duplicate guard and the rewriter. It
-      // ran here once and returned before any of them: a send carrying a file
-      // printed nothing, checked nothing and rewrote nothing, so one agent posted
-      // an identical draft twice, seven seconds apart, and deleted the copy.
+      // The `--attach <path>` flag is repeatable. The upload runs inside the send path,
+      // after the language check, the duplicate guard, and the rewriter. The process
+      // previously returned before any of these stages executed: a send carrying a file
+      // printed nothing, checked nothing, and rewrote nothing, so one agent posted an
+      // identical draft twice, seven seconds apart, and deleted the copy.
       const attachPaths = collectValues(args, "--attach");
       return postText(req.channel, text, flags, io, backend, undefined, attachPaths);
     }
     case "react": {
-      // `message react --target <channel> --to <ts> --emoji <name>`: a reaction
-      // is an acknowledgement that costs the channel no line.
+      // The `message react --target <channel> --to <ts> --emoji <name>` command adds a
+      // reaction, which is an acknowledgement that costs the channel no line.
       const req = requireTarget(flags, io);
       if (!req.ok) return 1;
       const to = flags.get("to");
@@ -3105,13 +3375,14 @@ async function cmdMessage(args: string[], io: Io, backend: "local" | "slack"): P
     }
     case "edit":
     case "delete": {
-      // `message edit --target <ch> --to <ts>` with the new text on stdin, and `message delete
-      // --target <ch> --to <ts>`. Asked for by the operator: "Agents should be able to edit and
-      // delete messages."
+      // Agents can edit and delete messages. An agent edits a message by running
+      // `message edit --target <ch> --to <ts>` with the new text on stdin, and deletes
+      // a message by running `message delete --target <ch> --to <ts>`.
       //
-      // AN EDIT IS A SEND. It passes the language rules and the rewriter the
-      // same way, because the channel ends up holding its text either way, and a
-      // rule that a second verb walks around is not a rule.
+      // An edit is a send. It passes the language rules and the rewriter the same way,
+      // because the channel ends up holding its text either way, and a rule that a
+      // second
+      // verb walks around is not a rule.
       const req = requireTarget(flags, io);
       if (!req.ok) return 1;
       const to = flags.get("to");
@@ -3176,10 +3447,13 @@ async function cmdMessage(args: string[], io: Io, backend: "local" | "slack"): P
   }
 }
 
-/** The mirrored `profile` family. `show` prints this agent's name and persona
- *  as one JSON line; `update --description <text>` writes `.scramble/persona.md`
- *  and registers it (the `join --persona` alias), under any backend since
- *  profile is the workspace identity. */
+/**
+ *  The mirrored `profile` command family provides workspace identity commands.
+ *  The `show` command prints this agent's name and persona as one JSON line. The
+ *  `update --description <text>` command writes `.scramble/persona.md` and
+ *  registers it, acting as the `join --persona` alias, under any backend since
+ *  profile is the workspace identity.
+ */
 async function cmdProfile(argv: string[], io: Io): Promise<number> {
   const { flags, positionals } = parseArgs(argv);
   const sub = positionals[0];
@@ -3190,7 +3464,9 @@ async function cmdProfile(argv: string[], io: Io): Promise<number> {
     try {
       persona = readFileSync(file, "utf8");
     } catch {
-      /* no persona written yet: report an empty persona */
+      /**
+       *  The system reports an empty persona if no persona has been written yet.
+       */
     }
     io.write(JSON.stringify({ name, persona }));
     return 0;
@@ -3220,14 +3496,19 @@ async function cmdProfile(argv: string[], io: Io): Promise<number> {
   return 1;
 }
 
-/** The mirrored `channel` verbs: `channel join --target <channel>` behaves and
- *  reads exactly as the alias `join <channel>`. */
-/** `scramble doctor --as <name>`: is this agent's Slack app still what the
- *  current scramble needs? An agent onboarded before a fix keeps working in the
- *  ways it always did and silently lacks the fix, which is the failure this verb
- *  exists for: nothing else tells a RUNNING agent that its own config went out of
- *  date. It repairs what it can locally (the handle, from auth.test) and names
- *  the one command for what it cannot (a scope, which needs a reinstall). */
+/**
+ *  The mirrored `channel` verb `channel join --target <channel>` behaves and reads
+ *  exactly as the alias `join <channel>`.
+ */
+/**
+ *  `scramble doctor --as <name>` checks whether an agent's Slack application
+ *  satisfies the current requirements of scramble. An agent onboarded before a fix
+ *  continues to work in the ways it always did and silently lacks that fix. This
+ *  command exists for that failure, because no other mechanism notifies a RUNNING
+ *  agent that its configuration went out of date. The command repairs local
+ *  settings where possible, updating the handle from auth.test, and reports the
+ *  command needed for changes that require a reinstall, such as an updated scope.
+ */
 async function cmdDoctor(argv: string[], io: Io): Promise<number> {
   const { flags } = parseArgs(argv);
   const name = nameFor(flags, io);
@@ -3247,13 +3528,13 @@ async function cmdDoctor(argv: string[], io: Io): Promise<number> {
     return 1;
   }
   const problems: string[] = [];
-  // GRADED: an advisory is reported and does NOT fail the verb, because it names
+  // The system reports an advisory and does not fail the verb, because it names
   // something that still works. A problem stops delivery.
   const advisories: string[] = [];
   const fixed: string[] = [];
 
-  // ONE call answers both questions: auth.test returns the handle in its body
-  // and the granted scopes in its x-oauth-scopes header.
+  // One call answers both questions. auth.test returns the handle in its body and
+  // the granted scopes in its x-oauth-scopes header.
   const res = await io.fetch("https://slack.com/api/auth.test", {
     headers: { authorization: `Bearer ${token}` },
   });
@@ -3280,40 +3561,42 @@ async function cmdDoctor(argv: string[], io: Io): Promise<number> {
     fixed.push(`recorded the Slack handle @${handle}, so a mention of it now marks this agent`);
   }
 
-  // THE SILENT INBOX. An org install of an app whose manifest says
-  // org_deploy_enabled:false is a contradiction Slack accepts without a word:
-  // every REST call works, the socket opens and says hello, and no event is ever
-  // delivered, so `listen` runs forever and the agent looks like it is in a quiet
-  // channel. Checked here because doctor is where an agent asks whether its own
-  // wake path is real, and because nothing else would ever say it.
+  // THE SILENT INBOX. Slack accepts an organization installation of an app whose
+  // manifest specifies org_deploy_enabled:false without warning. Every REST call
+  // works, the socket opens and completes the handshake, and Slack delivers no
+  // events, so `listen` runs forever and the agent appears to sit in a quiet
+  // channel. The doctor check inspects this condition because doctor is where an
+  // agent asks whether its own wake path is real, and because nothing else reports
+  // it.
   //
-  // AN UNSUBSCRIBED EVENT IS THE SAME SILENCE, reached a different way: Slack
-  // sends nothing for an event the app does not ask for, so an app created
-  // before an event was added to the manifest keeps a wake path that is dead
-  // for exactly one event and healthy for every other. That is how an invite
-  // delivered nothing while mentions kept arriving (operator: "invited but
-  // inbox does not fire"). Both answers come from ONE manifest read.
+  // AN UNSUBSCRIBED EVENT IS THE SAME SILENCE, reached a different way. Slack sends
+  // nothing for an event the app does not request, so an app created before an
+  // event was added to the manifest keeps a wake path that is dead for exactly one
+  // event and healthy for every other. That is how an invite delivered nothing
+  // while mentions kept arriving when the inbox did not fire. One manifest read
+  // provides both answers.
   const declared = await declaredManifest(io, name);
-  // AN APP THIS LOGIN CANNOT READ cannot be repaired by this login either, so
-  // naming the repair command would send the agent at something that dies on its
-  // first call. Say who has to act instead.
+  // This login cannot repair an application that it cannot read, so naming the
+  // repair command would send the agent to a command that fails on its first call.
+  // State who must act.
   const unreadable = declared !== undefined && declared.unreadable !== undefined;
-  // WHY IT COULD NOT BE READ DECIDES WHO HAS TO ACT, and this used to answer
-  // "another login owns this app" for EVERY failure. Run against my own app,
-  // which I own, it read `token_expired` and told me to ask the owner or throw
-  // the entry away: a cause the evidence never established, printed as fact, on
-  // the surface an agent trusts to tell it what is wrong.
+  // The reason an app cannot be read determines who must take action. The tool
+  // previously reported that another login owns the app for every failure. When run
+  // against an app that the user owns, the command read `token_expired` and told the
+  // user to ask the owner or discard the entry. It printed a cause that the evidence
+  // never established as fact on an interface an agent trusts to explain failures.
   //
-  // A stale CLI token is the ordinary case and its repair is a token. Ownership
-  // is what `not_authed` and the access errors mean.
+  // A stale CLI token is the ordinary case, and a new token repairs it. The
+  // `not_authed` response and the access errors indicate ownership.
   const answer = String(declared === undefined ? "" : declared.unreadable);
   const staleToken = unreadable && /token_expired|invalid_auth|token_revoked/.test(answer);
   const selfExplained = unreadable && declared.selfExplained === true;
-  // OWNERSHIP IS CLAIMED ONLY WHERE SLACK SAYS SO. This used to be the `else`
-  // of a whitelist, so every string the list missed was printed as an ownership
-  // verdict: `token_expired`, then `invalid_refresh_token` from my own rotation
-  // code a day later. A guess in a default branch comes back with each new
-  // error string, so the default states the answer and stops.
+  // The system claims ownership only when Slack specifies it. Previously, the
+  // `else` branch of an allowlist processed unlisted strings, so the listener
+  // printed every string the list missed as an ownership verdict: `token_expired`,
+  // then `invalid_refresh_token` from rotation code a day later. A guess in a
+  // default branch fails with each new error string, so the default branch states
+  // the answer and stops.
   const ownership = unreadable && /no_permission|not_authed|access_denied|app_not_found|invalid_app_id/.test(answer);
   const repair = !unreadable
     ? `Fix: bun scripts/onboard-agent.ts ${name}`
@@ -3357,33 +3640,34 @@ async function cmdDoctor(argv: string[], io: Io): Promise<number> {
     }
   }
 
-  // A LISTENER OLDER THAN THE CODE is running a build that no longer exists,
-  // which looks exactly like a defect that was already fixed.
+  // A listener that is older than the current code runs a build that no longer
+  // exists, which looks exactly like a defect that was already fixed.
   //
-  // AN ADVISORY. A listener on an older commit still DELIVERS, while zero
-  // listeners means nothing arrives at all, and this verb reported the two with
-  // the same weight. An agent stopped restarting on every bump and built its
-  // own grading on top: "advisory for a commit mismatch, alarm only for zero
-  // listeners". That grading belongs here, where every reader gets it.
+  // This status is an advisory. A listener on an older commit still delivers, while
+  // zero listeners means nothing arrives at all, and this verb reported both
+  // conditions with the same weight. An agent stopped restarting on every version
+  // bump and created its own grading: an advisory for a commit mismatch, and an
+  // alarm only for zero listeners. That grading belongs here, where every reader
+  // receives it.
   const staleProblem = staleListenerProblem(staleListeners(io, name), name);
   if (staleProblem !== undefined) advisories.push(staleProblem);
 
-  // AND FOR AN INSTALLED AGENT, the commit is a fact on the process line. The
-  // launcher execs the resolved commit directory, so a listener carries its
-  // version in its own command line; comparing that against the installed one
-  // answers "is this process running the code I have" without touching mtimes,
-  // which for an installed copy describe the wrong tree entirely. TWO AGENTS ON
-  // ONE APP SPLIT ITS EVENTS. Slack hands a Socket Mode event to ONE open
-  // connection per app, so two consumers on one token halve each other's
-  // delivery, silently and at random. A fourth agent measured exactly that: its
-  // listener and a second bolt app on the same adopted token were splitting
-  // mentions between "a consumer that answers and a consumer that discards
-  // them", and a human asked the same question twice inside that window.
+  // An installed agent displays its commit directly on the process line. The
+  // launcher executes the resolved commit directory, so a listener carries its
+  // version in its own command line. Comparing that command line against the
+  // installed version confirms whether the process runs the local code without
+  // checking mtimes, which describe the wrong tree for an installed copy. Two agents
+  // on one application split its events. Slack delivers a Socket Mode event to one
+  // open connection per application, so two consumers on one token halve each
+  // other's delivery, silently and at random. A fourth agent measured this exact
+  // result: its listener and a second bolt application on the same adopted token
+  // split mentions between a consumer that answers and a consumer that discards
+  // them, and a human asked the same question twice inside that window.
   //
-  // Slack exposes no way to ask how many connections an app has open, so this
-  // catches the half that IS knowable: another agent in this config pointed at
-  // the same app. A consumer on another machine is invisible here, and
-  // `doctor --wake` is the probe that would catch it.
+  // Slack exposes no method to query how many open connections an application has,
+  // so this check catches the knowable half where another agent in this configuration
+  // points at the same application. A consumer on another machine is invisible here,
+  // and `doctor --wake` is the probe that would catch it.
   {
     const cfgNow = loadSlackConfig(io);
     const mine = cfgNow?.agents[name];
@@ -3400,10 +3684,10 @@ async function cmdDoctor(argv: string[], io: Io): Promise<number> {
     }
   }
 
-  // A HOST WHOSE PROCESS TABLE CANNOT BE READ SAYS SO. Both listener checks read
-  // /proc, which a Linux host has and others do not, and both answer "nothing
-  // wrong" when they cannot look. `ok` would then mean "checked and fine" on a
-  // machine where nothing was checked.
+  // A host reports when its process table cannot be read. Both listener checks read
+  // /proc, which exists on Linux hosts and is absent on other systems, and both
+  // return "nothing wrong" when they cannot inspect the directory. The `ok` status
+  // would then mean "checked and fine" on a machine where nothing was checked.
   const procRoot = io.env("SCRAMBLE_PROC") ?? "/proc";
   if (!processesReadable(procRoot)) {
     problems.push(
@@ -3422,13 +3706,13 @@ async function cmdDoctor(argv: string[], io: Io): Promise<number> {
     );
   }
 
-  // A HOST NOBODY INSTALLS ON HAS NOTHING TO DISAGREE WITH. The staleness
-  // notice compares a running listener to the commit installed beside it, so a
-  // machine that stops updating stays quiet while it falls behind. One did, by
-  // five commits, with every listener matching its install.
+  // A host that receives no installations has nothing to disagree with. The
+  // staleness notice compares a running listener to the commit installed beside it,
+  // so a machine that stops updating stays quiet while it falls behind. One machine
+  // fell behind by five commits, with every listener matching its install.
   //
-  // A peer's own message carries the commit it ran, so the disagreement is
-  // readable here with no git and no network. Which side is older is left to
+  // A peer's own message carries the commit it ran, so the disagreement is readable
+  // here with no git and no network. Determining which side is older requires
   // `git log`, since commit ids carry no order.
   const elsewhere = peersOnOtherCommits(
     readPeers(peersPath(slackConfigPath(io))),
@@ -3447,9 +3731,9 @@ async function cmdDoctor(argv: string[], io: Io): Promise<number> {
     );
   }
 
-  // WHAT IS WAITING ON THE OPERATOR. Classification is theirs to make, so the
-  // surface they read names the channels with no tier and the command that sets
-  // one. An unclassified channel still sends, in the careful register.
+  // The operator must classify channels. Classification belongs to the operator, so
+  // the interface lists channels with no tier and displays the command that sets
+  // one. An unclassified channel still sends in the careful register.
   const cfgTiers = loadSlackConfig(io);
   const waiting = unclassified(Object.keys(cfgTiers?.channels ?? {}), cfgTiers?.tiers);
   if (waiting.length > 0) {
@@ -3468,14 +3752,15 @@ async function cmdDoctor(argv: string[], io: Io): Promise<number> {
     );
   }
 
-  // `--wake <channel>` is opt-in because it POSTS a line into that channel.
+  // The `--wake <channel>` flag is opt-in because it posts a line into that channel.
   const wakeChannel = flags.get("wake");
   if (wakeChannel !== undefined && wakeChannel !== "") {
-    // A TEST WHOSE ANSWER WOULD BE MEANINGLESS IS NOT RUN. Slack hands each
-    // Socket Mode event to ONE connection, so an armed listener takes the probe
-    // and this test times out and calls the wake path DEAD. Its own advice then
-    // says to re-onboard, which rotates the bot token and strands that listener.
-    // Refusing to run beats answering wrongly on the most alarming surface here.
+    // The test does not run when its result would be meaningless. Slack delivers each
+    // Socket Mode event to one connection, so an armed listener consumes the probe,
+    // causing the test to time out and report the wake path as dead. The test output
+    // then instructs the operator to re-onboard, which rotates the bot token and
+    // strands that listener. Refusing to run prevents an incorrect failure report on
+    // this critical surface.
     const procRootForWake = io.env("SCRAMBLE_PROC") ?? "/proc";
     const holding = stillAlive(liveListeners(readProcesses(procRootForWake), name), procRootForWake);
     if (holding.length > 0) {
@@ -3498,11 +3783,11 @@ async function cmdDoctor(argv: string[], io: Io): Promise<number> {
   for (const f of fixed) io.write(JSON.stringify({ doctor: "fixed", agent: name, detail: f }));
   for (const p of problems) io.writeErr(`doctor: ${p}`);
   for (const a of advisories) io.writeErr(`doctor advisory: ${a}`);
-  // THE REWRITE STATE IS REPORTED WHETHER OR NOT ANYTHING ELSE IS WRONG. It sat
-  // in the clean line only, so on a host with an expired CLI token, where every
-  // other answer is a problem, the one question an operator is asking while
-  // setting it up had no answer at all. Measured here: two doctor runs printed
-  // nothing about it because this agent's manifest read fails.
+  // The command reports the rewrite state whether or not anything else is wrong.
+  // The state previously sat in the clean line only, so on a host with an expired
+  // CLI token, where every other answer is a problem, the system gave no answer to
+  // the one question an operator asks while setting it up. Measured here, two doctor
+  // runs printed nothing about it because this agent's manifest read fails.
   {
     const rc = rewriteConfig(io.env);
     io.writeErr(
@@ -3512,29 +3797,32 @@ async function cmdDoctor(argv: string[], io: Io): Promise<number> {
     );
   }
   if (problems.length === 0) {
-    // WHAT WAS INSPECTED, on the clean line. A remote agent read this and said
-    // it best: "What the clean line does NOT say is that it inspected anything.
-    // Plain doctor prints ok with no listener line at all, on a host where a
-    // listener is running and where --wake proves it can see it." An `ok` that
-    // names nothing is indistinguishable from an `ok` that looked at nothing,
-    // which is the shape this whole verb exists to kill.
+    // The clean line must state what was inspected. Plain `doctor` prints `ok`
+    // without a listener line on a host where a listener runs and where `--wake`
+    // proves the tool sees it. An `ok` that names nothing is indistinguishable from
+    // an `ok` that looked at nothing, which is the outcome this whole verb exists
+    // to eliminate.
     const seen = stillAlive(liveListeners(readProcesses(procRoot), name), procRoot);
     io.write(
       JSON.stringify({
         doctor: "ok",
         agent: name,
         handle,
-        // THE NAMES THEMSELVES. `scopes: 14` answers no question anyone asks.
-        // Pricing a change asks WHICH scopes are granted, and with only a count
-        // on the surface I told an agent that reading reactions would need a
-        // scope change and a reinstall; `reactions:read` was already one of the
-        // fourteen, in this repo's own app-manifest.ts. Same for the events:
-        // what is subscribed decides what Slack will ever deliver. WHETHER THE
-        // REWRITE IS ON, and against what. Turning it on is four environment
-        // variables read by whichever process sends, so a way to ask without
-        // sending a message is the difference between configured and
-        // believed-configured. The key is reported as present or absent and
-        // never printed.
+        // Inspectors need the exact scope names, because a count such as `scopes: 14`
+        // answers no practical question. Pricing a change requires knowing which scopes
+        // are granted. When only a count appears, an operator can assume that reading
+        // reactions requires a scope change and a reinstall, even though
+        // `reactions:read`
+        // is already one of the 14 scopes in this repository's own `app-manifest.ts`.
+        // The
+        // same requirement applies to event names, because the subscribed events decide
+        // what Slack delivers. The system also reports whether the rewrite is active
+        // and
+        // what target it runs against. Turning on the rewrite requires four environment
+        // variables read by the sending process, so checking the state without sending
+        // a
+        // message distinguishes a configured system from a believed-configured system.
+        // The report marks the key as present or absent and never prints it.
         rewrite: (() => {
           const rc = rewriteConfig(io.env);
           return rc.key === undefined
@@ -3545,12 +3833,14 @@ async function cmdDoctor(argv: string[], io: Io): Promise<number> {
         events: declared !== undefined && declared.unreadable === undefined ? [...declared.botEvents].sort() : null,
         listeners: seen.length,
         installed: installedNow === "" ? null : installedNow,
-        // THE PEER RECORD'S OWN HEALTH, as a field a monitor can read. Six
-        // agents append to that file on one host, one of them found a line no
-        // parser could read, and the agent that armed a watcher for it wrote its
-        // own parse loop. Two definitions of `damaged` disagree the day the row
-        // shape changes, and a monitor grepping the prose sentence breaks on a
-        // rewording, which is the trap this repo took out of its wake filter.
+        // The peer record provides its own health as a field a monitor can read. Six
+        // agents append to that file on one host. One agent found a line no parser
+        // could
+        // read, and the agent that armed a watcher for it wrote its own parse loop. Two
+        // definitions of `damaged` disagree the day the row shape changes, and a
+        // monitor that greps the prose sentence breaks on a rewording, which is the
+        // trap
+        // this repository removed from its wake filter.
         peer_record: (() => {
           const read = readPeerFile(peersPath(slackConfigPath(io)));
           return { rows: read.rows.length, damaged: read.damaged };
@@ -3562,18 +3852,20 @@ async function cmdDoctor(argv: string[], io: Io): Promise<number> {
   return 1;
 }
 
-/** `doctor --wake`: prove the wake path CARRIES A MESSAGE. Proving that it
- * connects settles nothing, since a listener whose socket delivers nothing is
- * indistinguishable from a quiet channel, so I armed a monitor, watched the
- * process stay alive, and reported it working while it delivered nothing for
- * hours (postmortem: akrust log/postmortems/
- * `-armed-a-monitor-without-proving-it-receives.md`).
+/**
+ *  `doctor --wake` proves that the wake path delivers a message. Proving that the
+ *  socket connects settles nothing, since a listener whose socket delivers nothing
+ *  is indistinguishable from a quiet channel. An operator armed a monitor, watched
+ *  the process stay alive, and reported the service working while it delivered
+ *  nothing for hours (postmortem: akrust log/postmortems/
+ *  `-armed-a-monitor-without-proving-it-receives.md`).
  *
- *  Open the socket, post one probe line, and require the FRAME for that exact ts
- *  to come back. The probe is the agent's own message on purpose: it needs no
- *  second identity, and the socket carries an app's own posts even though
- *  `listen` filters them out of delivery, so this tests the transport without
- *  needing anyone else to type. */
+ *  The command opens the socket, posts one probe line, and requires the frame for
+ *  that exact timestamp to return. The probe uses the agent's own message by design:
+ *  the check needs no second identity, and the socket carries an application's own
+ *  posts even though `listen` filters them out of delivery, so this tests the
+ *  transport without requiring another user to type.
+ */
 async function proveWake(
   io: Io,
   agent: string,
@@ -3599,16 +3891,16 @@ async function proveWake(
     return { ok: false, error: `apps.connections.open answered ${String(oj.error)}` };
   }
   const socket = io.createSocket(oj.url);
-  // BUFFER THE FRAMES. Checking each frame against the ts we are waiting for
-  // loses the race when Slack echoes the post back before chat.postMessage has
-  // returned that ts, which a test caught: the frame arrives, the code does not
-  // yet know what to look for, and a live path reports itself dead.
+  // Buffer the frames. Checking each frame against the awaited timestamp loses the
+  // race when Slack echoes the post back before `chat.postMessage` returns that
+  // timestamp. A test caught this outcome: the frame arrives before the code knows
+  // what to look for, and a live path reports itself dead.
   const frames: string[] = [];
   socket.onmessage = (data) => {
     frames.push(data);
   };
-  // Give the socket a moment to finish its handshake before the probe is posted,
-  // or the frame can be missed and a healthy path reported as dead.
+  // Wait for the socket to complete its handshake before posting the probe, or the
+  // frame can be missed and a healthy path reported as dead.
   await io.sleep(2000);
   const sent = await io.fetch("https://slack.com/api/chat.postMessage", {
     method: "POST",
@@ -3638,22 +3930,26 @@ async function proveWake(
   return { ok: true, ts: posted };
 }
 
-/** A `listen` process for this agent that STARTED BEFORE the newest source file
- * is running code that no longer exists. Twice that produced a visible defect
- * the code had already fixed: an agent delivered its own posts for minutes
- * after the self-filter shipped, and kept posting `working` messages after the
- * living message was deleted. A merged fix does not reach a running process,
- * and nothing said so.
+/**
+ *  When an agent's `listen` process starts before the newest source file, that
+ *  process runs code that no longer exists. Twice this mismatch caused a visible
+ *  defect that the code had already fixed: an agent delivered its own posts for
+ *  minutes after the self-filter shipped, and continued posting `working` messages
+ *  after the living message was deleted. A merged fix does not reach a running
+ *  process, and no message stated this fact.
  *
- *  Reads /proc, so it answers undefined where that is absent. */
+ *  The check reads `/proc`, so it returns undefined where `/proc` is absent.
+ */
 export function staleListeners(io: Io, agent: string): Array<{ pid: string; ageBehind: number }> | undefined {
   const newest = newestSourceMs(io);
   if (newest === undefined) return undefined;
   return pickStale(readProcesses(io.env("SCRAMBLE_PROC") ?? "/proc"), agent, newest);
 }
 
-/** The newest mtime among this workspace's sources, or undefined when there is
- *  no `src` to compare against. */
+/**
+ *  The workspace reports the newest modification time among its sources, or
+ *  undefined when there is no `src` to compare against.
+ */
 function newestSourceMs(io: Io): number | undefined {
   let newest = 0;
   try {
@@ -3666,16 +3962,22 @@ function newestSourceMs(io: Io): number | undefined {
   return newest === 0 ? undefined : newest;
 }
 
-/** Every process this host will admit to, as (pid, cmdline, startedMs). Reads
- *  /proc and answers an empty list where that is absent, so the DECISION below
- *  stays pure and testable while the reading stays thin. */
-/** Can this host's process table be read at all?
+/**
+ *  This component returns every process running on the host as
+ *  `(pid, cmdline, startedMs)`. It reads `/proc` and returns an empty list where
+ *  `/proc` is absent, so the decision logic below stays pure and testable while the
+ *  reading logic stays thin.
+ */
+/**
+ *  Can this host's process table be read at all?
  *
- *  `readProcesses` answers the empty list for BOTH "nothing matched" and "there
- *  is no /proc here", and doctor cannot tell those apart: on a host without
- *  /proc it printed `doctor: ok` having inspected no listener at all, and the
- *  agent reading that has been told its listeners are fine when nothing looked.
- *  Anything that is about to run on other machines needs this separated. */
+ *  `readProcesses` returns an empty list both when no process matches and when
+ *  /proc is missing. The doctor command cannot distinguish between those two
+ *  cases: on a host without /proc, it printed `doctor: ok` having inspected no
+ *  listener at all, so the agent reading that output was told its listeners are
+ *  fine when nothing inspected them. Anything that is about to run on other machines
+ *  needs these outcomes separated.
+ */
 export function processesReadable(root = "/proc"): boolean {
   try {
     readdirSync(root);
@@ -3702,16 +4004,17 @@ export function readProcesses(root = "/proc"): Array<{ pid: string; cmd: string;
         startedMs: statSync(`${root}/${pid}`).mtimeMs,
       });
     } catch {
-      // A process that exited between the listing and the read is not stale, it
-      // is gone.
+      // When a process exits between the listing and the read, the process is gone.
     }
   }
   return out;
 }
 
-/** What doctor SAYS about stale listeners, or undefined when there is nothing to
- *  say. Separated from the finding so the sentence an operator acts on has its
- *  own test. */
+/**
+ *  The doctor tool reports details about stale listeners, or returns undefined
+ *  when there is nothing to say. The message is separated from the finding so the
+ *  sentence an operator acts on has its own test.
+ */
 export function staleListenerProblem(
   stale: Array<{ pid: string; ageBehind: number }> | undefined,
   agent: string,
@@ -3724,9 +4027,11 @@ export function staleListenerProblem(
   );
 }
 
-/** The commit the launcher on PATH would run now, read from the COMMIT file of
- *  the directory `current` resolves to. Empty when nothing is installed, which
- *  makes every comparison against it a no-op. */
+/**
+ *  The launcher on PATH reads the commit that it would run now from the COMMIT
+ *  file of the directory `current` resolves to. The value is empty when nothing is
+ *  installed, which makes every comparison against it a no-op.
+ */
 export function installedCommit(io: Io): string {
   const home = io.env("HOME");
   const root = io.env("SCRAMBLE_HOME") ?? (home === undefined ? "" : join(home, ".local", "share", "scramble"));
@@ -3738,25 +4043,32 @@ export function installedCommit(io: Io): string {
   }
 }
 
-/** The commit a listener is RUNNING, taken from its own command line.
+/**
+ *  This value records the commit a listener is running, taken directly from its
+ *  own command line.
  *
- *  The installed launcher execs the resolved commit directory, so a long-lived
- *  process carries its version where anyone can read it. Empty for a listener
- *  started from a checkout, which has no commit to name and is the case worth
- *  reporting differently.
+ *  The installed launcher executes the resolved commit directory, so a long-lived
+ *  process carries its version where anyone can read it. The value is empty for a
+ *  listener started from a checkout, which has no commit to name and is the case
+ *  worth reporting differently.
  *
- *  This replaces guessing from file mtimes for installed agents: mtimes compare
- *  a process against whatever `src` happens to sit in the CURRENT directory,
- *  which for an agent running an installed copy is not the code it loaded. */
+ *  This supersedes estimation from file modification times for installed agents.
+ *  Modification times compare a process against whatever `src` happens to sit in
+ *  the current directory, which differs from the code that an installed agent
+ *  loaded.
+ */
 export function listenerCommit(cmd: string): string {
   const m = /\/scramble\/([0-9a-f]{7,40})\/src\/bin\.ts/.exec(cmd);
   return m?.[1] ?? "";
 }
 
-/** Listeners for this agent running a commit OTHER than the one installed now,
- *  as `pid → commit`. Empty when nothing is behind, and a listener with no
- *  commit in its command line is left out: it is a checkout, which the stale
- *  mtime check already reports. */
+/**
+ *  This mapping reports listeners for this agent running a commit different from
+ *  the one installed now, formatted as `pid → commit`. The mapping is empty when
+ *  nothing is behind. It omits a listener with no commit in its command line
+ *  because that listener is a checkout, which the stale mtime check already
+ *  reports.
+ */
 export function listenersBehind(
   procs: Array<{ pid: string; cmd: string }>,
   agent: string,
@@ -3769,30 +4081,36 @@ export function listenersBehind(
     .filter((p) => p.commit !== "" && p.commit !== installed);
 }
 
-/** Every LIVE listener for this agent, whatever its age. Pure, and separate from
- *  pickStale because the question is different: pickStale asks which listeners
- *  are behind the code, and this asks whether anything is holding the socket at
- *  all.
+/**
+ *  This check finds every live listener for the agent regardless of its age.
+ *  The implementation remains pure and separate from `pickStale` because each
+ *  evaluates a different condition: `pickStale` identifies which listeners run
+ *  outdated code, whereas this logic checks whether any process holds the socket
+ *  at all.
  *
- * `doctor --wake` needs it. Slack delivers each Socket Mode event to ONE
- * connection, so an armed listener takes the probe frame and doctor's own
- * socket waits out its timeout and pronounces the wake path DEAD. Measured:
- * with the inbox armed, `doctor --wake` said "The wake path is DEAD" and told
- * me to re-onboard, which rotates the bot token; with the same inbox stopped
- * and nothing else changed, the same command answered
- * `"delivered":"1787365205.175139"`. The advice was worse than the verdict:
- * following it would have rotated a working token and stranded the listener. */
-/** Which of these pids still exist, checked NOW.
+ *  `doctor --wake` requires this check. Slack delivers each Socket Mode event to
+ *  one connection, so an armed listener consumes the probe frame, causing the
+ *  socket opened by `doctor` to wait out its timeout and report that the wake path
+ *  is dead. In testing, running `doctor --wake` with an armed inbox produced the
+ *  output "The wake path is DEAD" and advised re-onboarding, which rotates the bot
+ *  token. Running the same command with the inbox stopped and no other changes
+ *  returned `"delivered":"1787365205.175139"`. Following that instruction would
+ *  have rotated a working token and stranded the listener.
+ */
+/**
+ *  The check verifies which of these process IDs still exist right now.
  *
- * A listener count is a snapshot, and the most alarming surface here acts on
- * it: `doctor --wake` refuses to probe while a listener holds the socket. An
- * agent killed its listener, ran doctor, and was refused with the pid of a
- * process that had already gone. A refusal naming a dead pid sends someone
- * hunting for a process to stop, and the probe it withheld would have worked.
+ *  A listener count provides a snapshot, and the most sensitive command acts on
+ *  it: `doctor --wake` refuses to probe while a listener holds the socket. An
+ *  agent terminated its listener, ran doctor, and encountered a refusal citing
+ *  the PID of a process that had already exited. A refusal that names a dead PID
+ *  sends an operator searching for a process to stop, and the withheld probe
+ *  would have worked.
  *
- *  This does not close the window, since nothing can: a process can exit one
- *  microsecond after the check. It shrinks the window from the whole doctor run,
- *  which makes network calls, to the instant of the report. */
+ *  This check does not close the race window, since nothing can: a process can
+ *  exit one microsecond after the check. It shrinks the window from the full
+ *  doctor run, which makes network calls, to the instant of the report.
+ */
 export function stillAlive(pids: string[], root = "/proc"): string[] {
   return pids.filter((pid) => {
     try {
@@ -3803,18 +4121,20 @@ export function stillAlive(pids: string[], root = "/proc"): string[] {
   });
 }
 
-/** Is this process a scramble listener, and not something whose command line
- *  merely CONTAINS one?
+/**
+ *  Determining whether a process is a scramble listener when command-line
+ *  arguments contain matching words.
  *
- * A substring match over /proc counts any process whose arguments carry the
- * words, and the processes most likely to carry them are the ones people run
- * while looking into listeners: a grep, a pgrep, a shell one-liner. I hit this
- * on my own host, where my debugging shells matched the scan, and I fixed the
- * TESTS by feeding them an empty /proc, which left the detector able to do it
- * to anyone.
+ *  A substring match over `/proc` matches every process whose arguments contain the
+ *  search terms. The commands most likely to carry these terms are inspection tools
+ *  such as `grep`, `pgrep`, and shell one-liners. Debugging shells matched the scan
+ *  during testing. Supplying an empty `/proc` passed the tests, which left the
+ *  detector matching unrelated processes on other systems.
  *
- *  argv[0] settles it: a listener is executed by bun. A shell holding the same
- *  words has argv[0] of bash, sh, grep or pgrep. */
+ *  Inspecting `argv[0]` identifies the listener. A listener runs under `bun`. A
+ *  shell or inspection tool that holds the same words has an `argv[0]` of `bash`,
+ *  `sh`, `grep`, or `pgrep`.
+ */
 function isListenerProc(cmd: string, agent: string): boolean {
   if (!cmd.includes("bin.ts listen") || !cmd.includes(`--as ${agent}`)) return false;
   const argv0 = cmd.trim().split(/\s+/)[0] ?? "";
@@ -3829,31 +4149,37 @@ export function liveListeners(
   return procs.filter((p) => isListenerProc(p.cmd, agent)).map((p) => p.pid);
 }
 
-/** WHICH of those are listeners for this agent that predate the code. Pure, so
- *  the rule is tested without spawning anything. */
+/**
+ *  The check identifies which listeners for this agent predate the code. The logic
+ *  is pure, so the harness tests the rule without spawning anything.
+ */
 export function pickStale(
   procs: Array<{ pid: string; cmd: string; startedMs: number }>,
   agent: string,
   newestSourceMs: number,
 ): Array<{ pid: string; ageBehind: number }> {
-  // `--as <agent>`, which is narrower than the name ANYWHERE in the command
-  // line. A bare substring
-  // match reported every listener as belonging to every agent whenever an
-  // agent's name also appeared in the checkout path, which is ordinary: name an
-  // agent after the product and every process running from the product's own
-  // directory matches it. Measured here, doctor named the same three pids under
-  // two agents and told me to restart listeners that were not mine. A detector
-  // that cries wolf is worth less than no detector, since I stop reading it.
+  // The `--as <agent>` flag matches the specific agent argument, which is narrower
+  // than matching the name anywhere in the command line. A bare substring match
+  // reported every listener as belonging to every agent whenever an agent name also
+  // appeared in the checkout path. This occurs routinely: naming an agent after the
+  // product makes every process running from the product directory match that
+  // agent. In measured testing, doctor listed the same three process IDs under two
+  // agents and directed the operator to restart foreign listeners. A detector that
+  // emits false alarms is worth less than no detector, since the operator stops
+  // reading it.
   return procs
     .filter((p) => isListenerProc(p.cmd, agent) && p.startedMs < newestSourceMs)
     .map((p) => ({ pid: p.pid, ageBehind: Math.round((newestSourceMs - p.startedMs) / 1000) }));
 }
 
-/** What this agent's app DECLARES: whether it deploys org-wide, and which events
- *  it subscribes to. Read from the app's own manifest through the Slack CLI
- *  credential, which is the only token that can export it, in ONE call because
- *  both answers come from the same document. Returns undefined when that
- *  credential is absent, so a host without it reports nothing. */
+/**
+ *  The agent checks what the app declares: whether the app deploys org-wide, and
+ *  which events it subscribes to. The agent reads these values from the app's own
+ *  manifest through the Slack CLI credential, which is the only token that can
+ *  export it. The agent completes this in one call because both answers come from
+ *  the same document. The call returns undefined when that credential is absent,
+ *  so a host without it reports nothing.
+ */
 async function declaredManifest(
   io: Io,
   agent: string,
@@ -3872,14 +4198,14 @@ async function declaredManifest(
   } catch {
     return undefined;
   }
-  // ROTATE THE APP-CONFIG TOKEN, WHICH SPARES A PERSON TWICE A DAY. It lives
-  // twelve hours, nothing on either host renewed it, and doctor lost the
-  // manifest check every night as a result. The entry carries a refresh_token.
+  // Rotating the app-config token saves an operator from manual intervention twice a
+  // day. The token lasts twelve hours, neither host renewed it, and doctor failed the
+  // manifest check every night as a result. The entry carries a `refresh_token`.
   //
-  // NO CREDENTIAL AT ALL LEAVES THE QUESTION OPEN, exactly as it did before a
-  // rotation existed: an agent without the Slack CLI installed is not a broken
-  // agent. A credential that EXISTS and cannot be made usable is a problem,
-  // which is how the expired one surfaced in the first place.
+  // A missing credential leaves the check undecided, exactly as it did before
+  // rotation existed: an agent without the Slack CLI installed remains functional. A
+  // credential that exists and cannot be used creates an error, which is how the
+  // expired token surfaced initially.
   if (!firstCredential(fileText).ok) return undefined;
   const cred = await freshCliToken(
     fileText,
@@ -3888,19 +4214,19 @@ async function declaredManifest(
     Math.floor(Date.now() / 1000),
     new Date().toISOString(),
   );
-  // THE CREDENTIAL'S OWN REPORT ALREADY NAMES WHO ACTS, so doctor must not
-  // append a guess to it. It appended the ownership sentence to
-  // `invalid_refresh_token` on the first live run of this code, which is the
-  // same wrong cause the ownership branch printed for `token_expired` a day ago.
+  // The credential report already identifies the actor, so doctor must not append a
+  // guess to it. The tool appended the ownership sentence to `invalid_refresh_token`
+  // on the first live run of this code, which is the same incorrect cause that the
+  // ownership branch printed for `token_expired` a day ago.
   if (!cred.ok) return { unreadable: cred.why, selfExplained: true };
   const cliToken = cred.token;
   if (cred.rotated) io.writeErr(`doctor: the Slack app-config token was expired and has been rotated in ${path}.`);
   const cfg = loadSlackConfig(io);
   if (cfg === null) return undefined;
-  // THE AGENT BEING CHECKED, by name. The first
-  // version of this took the last appId in the config, so a healthy agent's
-  // manifest answered for a broken one and doctor cleared an app whose inbox
-  // was dead. Its own control caught it.
+  // Specify the agent being checked by name. The first version of this check used
+  // the last appId in the configuration, so a healthy agent's manifest answered for
+  // a broken agent and doctor cleared an application whose inbox was dead. Its own
+  // control caught it.
   appId = cfg.agents[agent]?.appId ?? "";
   if (appId === "") return undefined;
   const r = await io.fetch("https://slack.com/api/apps.manifest.export", {
@@ -3915,11 +4241,11 @@ async function declaredManifest(
       settings?: { org_deploy_enabled?: boolean; event_subscriptions?: { bot_events?: string[] } };
     };
   };
-  // AN APP THIS LOGIN DOES NOT OWN answers no_permission, and that is a
-  // different fact from "no credential here". A fourth agent onboarded onto
-  // someone else's app and doctor told it to run onboard-agent.ts, which dies
-  // on its first call for exactly that reason: "The repair line assumes the
-  // agent owns the app".
+  // An application that this login does not own returns `no_permission`, which
+  // is distinct from "no credential here". When a fourth agent onboarded onto
+  // an application owned by another account, `doctor` instructed it to run
+  // `onboard-agent.ts`. That script fails on its first call because the repair line
+  // assumes the agent owns the application.
   if (j.ok !== true) return { unreadable: String(j.error ?? "unknown") };
   const settings = j.manifest?.settings;
   return {
@@ -3931,10 +4257,10 @@ async function declaredManifest(
 async function cmdChannel(argv: string[], io: Io): Promise<number> {
   const { flags, positionals } = parseArgs(argv);
   const sub = positionals[0];
-  // `channel tier <channel> internal|external` writes the classification the
-  // operator makes. Asked for in those terms: "Channel classification should be
-  // manually done by the operator". Hand-editing the shared JSON is how a
-  // config gets a stray comma at midnight.
+  // The `channel tier <channel> internal|external` command writes the
+  // classification chosen by the operator. The operator classifies channels
+  // manually because hand-editing the shared JSON introduces syntax errors like
+  // stray commas at midnight.
   if (sub === "tier") return setChannelTier(positionals[1], positionals[2], io);
   if (sub !== "join") {
     io.writeErr(`unknown channel verb: ${sub ?? "(none)"}`);
@@ -3948,11 +4274,15 @@ async function cmdChannel(argv: string[], io: Io): Promise<number> {
   return joinChannel(req.channel, flags, io);
 }
 
-/** Write one channel's register into the config the agents on this host share.
+/**
+ *  Write one channel's register into the configuration file that agents on this
+ *  host share.
  *
- *  It reads the file, changes the one key, and writes it back, so every other
- *  entry survives. Printing the whole map afterwards is the read-back: the
- *  operator sees what the file now says about every channel, from the file. */
+ *  The command reads the file, changes the target key, and writes the contents
+ *  back, so every other entry survives. Printing the complete map afterward serves
+ *  as a read-back so the operator can inspect what the file records for every
+ *  channel directly from the file.
+ */
 function setChannelTier(channel: string | undefined, tier: string | undefined, io: Io): number {
   if (channel === undefined || (tier !== "internal" && tier !== "external")) {
     io.writeErr(`usage: scramble channel tier <channel> internal|external`);
@@ -3983,11 +4313,13 @@ function setChannelTier(channel: string | undefined, tier: string | undefined, i
   return 0;
 }
 
-/** `channel join` on the Slack backend. Joining is not something an app can do:
- *  a member invites it, public channel or private. So this REPORTS the state
- *  that matters, whether the invite has happened, and prints the invite line
- *  when it has not. It never writes to the local daemon, which is not running
- *  under this backend. */
+/**
+ *  On the Slack backend, an app cannot join a channel on its own, because a member
+ *  must invite it to a public or private channel. Therefore, `channel join` reports
+ *  whether the invite has happened, and it prints the invite line when the invite
+ *  has not occurred. It never writes to the local daemon, which is not running under
+ *  this backend.
+ */
 async function joinChannelSlack(channel: string, flags: Map<string, string>, io: Io): Promise<number> {
   const name = nameFor(flags, io);
   const s = slackBackend(io);
@@ -4011,23 +4343,24 @@ async function joinChannelSlack(channel: string, flags: Map<string, string>, io:
   return 1;
 }
 
-/** Which backend this run uses. Selected by `--backend <name>` (highest
- *  precedence), then `SCRAMBLE_BACKEND`, and with NEITHER given it follows the
- *  config on disk: a slack config present means slack, its absence means the
- *  local daemon. An unknown backend name is REPORTED, naming the two backends
- *  that exist. Returns null when a name was given but matched neither, after the
- *  error is written to stderr.
+/**
+ *  The run selects its backend by precedence. The `--backend <name>` flag takes
+ *  the highest precedence, followed by the `SCRAMBLE_BACKEND` environment
+ *  variable. If neither is given, the run follows the configuration on disk: the
+ *  presence of a Slack configuration selects Slack, and its absence selects the
+ *  local daemon. When an unknown backend name is provided, the run reports an error
+ *  to stderr that names the two existing backends and returns null.
  *
- *  IT USED TO DEFAULT TO LOCAL WHATEVER WAS CONFIGURED, which is a failure
- *  surface with a preference painted over it. The local backend answers from a
- *  store that
- *  the listener fills, so a Slack agent that forgot the environment variable got
- *  a TRANSCRIPT where an error belonged: `message read` on a channel it had just been
- *  invited to printed nothing and exited 0 while Slack held twenty messages in
- *  it, and the same read of a busy channel returned whatever the store happened
- *  to have cached. An empty answer that looks like a quiet channel is exactly the
- *  shape that has to be impossible to construct, so the default now comes from
- *  the same file that decides everything else about a Slack agent. */
+ *  The system previously defaulted to local regardless of what was configured.
+ *  Because the local backend answers from a store that the listener fills, a Slack
+ *  agent that omitted the environment variable received a transcript where an
+ *  error belonged. Running `message read` on a channel it had just been invited to
+ *  printed nothing and exited 0 while Slack held twenty messages in it, and the
+ *  same read of a busy channel returned whatever the store happened to have cached.
+ *  An empty answer that looks like a quiet channel must be impossible to construct,
+ *  so the default now comes from the file that decides the rest of the Slack agent
+ *  configuration.
+ */
 export function selectBackend(argv: string[], io: Io): "local" | "slack" | null {
   let name: string | undefined;
   for (let i = 0; i < argv.length; i++) {
@@ -4049,8 +4382,10 @@ export function selectBackend(argv: string[], io: Io): "local" | "slack" | null 
   return null;
 }
 
-/** The verbs, one line each. Printed for `--help` and for an unknown verb, so a
- *  reader learns what exists from the tool itself. */
+/**
+ *  The tool prints each verb on its own line for `--help` and for an unknown verb,
+ *  so a reader learns what exists from the tool itself.
+ */
 const USAGE = [
   "scramble <verb> [--as <agent>] [--target <channel>]",
   "",
@@ -4088,10 +4423,11 @@ const USAGE = [
 ].join("\n");
 
 export async function main(argv: string[], raw: Io): Promise<number> {
-  // EVERY DIAGNOSTIC KEYED, AT THE ONE PLACE THEY ALL PASS THROUGH. Both streams:
-  // `rewrites --near` writes its histogram to stdout, and wrapping only stderr left
-  // that one block bare while every other went out keyed. A JSON line declares no
-  // key and passes through byte for byte.
+  // The handler keys every diagnostic at the single point where all diagnostics
+  // pass through. This includes both streams: `rewrites --near` writes its
+  // histogram to stdout, and wrapping only stderr left that block unkeyed while
+  // every other block went out keyed. A JSON line declares no key and passes
+  // through byte for byte.
   const io: Io = {
     ...raw,
     write: (line: string) => raw.write(autoKey(line)),
@@ -4101,18 +4437,18 @@ export async function main(argv: string[], raw: Io): Promise<number> {
     io.write(USAGE);
     return 0;
   }
-  // A MISSPELLED OVERRIDE IS REPORTED, on every verb. An override that misses
-  // reads exactly like a clean result, and one agent nearly filed a bug on that.
+  // Every verb reports a misspelled override. An override that misses appears
+  // exactly like a clean result, and an agent nearly filed a bug on that.
   {
     const note = io.envNames === undefined ? "" : unknownEnvNote(io.envNames());
     if (note !== "") io.writeErr(note);
   }
   const backend = selectBackend(argv, io);
   if (backend === null) return 1;
-  // Every scramble invocation clears whatever has expired before its own work,
-  // whatever verb it is. Awaited (not fire-and-forget) so a short-lived verb
-  // finishes the expiry sweep's ledger write before the process exits.
-  // SCRAMBLE_STATUS=off makes this a no-op.
+  // Every `scramble` invocation clears expired data before it performs its own
+  // work, regardless of which verb it runs. The caller awaits this step so a
+  // short-lived verb finishes writing the expiry sweep to the ledger before the
+  // process exits. Setting `SCRAMBLE_STATUS=off` makes this operation a no-op.
   await settleStatus(statusTracker(io, backend, nameFor(parseArgs(argv.slice(1)).flags, io))?.clearExpired());
   switch (argv[0]) {
     case "post":
