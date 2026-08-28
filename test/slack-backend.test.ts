@@ -1455,6 +1455,41 @@ describe("slack commands through main", () => {
     expect(JSON.parse(writes[0]!)).toMatchObject({ channel: "general", mentioned: true });
   });
 
+  test("a delivery keeps Slack's own bytes when the rendering changed them", async () => {
+    // THE WAKE FILE IS THE ARCHIVE. Slack has already lost four of the five
+    // messages the calibration table rests on, and an archive that holds only the
+    // rendered form stops being checkable the day the rendering moves: the
+    // unescape half arrived after listeners had written thousands of lines, and
+    // three agents spent an hour reconciling three hashes of one message.
+    const run = async (text: string): Promise<{ text: string; raw?: string }> => {
+      const sockets: FakeSocket[] = [];
+      const { io, writes } = configuredIo({
+        fetch: async (url) => {
+          if (String(url).includes(SOCKET_OPEN)) return new Response(JSON.stringify({ ok: true, url: "wss://s" }), { status: 200 });
+          return new Response(JSON.stringify({ ok: true }), { status: 200 });
+        },
+        createSocket: () => {
+          const s = new FakeSocket();
+          sockets.push(s);
+          return s;
+        },
+      });
+      const p = main(["next", "--as", "alice", "--backend", "slack", "--timeout", "5"], io);
+      await pump(10);
+      sockets[0]?.onmessage?.(frame({ type: "message", channel: "C1", user: "U123", text, ts: "1" }));
+      await p;
+      return JSON.parse(writes[0]!) as { text: string; raw?: string };
+    };
+    const escaped = await run("@alice run it with --as &lt;me&gt;");
+    expect(escaped.text).toBe("@alice run it with --as <me>");
+    expect(escaped.raw).toBe("@alice run it with --as &lt;me&gt;");
+    // AND A PLAIN MESSAGE CARRIES NO SECOND COPY, since the rendering left it
+    // byte-exact.
+    const plain = await run("@alice hi");
+    expect(plain.text).toBe("@alice hi");
+    expect(plain.raw).toBeUndefined();
+  });
+
   test("a slack next with no config exits 1 naming the config path", async () => {
     const io = stubIo();
     const cwd2 = makeTmpDir("slackcfg-missing");

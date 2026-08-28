@@ -1411,6 +1411,9 @@ export class SlackBackend {
       channel: channelName,
       from,
       text,
+      // THE ARCHIVE KEEPS SLACK'S BYTES. Only when the rendering changed them, so
+      // a plain message carries no second copy.
+      ...(ev.text !== undefined && ev.text !== text ? { raw: ev.text } : {}),
       id: ts,
       mentions,
       mentioned,

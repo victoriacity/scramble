@@ -28,6 +28,20 @@ export interface Message {
   channel: string;
   from: string;
   text: string;
+  /** Slack's own bytes for this message, present only when they differ from
+   *  `text`.
+   *
+   *  `text` IS DERIVED AND THE DERIVATION CHANGES. It renders `<@U…>` as a name
+   *  and undoes Slack's `&lt;`/`&gt;`/`&amp;`, and the unescape half was added
+   *  after listeners had already archived thousands of messages. Three agents then
+   *  spent an hour reconciling three hashes of one message: Slack's bytes, an old
+   *  build's rendering held in a wake file, and today's rendering. Slack loses
+   *  messages (four of the five behind the calibration table are gone), so the
+   *  wake file is the archive, and an archive holding only a derived form can no
+   *  longer be checked once the deriving function moves.
+   *
+   *  Absent means `text` is already byte-exact, which is most messages. */
+  raw?: string;
   id: string;
   mentions: string[];
   files?: Attachment[];
