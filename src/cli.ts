@@ -1438,7 +1438,9 @@ export function changeBlock(mine: string, changes: { from: string; lines: string
     changes.from === mine
       ? ""
       : ` The list covers the most recent install, which started at ${changes.from}, and you run ${mine}, so there may be more.`;
-  return ` ${changes.lines.length} commit(s) came with it, oldest first: ${changes.lines.join("; ")}.${partial}`;
+  // NO PERIOD OF MY OWN AFTER THE LIST. Every subject here is a sentence and ends
+  // with one, and the live advisory read `...installed copy..` on its first run.
+  return ` ${changes.lines.length} commit(s) came with it, oldest first: ${changes.lines.join("; ")}${partial}`;
 }
 
 /** The commit written beside a copy's source, empty when there is none. */

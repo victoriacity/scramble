@@ -25,11 +25,20 @@ fail() { echo "install: REFUSED: $*" >&2; exit 1; }
 
 git rev-parse --git-dir >/dev/null 2>&1 || fail "this directory is not a git checkout"
 
+# THE SOURCE IS HEAD, NEVER THE WORKING TREE, so an edit in progress cannot reach
+# an installed copy and cannot block anybody's install either. This refused a dirty
+# tree instead, which was right about the danger and wrong about the remedy: one
+# checkout on this host is the install source for every agent on it, so the refusal
+# handed my edit cycle a veto over their restarts. An agent hit it tonight while
+# restarting a listener and quoted my own half-finished files back to me.
+#
+# `git archive HEAD` writes the committed bytes of that commit, so the copy is
+# named by construction and a half edit has no way in.
 DIRTY="$(git status --porcelain)"
 if [ -n "$DIRTY" ]; then
-  echo "install: the working tree has uncommitted changes:" >&2
+  echo "install: this checkout has uncommitted changes, and NONE of them are installed:" >&2
   echo "$DIRTY" >&2
-  fail "commit or stash all changes before installing. An install names a COMMIT, and half an edit has no name."
+  echo "install: the copy comes from HEAD. Commit first for an edit to reach the installed version." >&2
 fi
 
 SHA="$(git rev-parse --short HEAD)"
@@ -38,10 +47,17 @@ DEST="$ROOT/$SHA"
 
 mkdir -p "$DEST" || fail "cannot create $DEST"
 # src + package.json is the whole runtime: package.json lists no runtime
-# dependencies, and src imports node builtins and its own files only.
-cp -r src "$DEST/" || fail "cannot copy src into $DEST"
-cp package.json "$DEST/" || fail "cannot copy package.json into $DEST"
-cp -r skills "$DEST/" 2>/dev/null || true
+# dependencies, and src imports node builtins and its own files only. `skills`
+# rides along for the agents that read it.
+# WHAT HEAD HOLDS DECIDES THE PATHS, so the one archive command runs with its
+# stderr in view. A `2>/dev/null` on a first attempt with a fallback behind it
+# hides the failure that matters when both fail.
+ARCHIVE_PATHS="src package.json"
+git cat-file -e "HEAD:skills" 2>/dev/null && ARCHIVE_PATHS="$ARCHIVE_PATHS skills"
+# shellcheck disable=SC2086
+git archive HEAD $ARCHIVE_PATHS | tar -x -C "$DEST" || fail "cannot write HEAD's tree into $DEST"
+[ -f "$DEST/src/bin.ts" ] || fail "$DEST/src/bin.ts is missing after writing HEAD's tree"
+[ -f "$DEST/package.json" ] || fail "$DEST/package.json is missing after writing HEAD's tree"
 printf '%s\n' "$SHA" > "$DEST/src/COMMIT"
 
 ln -sfn "$DEST" "$ROOT/current" || fail "cannot point $ROOT/current at $DEST"

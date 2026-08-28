@@ -1243,7 +1243,7 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
 
     const changes = { from: "aaa1111", lines: ["bbb2222 first thing", "ccc3333 second thing"] };
     // A READER AT THE HOP'S START gets the list and no warning.
-    expect(changeBlock("aaa1111", changes)).toContain("2 commit(s) came with it, oldest first: bbb2222 first thing; ccc3333 second thing.");
+    expect(changeBlock("aaa1111", changes)).toContain("2 commit(s) came with it, oldest first: bbb2222 first thing; ccc3333 second thing");
     expect(changeBlock("aaa1111", changes)).not.toContain("most recent install");
     // A READER FURTHER BEHIND is told the list covers one hop.
     expect(changeBlock("zzz9999", changes)).toContain("covers the most recent install, which started at aaa1111, and you run zzz9999");
