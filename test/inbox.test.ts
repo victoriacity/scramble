@@ -724,6 +724,15 @@ describe("the record of what this agent said", () => {
     // The table holds the pairs, with who measured each one.
     expect(CALIBRATION.some((c) => c.ts !== undefined && c.score === 0.968 && c.label === "duplicate")).toBe(true);
     expect(CALIBRATION.every((c) => c.measuredBy !== "")).toBe(true);
+    // AND EVERY MEASURED ROW CARRIES ITS TWO TEXT HASHES. Slack has lost four of
+    // the five source messages behind these rows, one to a deletion and four to a
+    // morning's cleanup, while every listener had already written each delivery to
+    // disk. The hashes are what let an agent holding the text confirm it is the
+    // same text after the channel no longer has it.
+    const measured = CALIBRATION.filter((c) => c.source === "measured");
+    expect(measured.length).toBeGreaterThan(0);
+    expect(measured.every((c) => c.sha !== undefined)).toBe(true);
+    expect(CALIBRATION.flatMap((c) => c.sha ?? []).every((h) => /^[0-9a-f]{16}$/.test(h))).toBe(true);
     // A THRESHOLD ABOVE THE CONFIRMED DUPLICATE FAILS THE REAL SET, which is what
     // a proposal to raise it has to clear.
     expect(calibrationMisses({ content: 0.97, short: 0.85 }).real).toHaveLength(1);
