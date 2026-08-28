@@ -52,7 +52,8 @@ function make(): Harness {
 }
 
 async function pump(): Promise<void> {
-  // drain microtasks so the async openLoop/drain settles
+  // Drain microtasks so the asynchronous `openLoop` and `drain` operations
+  // settle.
   for (let i = 0; i < 6; i++) await Promise.resolve();
 }
 

@@ -260,12 +260,12 @@ describe("streams", () => {
     const res = await h(new Request("http://x/channels/general/stream?since=0&exclude=b"));
     expect(res.status).toBe(200);
     const reader = res.body!.getReader();
-    // snapshot: only from=a survives the exclude
+    // The snapshot retains only `from=a` through the exclude.
     expect(JSON.parse(await readOne(reader)).text).toBe("one");
-    // a live message from a non-excluded sender flows into the same open stream
+    // A live message from a sender who is not excluded enters the same open stream.
     await h(post({ from: "c", text: "three", id: "3" }));
     expect(JSON.parse(await readOne(reader)).text).toBe("three");
-    // a live message from the excluded sender is dropped
+    // A live message sent by the excluded sender is dropped.
     await h(post({ from: "b", text: "four", id: "4" }));
     await reader.cancel();
   });
@@ -314,7 +314,8 @@ describe("streams", () => {
     await h(new Request("http://x/agents/dev", { method: "POST", body: '{"channel":"general"}' }));
     const res = await h(new Request("http://x/agents/dev/stream?since=0"));
     const reader = res.body!.getReader();
-    // arm a pending read: the subscription is established, then the live post fills it
+    // Arm a pending read by establishing the subscription, which the live post then
+    // fills.
     const pending = reader.read();
     await h(post({ from: "ana", text: "@dev brand new", id: "9" }));
     const { value } = await pending;
@@ -337,12 +338,13 @@ describe("streams", () => {
     const all = await h(new Request("http://x/agents/dev/pending?since=0"));
     expect(all.status).toBe(200);
     const arr = (await all.json()) as Array<{ from: string; channel: string; mentioned: boolean }>;
-    // dev's channel general, own message excluded, unrelated dm/ channel excluded
+    // The system processes messages from the development team's general channel,
+    // excludes its own messages, and excludes unrelated direct messages and channels.
     expect(arr.length).toBe(1);
     expect(arr[0]!.from).toBe("ana");
     expect(arr[0]!.channel).toBe("general");
     expect(arr[0]!.mentioned).toBe(true);
-    // a cursor skips what was already drained
+    // A cursor skips data that has already been drained.
     const since = await h(new Request("http://x/agents/dev/pending?since=1"));
     expect((await since.json()) as unknown[]).toHaveLength(0);
   });
@@ -415,3 +417,4 @@ describe("serve()", () => {
 function ndisos(lines: string[]) {
   return lines.map((l) => JSON.parse(l) as Record<string, unknown>);
 }
+

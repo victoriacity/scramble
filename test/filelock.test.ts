@@ -1,4 +1,4 @@
-// test/filelock.test.ts: the lock every rewritten ledger holds.
+// `test/filelock.test.ts` tests the lock that every rewritten ledger holds.
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -12,8 +12,8 @@ describe("withFileLock", () => {
     const f = join(scratch(), "deep", "ledger.json");
     expect(withFileLock(f, () => 42)).toBe(42);
     expect(existsSync(`${f}.lock`)).toBe(false);
-    // The directory is created, so a fresh workspace does not spend the whole
-    // wait failing to make a lock inside a missing directory.
+    // The directory is created, so a fresh workspace does not spend the entire
+    // wait failing to create a lock inside a missing directory.
     expect(existsSync(join(f, ".."))).toBe(true);
   });
 
@@ -26,8 +26,8 @@ describe("withFileLock", () => {
   });
 
   test("a lock left behind by a dead process is BROKEN, and reported", () => {
-    // A process killed while holding it must not freeze the file forever, and
-    // breaking one silently would hide a wedged process.
+    // A process that is killed while holding a lock must not freeze the file forever,
+    // and breaking a lock silently would hide a wedged process.
     const f = join(scratch(), "ledger.json");
     mkdirSync(`${f}.lock`, { recursive: true });
     const notes: string[] = [];
@@ -36,3 +36,4 @@ describe("withFileLock", () => {
     expect(existsSync(`${f}.lock`)).toBe(false);
   });
 });
+

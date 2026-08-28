@@ -3,11 +3,11 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-// E2E smoke over the REAL entrypoint (src/bin.ts) exactly the way an operator
-// runs it: spawn the daemon with a --bind on an ephemeral port and a temp
-// --data dir, then drive the real CLI (src/bin.ts) as child processes against
-// it. Spawned processes' files are not loaded by bun's coverage, so this test
-// keeps the 100% numbers intact.
+// This end-to-end smoke test runs the entrypoint `src/bin.ts` the way an operator
+// runs it. The test spawns the daemon with `--bind` on an ephemeral port and a
+// temporary `--data` directory, then drives CLI child processes from `src/bin.ts`
+// against it. Bun's coverage does not load files from spawned processes, so this
+// test keeps the 100% numbers intact.
 
 const repoRoot = process.cwd();
 const binPath = join(repoRoot, "src", "bin.ts");
@@ -18,7 +18,10 @@ interface RunResult {
   stderr: string;
 }
 
-/** Run a CLI command to completion and return stdout/stderr/exit code. */
+/**
+ *  Execute a CLI command to completion and return its standard output, standard
+ *  error, and exit code.
+ */
 function runCli(args: string[], cwd: string): Promise<RunResult> {
   return new Promise((resolve) => {
     let stdout = "";
@@ -26,11 +29,11 @@ function runCli(args: string[], cwd: string): Promise<RunResult> {
     const proc = Bun.spawn({
       cmd: [process.execPath, binPath, ...args],
       cwd,
-      // THESE ARE THE LOCAL BACKEND'S e2e, said out loud. With neither a flag
-      // nor this variable, scramble follows the config on disk, and the machine
-      // running these tests is usually an agent's own machine with a real
-      // ~/.config/scramble/slack.json, so the suite would spawn a CLI that talks
-      // to a live Slack workspace while these tests start a daemon of their own.
+      // These end-to-end tests run against the local backend. Without a flag or this
+      // variable, scramble follows the configuration on disk, and the machine running
+      // these tests is usually an operator's own machine with a real
+      // ~/.config/scramble/slack.json, so the suite would spawn a CLI that talks to a
+      // live Slack workspace while these tests start a daemon of their own.
       env: { ...process.env, SCRAMBLE_BACKEND: "local" },
       stdout: "pipe",
       stderr: "pipe",
@@ -56,7 +59,9 @@ function runCli(args: string[], cwd: string): Promise<RunResult> {
   });
 }
 
-/** A still-running child (for `listen`) that streams output into buffers. */
+/**
+ *  A child process for `listen` remains running and streams output into buffers.
+ */
 interface Follower {
   stdout(): string;
   stderr(): string;
@@ -70,9 +75,9 @@ function spawnFollow(args: string[], cwd: string): Follower {
   const proc = Bun.spawn({
     cmd: [process.execPath, binPath, ...args],
     cwd,
-    // The local backend, said out loud, for the same reason runCli says it: the
-    // backend follows the config on disk when nothing names one, and this
-    // machine has a real slack config.
+    // This command explicitly sets the local backend for the same reason runCli sets
+    // it: the backend follows the configuration on disk when nothing names one, and
+    // this machine has a real Slack configuration.
     env: { ...process.env, SCRAMBLE_BACKEND: "local" },
     stdout: "pipe",
     stderr: "pipe",
@@ -103,14 +108,18 @@ function spawnFollow(args: string[], cwd: string): Follower {
       try {
         proc.kill();
       } catch {
-        /* already gone */
+        /**
+         *  The item is already gone.
+         */
       }
       await proc.exited.catch(() => {});
     },
   };
 }
 
-/** Reserve a free TCP port by binding an ephemeral socket and releasing it. */
+/**
+ *  Bind an ephemeral socket and release it to reserve an available TCP port.
+ */
 function freePort(): number {
   const srv = Bun.serve({ port: 0, fetch: () => new Response("x") });
   const port = srv.port as number;
@@ -118,7 +127,10 @@ function freePort(): number {
   return port;
 }
 
-/** Poll the daemon until it accepts a connection (never a blind sleep). */
+/**
+ *  The client polls the daemon until the daemon accepts a connection, and never
+ *  uses a blind sleep.
+ */
 async function waitReady(url: string, ms = 8000): Promise<void> {
   const deadline = Date.now() + ms;
   let lastErr: unknown;
@@ -134,7 +146,9 @@ async function waitReady(url: string, ms = 8000): Promise<void> {
   throw new Error(`daemon did not accept connections within ${ms}ms: ${lastErr}`);
 }
 
-/** Poll until a predicate holds true (never a blind sleep). */
+/**
+ *  Poll until a predicate holds true. Never use a blind sleep.
+ */
 async function until(fn: () => Promise<boolean>, ms = 8000): Promise<void> {
   const deadline = Date.now() + ms;
   while (Date.now() < deadline) {
@@ -183,7 +197,9 @@ describe("e2e over the real bin.ts entrypoint", () => {
     try {
       daemonProc.kill();
     } catch {
-      /* already gone */
+      /**
+       *  The item is already gone.
+       */
     }
     await daemonProc.exited.catch(() => {});
     rmSync(dataDir, { recursive: true, force: true });
@@ -191,9 +207,10 @@ describe("e2e over the real bin.ts entrypoint", () => {
   });
 
   test("the --bind port passed at spawn is the port actually listened on", async () => {
-    // The daemon was launched with `--bind 127.0.0.1:<port>` and came up there.
-    // If the port ever strayed (pre-fix it kept 7737 and used the whole string
-    // as the hostname), this fetch against the --bind port could never succeed.
+    // The daemon was launched with `--bind 127.0.0.1:<port>` and started listening on
+    // that address. If the port ever deviated (prior to the fix, the daemon retained
+    // 7737 and used the entire string as the hostname), this fetch against the
+    // `--bind` port could never succeed.
     const res = await fetch(`${baseUrl}/channels`);
     expect(res.status).toBe(200);
   }, 30000);
@@ -216,7 +233,7 @@ describe("e2e over the real bin.ts entrypoint", () => {
       work,
     );
     expect(first.code).toBe(0);
-    // First poster in an empty channel: nothing to cross.
+    // The first poster in an empty channel has nothing to cross.
     expect(parseLines(first.stdout)).toHaveLength(0);
 
     const second = await runCli(
@@ -230,7 +247,7 @@ describe("e2e over the real bin.ts entrypoint", () => {
   }, 30000);
 
   test("next --as <name> --timeout N returns the pending message and exits 0", async () => {
-    // eve must be a member of a channel that already holds a message.
+    // Eve must belong to a channel that already contains a message.
     await runCli(["join", "queue", "--as", "eve", "--url", baseUrl], work);
     await runCli(["post", "queue", "wake up eve", "--as", "op", "--url", baseUrl], work);
     const r = await runCli(
@@ -244,7 +261,7 @@ describe("e2e over the real bin.ts entrypoint", () => {
   }, 30000);
 
   test("next exits 64 when nothing arrives before the timeout", async () => {
-    // A fresh agent in a fresh, empty channel with a short timeout.
+    // A fresh agent operates in a fresh, empty channel with a short timeout.
     await runCli(["join", "quiet", "--as", "q", "--url", baseUrl], work);
     const r = await runCli(["next", "--as", "q", "--timeout", "0", "--url", baseUrl], work);
     expect(r.code).toBe(64);
@@ -258,8 +275,9 @@ describe("e2e over the real bin.ts entrypoint", () => {
       work,
     );
     try {
-      // Prove the listener's stream is open by having it print a first ping
-      // that was posted, THEN post the real message while it is streaming.
+      // Verify that the listener's stream is open by having the listener print an
+      // initial ping that was posted. Send the actual message while the stream is
+      // active.
       const ping = await runCli(
         ["post", "live-channel", "@leo first ping", "--as", "mara", "--url", baseUrl],
         work,

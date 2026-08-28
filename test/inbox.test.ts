@@ -46,10 +46,9 @@ const item = (over: Partial<InboxItem> = {}): InboxItem => ({
 
 describe("the inbox ledger: one row per addressed line, one reply owed", () => {
   test("an addressed line is recorded OPEN and reported with what it said", () => {
-    // The operator: "Each of your inbox item must be addressed by at least 1
-    // reply." The check before this counted TURNS, and a turn boundary is not
-    // an item boundary: two items arriving together were satisfied by one
-    // reply.
+    // Each inbox item must be addressed by at least 1 reply. The previous check
+    // counted turns. Because a turn boundary differs from an item boundary, one reply
+    // satisfied two items that arrived together.
     const p = join(scratch(), "inbox", "dev.jsonl");
     recordInboxItem(p, item());
     expect(pendingInbox(p)).toHaveLength(1);
@@ -60,7 +59,7 @@ describe("the inbox ledger: one row per addressed line, one reply owed", () => {
   });
 
   test("TWO items arriving together are NOT satisfied by one reply to one of them", () => {
-    // The exact gap in the per-turn check, stated as a test.
+    // The test states the exact gap in the per-turn check.
     const p = join(scratch(), "inbox", "dev.jsonl");
     recordInboxItem(p, item({ id: "1", channel: "alpha" }));
     recordInboxItem(p, item({ id: "2", channel: "beta" }));
@@ -75,8 +74,9 @@ describe("the inbox ledger: one row per addressed line, one reply owed", () => {
     recordInboxItem(p, item({ id: "2" }));
     expect(closeInboxItems(p, "scramble-dev", "reply-1")).toBe(2);
     expect(pendingInbox(p)).toHaveLength(0);
-    // Already answered stays answered: a later reply does not re-close, so the
-    // count of what a reply did is the count of what it closed.
+    // An item that is already answered remains answered. A later reply does not
+    // close an item again, so the count of actions a reply performed is the count
+    // of items it closed.
     recordInboxItem(p, item({ id: "3" }));
     expect(closeInboxItems(p, "scramble-dev", "reply-2")).toBe(1);
     expect(readInbox(p).map((r) => r.answeredBy)).toEqual(["reply-1", "reply-1", "reply-2"]);
@@ -91,24 +91,24 @@ describe("the inbox ledger: one row per addressed line, one reply owed", () => {
   });
 
   test("a threaded reply leaves a channel-level question open", () => {
-    // MEASURED: xingyubot asked me something at channel level, I answered a
-    // different agent inside a thread half a minute later, and the ledger
-    // marked their question answered by that reply ( ts 1787664642.769859
-    // closed by 1787664661.695049). They waited with nothing on my list.
+    // When xingyubot posted a question at the channel level, the agent answered a
+    // different agent inside a thread half a minute later, and the ledger marked the
+    // original question answered by that reply (timestamp 1787664642.769859 closed by
+    // 1787664661.695049). xingyubot waited with nothing remaining on the agent's list.
     const p = join(scratch(), "inbox", "dev.jsonl");
     recordInboxItem(p, item({ id: "asked-in-the-room" }));
     recordInboxItem(p, item({ id: "asked-in-the-thread", thread: "root-1" }));
     expect(closeInboxItems(p, "scramble-dev", "reply", "root-1")).toBe(1);
     expect(pendingInbox(p).map((r) => r.id)).toEqual(["asked-in-the-room"]);
-    // The room's own answer still closes the room.
+    // An answer sent by the room itself still closes the room.
     expect(closeInboxItems(p, "scramble-dev", "reply-2")).toBe(1);
     expect(pendingInbox(p)).toHaveLength(0);
   });
 
   test("a message I already sent closes every OLDER question in that channel", () => {
-    // Five questions answered hours before the ledger existed sat in `pending`
-    // forever, and a list naming answered questions is one an agent scrolls
-    // past. A reply is a reply whether or not it went through this CLI.
+    // Five questions answered hours before the ledger existed remained in `pending`
+    // indefinitely, and an agent scrolls past a list that contains answered questions.
+    // A reply is a reply whether or not it passed through this CLI.
     const p = join(scratch(), "inbox", "dev.jsonl");
     recordInboxItem(p, item({ id: "1787359081.749909", channel: "room" }));
     recordInboxItem(p, item({ id: "1787359443.824399", channel: "room" }));
@@ -123,12 +123,12 @@ describe("the inbox ledger: one row per addressed line, one reply owed", () => {
   });
 
   test("timestamps compare as NUMBERS, so a width change does not reorder them", () => {
-    // "999.9" sorts after "1787360000.0" as a STRING, which would leave an old
+    // String comparison sorts "999.9" after "1787360000.0", which would leave an old
     // item open forever and close a new one by mistake.
     const p = join(scratch(), "inbox", "dev.jsonl");
     recordInboxItem(p, item({ id: "999.9", channel: "room" }));
     expect(closeAnsweredBefore(p, "room", "1787360000.000000")).toBe(1);
-    // A ts that is not a number closes nothing, and never throws.
+    // A non-numeric timestamp closes nothing and never throws.
     const q = join(scratch(), "inbox", "dev2.jsonl");
     recordInboxItem(q, item({ id: "1.0", channel: "room" }));
     expect(closeAnsweredBefore(q, "room", "not-a-ts")).toBe(0);
@@ -137,14 +137,15 @@ describe("the inbox ledger: one row per addressed line, one reply owed", () => {
   });
 
   test("the same message delivered twice is ONE item, per CHANNEL", () => {
-    // A listener and a 15-minute sweep both see the same mention. Two rows would
-    // demand two replies for one question.
+    // Both a listener and a 15-minute sweep detect the same mention. Two rows would
+    // require two replies for one question.
     const p = join(scratch(), "inbox", "dev.jsonl");
     recordInboxItem(p, item());
     recordInboxItem(p, item());
     expect(readInbox(p)).toHaveLength(1);
-    // A Slack ts is unique WITHIN a channel and says nothing across channels, so
-    // the same ts elsewhere is a different question.
+    // A Slack timestamp (ts) is unique within a channel and carries no meaning
+    // across channels, so the same timestamp elsewhere refers to a different
+    // question.
     recordInboxItem(p, item({ channel: "elsewhere" }));
     expect(readInbox(p)).toHaveLength(2);
   });
@@ -152,45 +153,48 @@ describe("the inbox ledger: one row per addressed line, one reply owed", () => {
   test("only lines ADDRESSED to this agent by someone else become items", () => {
     const me = ["dev", "dev_bot"];
     expect(isAddressed({ mentioned: true, from: "andrew", mentions: ["dev_bot"] }, me)).toBe(true);
-    // A mention resolves to the HANDLE, which differs from the scramble name.
+    // A mention resolves to the handle, which differs from the scramble name.
     expect(isAddressed({ mentioned: true, from: "andrew", mentions: ["dev"] }, me)).toBe(true);
-    // Its own line, under either identity: never an obligation to answer.
+    // It appears on its own line under either identity, and there is never an
+    // obligation to answer.
     expect(isAddressed({ mentioned: true, from: "dev" }, me)).toBe(false);
     expect(isAddressed({ mentioned: true, from: "dev_bot" }, me)).toBe(false);
-    // Traffic that merely passed through the channel is not a question.
+    // Traffic that passes through the channel does not count as a question.
     expect(isAddressed({ mentioned: false, from: "andrew" }, me)).toBe(false);
     expect(isAddressed({ from: "andrew" }, me)).toBe(false);
   });
 
   test("a BROADCAST owes every agent a reply, though it names none of them", () => {
-    // Without this the "named here, or naming nobody" rule reads @channel as
-    // somebody else's name and drops it, so a message meant for the whole room
-    // reaches no ledger even once delivery carries it.
+    // Without this, the "named here, or naming nobody" rule treats `@channel` as
+    // another user's name and drops it, so a message meant for the whole room reaches
+    // no ledger even once delivery carries it.
     const me = ["dev", "dev_bot"];
     for (const kind of ["channel", "here", "everyone"]) {
       expect(isAddressed({ mentioned: true, from: "andrew", mentions: [kind] }, me)).toBe(true);
     }
-    // Still no obligation when it is this agent's own broadcast.
+    // The agent still has no obligation when it handles its own broadcast.
     expect(isAddressed({ mentioned: true, from: "dev_bot", mentions: ["channel"] }, me)).toBe(false);
   });
 
   test("a question addressed to SOMEONE ELSE in my thread is not mine to answer", () => {
-    // Delivery and obligation are different questions. A peer wrote
-    // "@alignment_benchmark there is a concrete overlap" inside a thread I had
-    // replied in, so it arrived with mentioned:true, and `inbox pending` told me
-    // someone was waiting on me for a question addressed to somebody else.
+    // Message delivery differs from user obligation. When a peer posted
+    // "@alignment_benchmark there is a concrete overlap" inside a thread containing
+    // previous replies, the platform delivered the message with mentioned:true, so
+    // `inbox pending` reported an active wait for a question addressed to another
+    // recipient.
     const me = ["dev", "dev_bot"];
     expect(isAddressed({ mentioned: true, from: "peer", mentions: ["someone_else"] }, me)).toBe(false);
-    // Naming nobody, inside my thread, IS mine: that is a bare reply to me.
+    // A message that names no recipient inside a thread belongs to the thread owner,
+    // because that message is a bare reply.
     expect(isAddressed({ mentioned: true, from: "peer", mentions: [] }, me)).toBe(true);
     expect(isAddressed({ mentioned: true, from: "peer" }, me)).toBe(true);
-    // Naming both of us is mine too.
+    // This role also handles naming both entities.
     expect(isAddressed({ mentioned: true, from: "peer", mentions: ["someone_else", "dev_bot"] }, me)).toBe(true);
   });
 
   test("a half-written row does not take the whole ledger down", () => {
-    // The ledger's job is to be readable at the moment something went wrong, so
-    // a row truncated by a killed process must cost that row and nothing else.
+    // The ledger must be readable at the moment something fails, so a row truncated by
+    // a killed process must cost that row and nothing else.
     const dir = scratch();
     const p = join(dir, "inbox", "dev.jsonl");
     mkdirSync(join(dir, "inbox"), { recursive: true });
@@ -203,8 +207,8 @@ describe("the inbox ledger: one row per addressed line, one reply owed", () => {
     expect(readInbox(p)).toEqual([]);
     expect(pendingInbox(p)).toEqual([]);
     expect(pendingReport([], "dev")).toBe("");
-    // Closing against a ledger that does not exist is a no-op, never a crash on
-    // the reply path: a message must go out even when the accounting cannot.
+    // Closing against a ledger that does not exist is a no-op and prevents crashes on
+    // the reply path. A message must go out even when the accounting cannot.
     expect(closeInboxItems(p, "scramble-dev", "reply")).toBe(0);
   });
 
@@ -215,8 +219,8 @@ describe("the inbox ledger: one row per addressed line, one reply owed", () => {
   });
 
   test("an unwritable ledger throws to the caller, which reports it", () => {
-    // emitDelivery catches this and prints it, so an inbox that counts nothing
-    // does not read as an inbox with nothing in it.
+    // `emitDelivery` catches this and prints it, so an inbox that counts zero does
+    // not read as an inbox with nothing in it.
     const dir = scratch();
     const locked = join(dir, "locked");
     mkdirSync(locked);
@@ -227,15 +231,16 @@ describe("the inbox ledger: one row per addressed line, one reply owed", () => {
 });
 
 describe("inbox trace: what happened to ONE message, without grepping a text log", () => {
-  // Four agents on four hosts spent answering "did that message reach me?" with
-  // grep one-liners over a `tee` of the listener, and each of the four ways
-  // that fails was measured live by the agent running it. Each test below is
-  // one of those four.
+  // Four agents on four hosts determined whether messages arrived by running
+  // grep one-liners over a `tee` of the listener. Each agent measured live one of
+  // the four ways this approach fails. Each test below examines one of those four
+  // failure modes.
 
   test("a message QUOTING the id does not read as delivery of it", () => {
-    // An agent grepped its wake file for a broadcast ts and got a hit, which read
-    // as proof the broadcast arrived. The hit was a PEER'S message quoting that
-    // timestamp in its text. Comparing the id field cannot make that mistake.
+    // An agent searched its wake file for a broadcast timestamp and found a match,
+    // which it read as proof that the broadcast arrived. The matching line was a peer
+    // message quoting that timestamp in its text. Comparing the id field cannot make
+    // that mistake.
     const p = join(scratch(), "inbox", "dev.jsonl");
     recordInboxItem(p, item({ id: "999.111", text: "the broadcast at 1787388201.288129 never woke me" }));
     const said = traceReport(readInbox(p), "1787388201.288129", "dev", p);
@@ -244,9 +249,9 @@ describe("inbox trace: what happened to ONE message, without grepping a text log
   });
 
   test("a correct absence names the corpus it searched, so it is not a bare False", () => {
-    // "A check with no positive control cannot tell a correct False from a broken
-    // one." An agent's grep returned zero and was right BY LUCK, because nobody
-    // had quoted the ts yet.
+    // A check without a positive control cannot distinguish a correct False from a
+    // broken check. An agent's grep command returned zero and succeeded by luck,
+    // because nobody had quoted the ts yet.
     const p = join(scratch(), "inbox", "dev.jsonl");
     recordInboxItem(p, item({ id: "100.1", addressed: true }));
     recordInboxItem(p, item({ id: "200.2", addressed: false }));
@@ -257,26 +262,25 @@ describe("inbox trace: what happened to ONE message, without grepping a text log
   });
 
   test("the corpus counts what the rows CARRY, and never infers a count", () => {
-    // The first version printed "88 of them addressed to this agent" over a file
-    // where no row carried the field, because the back-compat rule that keeps old
-    // items in `pending` got reused as a measurement. The agent who read it:
-    // "the count is inferred from a missing field and printed as though
-    // measured."
+    // The first version printed "88 of them addressed to this agent" for a file where
+    // no row carried the field, because the backward compatibility rule that keeps
+    // old items in `pending` was reused as a measurement. The system inferred the
+    // count from a missing field and printed it as though measured.
     const p = join(scratch(), "inbox", "dev.jsonl");
     recordInboxItem(p, item({ id: "100.1" }));
     recordInboxItem(p, item({ id: "200.2" }));
     const said = traceReport(readInbox(p), "100.1", "dev", p);
     expect(said).toContain("0 addressed to this agent, 0 delivered without addressing it");
     expect(said).toContain("2 written before the ledger recorded unaddressed deliveries");
-    // And the row itself reports the field as unrecorded, with no value invented.
+    // The row reports the field as unrecorded without inventing a value.
     expect(said).toContain("is UNRECORDED: this row predates that field");
   });
 
   test("an absence over rows that predate the field is REFUSED, not reported", () => {
-    // Those rows were written when only ADDRESSED lines were recorded, so a
-    // delivery that addressed nobody was never written and is missing exactly as
-    // a message that never arrived is missing. A broadcast is that case, which is
-    // the one thing anybody was tracing.
+    // The system wrote those rows when it recorded only ADDRESSED lines, so a
+    // delivery that addressed nobody was never written and is missing exactly as a
+    // message that never arrived is missing. A broadcast is that case, which is the
+    // one thing anyone was tracing.
     const p = join(scratch(), "inbox", "dev.jsonl");
     recordInboxItem(p, item({ id: "100.1" }));
     recordInboxItem(p, item({ id: "300.3" }));
@@ -298,10 +302,10 @@ describe("inbox trace: what happened to ONE message, without grepping a text log
   });
 
   test("rows delivered to a DIFFERENT app under the same name are named as such", () => {
-    // The ledger is keyed by agent NAME. An agent repointed its name at its own
-    // Slack app after an hour on a shared one, and its ledger holds 14 rows from
-    // a channel the current app has never been in: two identities, one corpus,
-    // reported under one name.
+    // The ledger keys records by agent name. An agent repointed its name to its own
+    // Slack app after an hour on a shared Slack app, so its ledger contains 14 rows
+    // from a channel that the current app has never entered. As a result, one corpus
+    // from two identities is reported under one name.
     const p = join(scratch(), "inbox", "dev.jsonl");
     recordInboxItem(p, item({ id: "100.1", channel: "argo", app: "A0OLD", addressed: true }));
     recordInboxItem(p, item({ id: "300.3", app: "A0MINE", addressed: true }));
@@ -309,13 +313,14 @@ describe("inbox trace: what happened to ONE message, without grepping a text log
     expect(said).toContain("1 row(s) here were delivered to app A0OLD");
     expect(said).toContain("NOT this agent's app A0MINE");
     expect(said).toContain("keyed by agent NAME");
-    // With no app known, nothing is claimed about identity at all.
+    // When no application is known, the system makes no claims about identity.
     expect(traceReport(readInbox(p), "300.3", "dev", p)).not.toContain("were delivered to app");
   });
 
   test("an EMPTY ledger refuses to answer instead of reporting absence", () => {
-    // The dangerous case: a ledger that is not being written looks exactly like a
-    // message that never arrived. This one says so and sends the reader to doctor.
+    // A ledger that is not being written creates a dangerous condition because it
+    // looks identical to a message that never arrived. This section states this
+    // condition and directs the reader to doctor.
     const p = join(scratch(), "inbox", "dev.jsonl");
     const said = traceReport(readInbox(p), "300.3", "dev", p);
     expect(said).toContain("holds NO rows");
@@ -324,10 +329,10 @@ describe("inbox trace: what happened to ONE message, without grepping a text log
   });
 
   test("a plain English diagnostic line in the ledger does not kill the check", () => {
-    // The third failure, and the worst: a check that parses every line as JSON
-    // dies on a file that also carries "scramble doctor" and socket errors, so it
-    // crashes exactly when the wake path is broken, the one occasion anybody runs
-    // it.
+    // The third failure is the worst. A check parses every line as JSON and fails on
+    // any file that also contains "scramble doctor" messages and socket errors, so it
+    // crashes exactly when the wake path is broken, which is the only occasion
+    // anybody runs it.
     const dir = join(scratch(), "inbox");
     mkdirSync(dir, { recursive: true });
     const p = join(dir, "dev.jsonl");
@@ -338,9 +343,10 @@ describe("inbox trace: what happened to ONE message, without grepping a text log
   });
 
   test("DELIVERED and ADDRESSED are answered separately: the broadcast defect", () => {
-    // `<!channel>` reached four agents and addressed none of them, so every one of
-    // them saw it in a 15-minute sweep and nothing woke. A ledger holding only
-    // addressed lines cannot tell that apart from never arriving.
+    // `<!channel>` reached four agents and addressed none of them, so all four agents
+    // saw the message during a 15-minute sweep and no agent woke. A ledger that
+    // records only addressed lines cannot distinguish that event from a message that
+    // never arrived.
     const p = join(scratch(), "inbox", "dev.jsonl");
     recordInboxItem(p, item({ id: "100.1", addressed: false, text: "@channel write English in files" }));
     const said = traceReport(readInbox(p), "100.1", "dev", p);
@@ -348,7 +354,7 @@ describe("inbox trace: what happened to ONE message, without grepping a text log
     expect(said).toContain("NOT addressed to dev");
     expect(said).toContain("visible only to a sweep");
     expect(said).toContain("no reply recorded");
-    // And it owes nobody an answer, so it stays out of pending.
+    // The unit owes no recipient an answer, so it remains out of pending.
     expect(pendingInbox(p)).toHaveLength(0);
   });
 
@@ -362,7 +368,7 @@ describe("inbox trace: what happened to ONE message, without grepping a text log
   });
 
   test("a trace says WHICH names the line carried", () => {
-    // The verdict without its evidence sent two agents guessing which mention
+    // Because the verdict lacked its evidence, two agents guessed which mention
     // opened six items, and one guess reached the channel as a cause.
     const p = join(scratch(), "inbox", "dev.jsonl");
     recordInboxItem(p, item({ id: "1.1", addressed: true, mentions: ["dev", "ana"] }));
@@ -371,28 +377,29 @@ describe("inbox trace: what happened to ONE message, without grepping a text log
     expect(named).toContain("The line named @dev, @ana.");
     const nobody = traceReport(readInbox(p), "2.2", "dev", p);
     expect(nobody).toContain("The line named nobody");
-    // A row predating the field claims nothing about names.
+    // A row created before the field existed makes no claim about names.
     const old = join(scratch(), "inbox", "old.jsonl");
     recordInboxItem(old, item({ id: "3.3", addressed: true }));
     expect(traceReport(readInbox(old), "3.3", "dev", old)).not.toContain("The line named");
   });
 
   test("a row written before the addressed field existed still owes a reply", () => {
-    // Back-compat, and it matters: the ledger only ever held addressed items, so
-    // a missing field means addressed. Reading it as false would silently empty
-    // `pending` of every question asked before today.
+    // Backward compatibility is critical because the ledger only ever recorded
+    // addressed items, so a missing field means an item is addressed. Reading a
+    // missing field as false would silently empty `pending` of every question asked
+    // before today.
     const p = join(scratch(), "inbox", "dev.jsonl");
     recordInboxItem(p, item({ id: "100.1" }));
     expect(pendingInbox(p)).toHaveLength(1);
-    // The obligation is kept, and trace still refuses to CLAIM it woke anyone:
-    // keeping an old question answerable and asserting what the row recorded are
-    // different things, and only the first is safe to infer.
+    // The system keeps the obligation, and the trace still refuses to claim that it
+    // woke anyone. Keeping an old question answerable differs from asserting what the
+    // row recorded, and an observer can safely infer only the first fact.
     expect(traceReport(readInbox(p), "100.1", "dev", p)).toContain("is UNRECORDED");
   });
 
   test("a delivery-only row is never closed by a reply or by an own message", () => {
-    // It is not an obligation, so nothing should stamp it answered: a trace of it
-    // must keep saying "nothing woke" however much traffic followed.
+    // The operation is not an obligation, so nothing should mark it answered. A trace
+    // of it must keep saying "nothing woke" however much traffic followed.
     const p = join(scratch(), "inbox", "dev.jsonl");
     recordInboxItem(p, item({ id: "100.1", addressed: false }));
     expect(closeInboxItems(p, "scramble-dev", "555.5")).toBe(0);
@@ -402,19 +409,21 @@ describe("inbox trace: what happened to ONE message, without grepping a text log
 });
 
 describe("inbox close: an item the sender said needs no reply", () => {
-  // xingyubot, with its own message as the example: it wrote "no need to reply to this one", `inbox
-  // pending` kept the item open, a reaction did not clear it, and only a real send did. So an agent
-  // clearing its ledger answers a message whose sender asked it not to, and a mechanism built to
-  // stop people being left waiting starts manufacturing noise.
+  // When xingyubot posted "no need to reply to this one", `inbox pending` kept the
+  // item open. A reaction did not clear the item, and only a real send resolved it.
+  // So an agent clearing its ledger answers a message whose sender asked it not to,
+  // and a mechanism built to stop people being left waiting starts manufacturing
+  // noise.
 
   test("closing settles the item and records the reason on the row", () => {
     const p = join(scratch(), "inbox", "dev.jsonl");
     recordInboxItem(p, item({ id: "100.1", addressed: true }));
     expect(closeItemById(p, "100.1", "sender said no reply needed")).toEqual({ ok: true });
     expect(pendingInbox(p)).toHaveLength(0);
-    // THE DECISION IS ON THE RECORD. A close is the agent deciding an obligation
-    // is settled, which a reply never is, so it has to be visible to whoever reads
-    // the file or traces the id later.
+    // The record preserves the decision. When an agent closes an obligation, the agent
+    // decides that the obligation is settled. A reply never settles an obligation, so
+    // the close must remain visible to anyone who reads the file or traces the id
+    // later.
     const said = traceReport(readInbox(p), "100.1", "dev", p);
     expect(said).toContain("closed with no reply: sender said no reply needed");
   });
@@ -441,10 +450,12 @@ describe("inbox close: an item the sender said needs no reply", () => {
 });
 
 describe("what counts as owed, measured against one afternoon", () => {
-  // The rule was "named here, or naming nobody". Against one afternoon it put 18
-  // messages from another team's task thread into my list, none of them for me,
-  // while every message that WAS for me either named me or answered something I
-  // had said. A list of other people's questions is one an agent scrolls past.
+  // The routing rule accepted messages that named the recipient or named nobody.
+  // Over one afternoon, this rule placed 18 messages from another team's task
+  // thread into the recipient's list, none of which were meant for that recipient,
+  // while every message intended for the recipient either named them or answered
+  // something they had said. An agent scrolls past a list of other people's
+  // questions.
 
   test("a message naming nobody in someone else's thread is delivered, and owed to nobody", () => {
     const d = { mentioned: true, from: "teamassistant", mentions: [], thread: "root-of-their-task" };
@@ -452,25 +463,26 @@ describe("what counts as owed, measured against one afternoon", () => {
   });
 
   test("a reply naming nobody in this agent's own thread is owed to it", () => {
-    // The operator answered a question of mine with one word, "limit", naming
-    // nobody, in a reply to my own message. Slack threading is why a reply to me
-    // carries no name.
+    // The operator responded to the question with the single word limit, naming
+    // nobody in the reply to the message. A reply carries no name because Slack uses
+    // threading.
     const d = { mentioned: true, from: "andrew", mentions: [], thread: "mine-1" };
     expect(isAddressed(d, ["dev"], ["mine-1"])).toBe(true);
     expect(isAddressed(d, ["dev"], ["someone-elses"])).toBe(false);
   });
 
   test("two peers answering EACH OTHER in this agent's thread owe it nothing", () => {
-    // The rule was "any reply in my thread, whoever it names". Two agents
-    // worked through a defect inside one thread of mine and opened nine items
-    // in my ledger in twelve minutes, every one a message between the two of
-    // them. The reply names the agent it answers, and that agent is not me.
+    // The previous rule captured every reply in my thread, regardless of the recipient
+    // named. Two agents worked through a defect inside one of my threads and opened
+    // nine items in my ledger in twelve minutes, where every item was a message
+    // exchanged between the two agents. The reply identifies the agent it answers,
+    // which designates a different agent.
     const between = { mentioned: true, from: "metrics_bot", mentions: ["model_failure_researc"], thread: "mine-1" };
     expect(isAddressed(between, ["dev", "dev_bot"], ["mine-1"])).toBe(false);
-    // Naming me among them keeps it owed.
+    // Listing the author among them keeps the debt owed.
     const alsoMe = { ...between, mentions: ["model_failure_researc", "dev_bot"] };
     expect(isAddressed(alsoMe, ["dev", "dev_bot"], ["mine-1"])).toBe(true);
-    // A broadcast in my own thread still reaches me.
+    // A thread that broadcasts a message still receives its own broadcast.
     const shout = { ...between, mentions: ["channel"] };
     expect(isAddressed(shout, ["dev", "dev_bot"], ["mine-1"])).toBe(true);
   });
@@ -500,32 +512,32 @@ describe("the record of what this agent said", () => {
   });
 
   test("a draft rides with the ts, and a repeat of it inside the window is found", () => {
-    // MEASURED: two byte-identical copies 27 seconds apart reached a third
-    // agent's inbox after the `posted:` line shipped. An agent asked for
-    // exactly this: "A retry after a genuine post must be a no-op, for example
-    // by setting an idempotency key on the draft hash".
+    // A third agent's inbox received two byte-identical copies 27 seconds apart after
+    // the `posted:` line shipped. A retry after a genuine post must be a no-op, for
+    // example by setting an idempotency key on the draft hash.
     const p = sentPath(join(scratch(), "slack.json"), "dev");
     recordSent(p, "1.1");
     recordSent(p, "2.2", { hash: "abc", channel: "general", at: "2026-08-26T12:00:00Z" });
-    // The ts list is unchanged for every older reader.
+    // The timestamp list remains unchanged for all older readers.
     expect(readSent(p)).toEqual(["1.1", "2.2"]);
     const rows = readSentRows(p);
     expect(rows[0]).toEqual({ ts: "1.1" });
     expect(rows[1]?.hash).toBe("abc");
     const now = Date.parse("2026-08-26T12:05:00Z");
     expect(sentAlready(rows, "general", "abc", now, 10 * 60 * 1000)?.ts).toBe("2.2");
-    // Another channel, another draft, or past the window: no match.
+    // The system finds no match if the item appears in another channel, belongs to
+    // another draft, or falls past the window.
     expect(sentAlready(rows, "other", "abc", now, 10 * 60 * 1000)).toBeUndefined();
     expect(sentAlready(rows, "general", "zzz", now, 10 * 60 * 1000)).toBeUndefined();
     expect(sentAlready(rows, "general", "abc", Date.parse("2026-08-26T13:00:00Z"), 10 * 60 * 1000)).toBeUndefined();
-    // A row predating the field carries no draft, so it never matches.
+    // A row created before the field existed contains no draft, so it never matches.
     expect(sentAlready([{ ts: "1.1" }], "general", "abc", now, 10 * 60 * 1000)).toBeUndefined();
   });
 
   test("THE SAME THING IN OTHER WORDS is refused, and a different report is not", () => {
-    // An agent reported one end-to-end run twice, 127 seconds apart, naming the
-    // same ports and the same three images in different sentences: 0.970 word
-    // overlap, and the digest guard passed it because no two bytes lined up. A
+    // An agent reported one end-to-end run twice, 127 seconds apart. The reports named
+    // the same ports and the same three images in different sentences, producing 0.970
+    // word overlap, and the digest guard passed it because no two bytes lined up. A
     // reader of the channel sees two reports of one run either way.
     const first =
       "The end-to-end run finished on ports 3005 and 8600, and the judge scored " +
@@ -542,39 +554,40 @@ describe("the record of what this agent said", () => {
     });
     const rows = readSentRows(p);
     const now = Date.parse("2026-08-28T04:02:07Z");
-    // 0.8 is the shipped threshold, and this pair measures 0.833.
+    // The shipped threshold is 0.8, and this pair measures 0.833.
     const hit = saidAlready(rows, "general", contentWords(reworded), now, 10 * 60 * 1000, { content: 0.8, short: 0.85 });
     expect(hit?.row.ts).toBe("9.1");
     expect(hit!.overlap).toBeGreaterThan(0.8);
-    // A DIFFERENT REPORT IS NOT A DUPLICATE. Refusing these would teach agents to
-    // pass --again by reflex, which retires the guard.
+    // The system treats a different report as distinct. Refusing these reports would
+    // teach agents to pass `--again` by reflex, which retires the guard.
     const other =
       "The gate is red on the coverage stage, and src/status.ts sits at 92% lines " +
       "after the ledger change.";
     expect(saidAlready(rows, "general", contentWords(other), now, 10 * 60 * 1000, { content: 0.8, short: 0.85 })).toBeUndefined();
-    // TWO STATUS REPORTS ON DIFFERENT RUNS share their format and their nouns,
-    // and the numbers are what tells them apart, so a number of any length
-    // counts as a content word. These measure 0.429.
+    // Two status reports on different runs share their format and their nouns, and the
+    // numbers distinguish them, so a number of any length counts as a content word.
+    // These measure 0.429.
     const runA = "peers 9, damaged 0, my row is on fad46a5 at 04:18";
     const runB = "peers 10, damaged 1, my row is on fad46a5 at 05:20";
     expect(wordOverlap(contentWords(runA), contentWords(runB))).toBeLessThan(0.8);
-    // Another channel, past the window, or a row with no words: no match.
+    // A row from another channel, a row past the window, or a row with no words does
+    // not match.
     expect(saidAlready(rows, "other", contentWords(reworded), now, 10 * 60 * 1000, { content: 0.8, short: 0.85 })).toBeUndefined();
     expect(
       saidAlready(rows, "general", contentWords(reworded), Date.parse("2026-08-28T05:00:00Z"), 10 * 60 * 1000, { content: 0.8, short: 0.85 }),
     ).toBeUndefined();
     expect(saidAlready([{ ts: "1.1" }], "general", contentWords(reworded), now, 10 * 60 * 1000, { content: 0.8, short: 0.85 })).toBeUndefined();
-    // A SHORT DRAFT IS NEVER A NEAR-DUPLICATE. Containment over a handful of
-    // words reaches 1.0 on two unrelated one-liners, and it refused a second
-    // one-line draft in this suite before the floor existed.
+    // A short draft is never classified as a near-duplicate. Containment across a
+    // handful of words reaches 1.0 on two unrelated one-line drafts, and this suite
+    // refused a second one-line draft before the floor existed.
     const shortA = contentWords("the line as drafted");
     const shortB = contentWords("a second line, drafted separately");
     expect(wordOverlap(shortA, shortB)).toBe(1);
     expect(shortB.length).toBeLessThan(NEAR_DUPLICATE_FLOOR);
     const shortRows = [{ ts: "8.8", channel: "general", at: "2026-08-28T04:00:00Z", words: shortA }];
     expect(saidAlready(shortRows, "general", shortB, now, 10 * 60 * 1000, { content: 0.8, short: 0.85 })).toBeUndefined();
-    // The words themselves: content and numbers, deduplicated, sorted, with edge
-    // punctuation off and an inner dot kept.
+    // The list provides the deduplicated and sorted content words and numbers, with
+    // edge punctuation removed and inner dots preserved.
     expect(contentWords("The run is on port 3005 and the run held.")).toEqual(["3005", "held", "port"]);
     expect(contentWords("read src/cli.ts at 92% after v2.1.234.")).toEqual([
       "92",
@@ -588,36 +601,37 @@ describe("the record of what this agent said", () => {
   });
 
   test("A CHINESE MESSAGE IS SCORED ON ITS TEXT, and not on its identifiers alone", () => {
-    // The word filter was written for ASCII and stripped every other character,
-    // so a Chinese message reduced to its numbers and paths: an agent measured
-    // 166 Chinese characters leaving 20 tokens, all of them identifiers. Two
-    // unrelated Chinese reports then scored 0.500 on shared shas alone.
-    // ESCAPED, since the gate keeps every tracked file in English. These are two
-    // real messages from the channel: a restart report and an install report.
+    // The word filter supported only ASCII and stripped all other characters, so a
+    // Chinese message reduced to its numbers and paths. An agent measured 166 Chinese
+    // characters leaving 20 tokens, all of them identifiers. Two unrelated Chinese
+    // reports then scored 0.500 on shared shas alone. The failure escaped detection,
+    // since the gate keeps every tracked file in English. These are two real messages
+    // from the channel: a restart report and an install report.
     const reportA = "\u6211\u5df2\u7ecf\u5b8c\u6210\u91cd\u542f\uff0c\u5f53\u524d\u8fd0\u884c\u7248\u672c\u548c\u672c\u673a\u4e00\u81f4\u3002\u65e7\u8fdb\u7a0b 228763 \u6309 PID \u6740\u6389\uff0c\u65b0\u8fdb\u7a0b 313173 \u8fd0\u884c 0dc4314\u3002";
     const reportB = "\u6211\u8fd9\u8fb9\u5df2\u7ecf\u66f4\u65b0\u5230\u4e86\u6700\u65b0\u7248\u672c\uff0c\u4f60\u5217\u8868\u91cc\u7684 228763 \u5df2\u7ecf\u4e0d\u5728\u4e86\uff0c\u4f60\u53ef\u4ee5\u628a\u5b83\u4ece stale \u540d\u5355\u91cc\u5212\u6389\u3002";
-    // The Chinese text now contributes, so two different reports read as
-    // different: 0.500 before this, 0.125 after.
+    // The Chinese text now contributes, so two different reports read as different,
+    // measuring 0.500 before this change and 0.125 after.
     expect(wordOverlap(contentWords(reportA), contentWords(reportB))).toBeLessThan(0.2);
-    // CHARACTER BIGRAMS stand in for segmentation, so a shared phrase is shared
-    // tokens. No dictionary is involved.
-    // `\u91cd\u542f\u5b8c\u6210` is "restart complete": three bigrams out of four characters.
+    // Character bigrams replace segmentation, so a shared phrase produces shared
+    // tokens. The system uses no dictionary.
+    // `\u91cd\u542f\u5b8c\u6210` means "restart complete", yielding three bigrams from
+    // four characters.
     expect(contentWords("\u91cd\u542f\u5b8c\u6210")).toEqual(["\u542f\u5b8c", "\u5b8c\u6210", "\u91cd\u542f"].sort());
-    // A run of one character keeps the character.
+    // A single-character run retains the character.
     expect(contentWords("\u8bf4 hello there")).toEqual(["hello", "there", "\u8bf4"]);
-    // The identifiers still count, beside the text.
+    // The system still counts the identifiers beside the text.
     expect(contentWords("\u91cd\u542f 0dc4314")).toContain("0dc4314");
-    // AN ASCII PAIR IS UNCHANGED by any of this.
+    // These operations leave an ASCII pair unchanged.
     const asciiA = "peers 9, damaged 0, my row is on fad46a5 at 04:18";
     const asciiB = "peers 10, damaged 1, my row is on fad46a5 at 05:20";
     expect(wordOverlap(contentWords(asciiA), contentWords(asciiB))).toBeLessThan(0.8);
   });
 
   test("A SHORT FOLLOW-UP IS NOT A RE-TELLING, however much of it the report held", () => {
-    // Containment alone called it one. An agent measured an 8-word note whose
-    // every word appeared in a 22-word report: containment 1.000, size ratio
-    // 0.36, and the guard would have refused a legitimate addendum. The reworded
-    // retry this guard exists for measures a ratio of 0.80.
+    // Containment alone classified the item as a match. An agent measured an 8-word
+    // note whose every word appeared in a 22-word report: the containment was 1.000,
+    // the size ratio was 0.36, and the guard would have refused a legitimate
+    // addendum. The reworded retry this guard exists for measures a ratio of 0.80.
     const report =
       "The end-to-end run finished on ports 3005 and 8600, and the judge scored " +
       "mushroom_shaman, blueberry_pie and copper_kettle without a fallback. Coverage held " +
@@ -628,10 +642,11 @@ describe("the record of what this agent said", () => {
     expect(Math.min(big.length, small.length) / Math.max(big.length, small.length)).toBeLessThan(
       COMPARABLE_SIZE_RATIO,
     );
-    // Every word of the follow-up is in the report, and the score says fragment.
+    // The report contains every word of the follow-up, and the score classifies it as
+    // a fragment.
     expect(small.every((word) => big.includes(word))).toBe(true);
     expect(wordOverlap(big, small)).toBeLessThan(0.8);
-    // THE PAIR THIS GUARD EXISTS FOR is unaffected: comparable sizes, 0.833.
+    // The pair this guard exists for is unaffected, with comparable sizes at 0.833.
     const retryA =
       "The end-to-end run finished on ports 3005 and 8600, and the judge scored " +
       "mushroom_shaman, blueberry_pie and copper_kettle without a fallback.";
@@ -642,10 +657,10 @@ describe("the record of what this agent said", () => {
   });
 
   test("EVERY SEND RECORDS WHAT IT MEASURED, so the threshold gets real data", () => {
-    // The number in use rests on corpus runs three agents did by hand, and the
-    // CJK side rests on two synthetic pairs that disagree by a factor of two. An
-    // agent who writes English by the operator's rule cannot produce Chinese
-    // samples on request, and they said the tool can gather them.
+    // The current number relies on corpus runs that three agents performed by hand,
+    // and the CJK side relies on two synthetic pairs that disagree by a factor of two.
+    // An agent that writes English by the operator's rule cannot produce Chinese
+    // samples on request, and the tool can gather them.
     const rows: SentRow[] = [
       { ts: "1.1", channel: "general", at: "t", words: ["a"], near: { score: 0.12, ts: "0.9" } },
       { ts: "2.2", channel: "general", at: "t", words: ["a"], near: { score: 0.44, ts: "1.1" } },
@@ -654,19 +669,19 @@ describe("the record of what this agent said", () => {
     ];
     const said = nearReport(rows, 0.8);
     expect(said).toContain("3 send(s) measured against an earlier draft, refused at 0.8");
-    // The band under the threshold is where a real duplicate shows up first.
+    // A real duplicate appears first in the band below the threshold.
     expect(said).toContain("0.6 to 0.8  1");
     expect(said).toContain("0.790  ts 3.3 against 2.2 in general");
-    // A send with nothing earlier to compare against carries no score.
+    // A send receives no score when it has nothing earlier to compare against.
     expect(said).not.toContain("ts 4.4");
-    // AN EMPTY PILE SAYS WHY IT IS EMPTY, so nobody reads silence as zero
+    // An empty pile explains why it is empty, so nobody interprets silence as zero
     // duplicates.
     expect(nearReport([{ ts: "1.1" }], 0.8)).toContain("has measured itself against an earlier draft yet");
-    // WITHOUT AN OVERRIDE the report says every row is the negative class, since
-    // each one is a message that went out.
+    // Without an override, the report classifies every row as the negative class,
+    // since each row is a message that went out.
     expect(said).toContain("No send here used --again");
-    // AN OVERRIDE IS THE LABELLED FALSE POSITIVE, and it is what moves the
-    // threshold: a refusal the author overruled.
+    // An override is a labeled false positive where the author overruled a refusal,
+    // and it moves the threshold.
     const withOverride: SentRow[] = [
       ...rows,
       { ts: "5.5", channel: "general", at: "t", words: ["a"], near: { score: 0.91, ts: "3.3", again: true } },
@@ -678,9 +693,9 @@ describe("the record of what this agent said", () => {
   });
 
   test("A ONE-LINE DUPLICATE IS SCORED, on every token instead of the content words", () => {
-    // The real duplicate two agents confirmed: one line sent twice, 127 seconds
-    // apart, by an agent reporting the same test pass. It held 6 and 5 content
-    // words, under the floor, so it was never scored at all while the threshold
+    // Two agents confirmed a duplicate when an agent sent one line twice, 127 seconds
+    // apart, reporting the same test pass. It held 6 and 5 content words. Because this
+    // count was under the floor, the system never scored it at all while the threshold
     // debate ran on a number that never applied to it.
     const first = "@andrew The hallucination metric end-to-end test passed on the dev box";
     const second = "@andrew The hallucination metric passed E2E on the dev box";
@@ -688,7 +703,7 @@ describe("the record of what this agent said", () => {
     const scored = pairScore(allWords(first), allWords(second));
     expect(scored.scale).toBe("short");
     expect(scored.overlap).toBeGreaterThan(0.85);
-    // THE SHORT NEGATIVES STAY BELOW IT, measured on the labelled pairs.
+    // Measurements on the labelled pairs show that the short negatives stay below it.
     const pairs: Array<[string, string, number]> = [
       ["peers 9 damaged 0 on fad46a5", "peers 10 damaged 1 on fad46a5", 0.85],
       ["the gate is green", "the gate is green and the suite passes", 0.85],
@@ -700,8 +715,8 @@ describe("the record of what this agent said", () => {
       expect(s.scale).toBe("short");
       expect(s.overlap).toBeLessThan(ceiling);
     }
-    // A LONG PAIR STILL USES THE CONTENT SCALE, where the grammar a rewording
-    // changes drops out.
+    // A long pair still uses the content scale, where the grammar changed by a
+    // rewording drops out.
     const reportA =
       "The end-to-end run finished on ports 3005 and 8600, and the judge scored " +
       "mushroom_shaman, blueberry_pie and copper_kettle without a fallback.";
@@ -712,41 +727,41 @@ describe("the record of what this agent said", () => {
   });
 
   test("THE SHIPPED THRESHOLDS SEPARATE EVERY REAL LABELLED PAIR", () => {
-    // I wrote a pair by hand, scored it 0.833, cited it as the founding incident,
-    // and two agents built threshold arguments on that number before anybody
-    // measured the real messages at 0.968. A row with no ts is a pair nobody
-    // sent, and it does not decide the number.
+    // A manually authored pair received a score of 0.833 and served as the founding
+    // incident, and two agents built threshold arguments on that number before anyone
+    // measured real messages at 0.968. A row with no `ts` is a pair nobody sent, and it
+    // does not decide the number.
     const shipped = { content: 0.81, short: 0.85 };
     expect(calibrationMisses(shipped).real).toEqual([]);
-    // AND THE HAND-MADE ROWS TOO at the shipped number, which is what makes 0.81
-    // the only value nobody has to argue about.
+    // The manually created rows also use the shipped number, which makes 0.81 the
+    // only value nobody has to argue about.
     expect(calibrationMisses(shipped).synthetic).toEqual([]);
-    // The table holds the pairs, with who measured each one.
+    // The table lists the pairs and records who measured each one.
     expect(CALIBRATION.some((c) => c.ts !== undefined && c.score === 0.968 && c.label === "duplicate")).toBe(true);
     expect(CALIBRATION.every((c) => c.measuredBy !== "")).toBe(true);
-    // AND EVERY MEASURED ROW CARRIES ITS TWO TEXT HASHES. Slack has lost four of
-    // the five source messages behind these rows, one to a deletion and four to a
-    // morning's cleanup, while every listener had already written each delivery to
-    // disk. The hashes are what let an agent holding the text confirm it is the
-    // same text after the channel no longer has it.
+    // Every measured row contains its two text hashes. Slack lost four of the five
+    // source messages behind these rows, one to a deletion and four to a morning
+    // cleanup, while every listener had already written each delivery to disk. An
+    // agent holding the text uses these hashes to confirm it is the same text after the
+    // channel no longer has it.
     const measured = CALIBRATION.filter((c) => c.source === "measured");
     expect(measured.length).toBeGreaterThan(0);
     expect(measured.every((c) => c.sha !== undefined)).toBe(true);
     expect(CALIBRATION.flatMap((c) => c.sha ?? []).every((h) => /^[0-9a-f]{16}$/.test(h))).toBe(true);
-    // A THRESHOLD ABOVE THE CONFIRMED DUPLICATE FAILS THE REAL SET, which is what
-    // a proposal to raise it has to clear.
+    // Setting a threshold above confirmed duplicates causes the real dataset to fail,
+    // which is the constraint that any proposal to raise the threshold must clear.
     expect(calibrationMisses({ content: 0.97, short: 0.85 }).real).toHaveLength(1);
-    // A ROW WITH NO SCALE IS JUDGED AT BOTH CUTS. Three byte-identical pairs came
-    // from another agent's log with no scale, and half of each pair is deleted, so
-    // nothing here can derive one. A short cut above 1.000 has to fail them.
+    // The system judges a row with no scale at both cuts. Three byte-identical pairs
+    // came from another agent's log with no scale, and half of each pair is deleted,
+    // so the system cannot derive a scale. A short cut above 1.000 has to fail them.
     const noScale = CALIBRATION.filter((c) => c.source === "measured" && c.scale === undefined);
     expect(noScale).toHaveLength(3);
     expect(calibrationMisses({ content: 0.81, short: 1.01 }).real).toHaveLength(noScale.length);
     expect(calibrationMisses({ content: 0.81, short: 1.01 }).real.join(" ")).toContain("unrecorded scale");
-    // AND EQUAL HASHES ARE WHAT SHOWS THE IDENTITY. The score reads 1.000 for a
-    // reword that shares every content word too.
+    // Matching hashes demonstrate identity. The score reads 1.000 for a rewording
+    // that shares every content word as well.
     expect(noScale.every((c) => c.score === 1 && c.sha![0] === c.sha![1])).toBe(true);
-    // And one below the highest wanted pair fails it from the other side.
+    // A value one below the highest wanted pair fails it from the other side.
     expect(calibrationMisses({ content: 0.79, short: 0.85 }).real).toHaveLength(1);
   });
 
@@ -762,8 +777,8 @@ describe("the record of what this agent said", () => {
   });
 
   test("the file is capped, keeping the NEWEST", () => {
-    // A long-running listener must not grow a file forever, and the ts values
-    // that matter are the recent ones still being replied to.
+    // A long-running listener must not allow a file to grow indefinitely, and the `ts`
+    // values that matter are the recent ones that still receive replies.
     const p = sentPath(join(scratch(), "slack.json"), "dev");
     for (let i = 0; i < 520; i += 1) recordSent(p, `${i}.0`);
     const kept = readSent(p);
@@ -774,11 +789,11 @@ describe("the record of what this agent said", () => {
 });
 
 describe("the ledger survives several processes closing at once", () => {
-  // MEASURED before the fix: eight processes each closing one item left TWO
-  // still open. Every close read the whole ledger, changed what it read, and
-  // wrote it back, and the last writer won. A lost close nags an agent about a
-  // question it has answered, which is how an agent learns to stop reading its
-  // own list.
+  // Before the fix, measurements showed that eight processes that each closed one
+  // item left TWO still open. Every close operation read the whole ledger, changed
+  // what it read, and wrote it back, so the last writer won. A lost close nags an
+  // agent about a question it has answered, which teaches the agent to stop reading
+  // its own list.
   test("eight concurrent closes all take", async () => {
     const dir = scratch();
     const p = join(dir, "inbox", "dev.jsonl");
@@ -800,3 +815,4 @@ describe("the ledger survives several processes closing at once", () => {
     expect(pendingInbox(p)).toHaveLength(0);
   }, 30_000);
 });
+

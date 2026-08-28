@@ -1,8 +1,9 @@
-// test/origin.test.ts: WHERE AN AGENT RUNS, published on the message itself.
+// `test/origin.test.ts` verifies where an agent runs, published on the message
+// itself.
 //
-// The operator: "Does each agent record its hostname and working directory on
-// scramble and an agent may know its same directory peers?" It did not, and the
-// absence cost two round trips that afternoon.
+// Each agent records its hostname and working directory on scramble, so an agent
+// may know its same directory peers. The agent previously did not record this
+// information, and the absence cost two round trips that afternoon.
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readdirSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -40,18 +41,18 @@ describe("an origin is built from what this process can read", () => {
   });
 
   test("an unknown commit is ABSENT, never a placeholder", () => {
-    // A checkout has no installed sha. An absent field claims nothing, and a
-    // made-up one would be read by a peer as a fact about which code is running.
+    // A checkout does not include an installed commit SHA. An absent field makes no
+    // claim, while a fabricated value would lead a peer to treat it as a factual
+    // record of the running code.
     expect(originOf("h1", "/w")).toEqual({ host: "h1", dir: "/w" });
     expect(originOf("h1", "/w", "")).toEqual({ host: "h1", dir: "/w" });
   });
 
   test("THE RUNTIME AND THE SESSION come out of the environment, and are never guessed", () => {
-    // The operator: "Scramble should store the agent runtime, work dir and
-    // session ids for each agent in case of a system restart or crash." A host
-    // and a directory survive a crash on their own. The session id says which
-    // conversation was interrupted, and nobody can reconstruct it once the
-    // process is gone.
+    // Scramble should store the agent runtime, working directory, and session IDs for
+    // each agent in case of a system restart or crash. A host and a directory survive
+    // a crash on their own. The session ID identifies which conversation was
+    // interrupted, and nobody can reconstruct it once the process is gone.
     const claude = runtimeOf((n) =>
       ({
         CLAUDECODE: "1",
@@ -66,27 +67,28 @@ describe("an origin is built from what this process can read", () => {
       session: "6a41d6cd-13fa-430a-954b-69132f9d5a5c",
       pid: "14027",
     });
-    // An akari worker names its instance.
+    // An akari worker assigns a name to its instance.
     expect(runtimeOf((n) => ({ AKARI_INSTANCE_ID: "lane-3", AKARI_BUILD_COMMIT: "9291bdd" })[n])).toEqual({
       name: "akari",
       version: "9291bdd",
       session: "lane-3",
     });
-    // A runtime this code has never heard of publishes itself through the
-    // override, so a new harness needs no change here.
+    // An unfamiliar runtime publishes itself through the override, so a new harness
+    // requires no changes to this code.
     expect(runtimeOf((n) => ({ SCRAMBLE_RUNTIME: "hark", SCRAMBLE_SESSION_ID: "s-9" })[n])).toEqual({
       name: "hark",
       session: "s-9",
     });
-    // AN ENVIRONMENT THAT NAMES NOTHING YIELDS NOTHING. A guessed runtime would
-    // be read as fact by every peer and by whoever is restarting the fleet.
+    // An environment that names nothing yields nothing. Every peer and whoever
+    // restarts the fleet would read a guessed runtime as fact.
     expect(runtimeOf(() => undefined)).toBeUndefined();
     expect(runtimeOf(() => "")).toBeUndefined();
-    // A version that is not a version is left out, and the name still arrives.
+    // The system omits invalid versions, and the name still arrives.
     expect(runtimeOf((n) => ({ CLAUDECODE: "1", AI_AGENT: "claude-code_dev_agent" })[n])).toEqual({
       name: "claude-code",
     });
-    // NO SECRET IS RECORDED. The messaging token sits beside these variables.
+    // The system records no secret. The messaging token resides alongside these
+    // variables.
     const withToken = runtimeOf((n) =>
       ({ CLAUDECODE: "1", CLAUDE_CODE_MESSAGING_TOKEN: "ced8f224523aa8846bccadaecd5a769f" })[n],
     );
@@ -112,8 +114,8 @@ describe("it rides on Slack message metadata", () => {
   });
 
   test("anything that is not an origin reads as none, and never throws", () => {
-    // The payload is written by ANOTHER agent, on a build older or newer than
-    // this one. A message whose metadata is malformed must still be delivered.
+    // Another agent on a build older or newer than this one writes the payload. A
+    // message with malformed metadata must still be delivered.
     for (const bad of [
       undefined,
       null,
@@ -135,9 +137,10 @@ describe("it rides on Slack message metadata", () => {
   });
 
   test("the runtime and the session round trip on the message", () => {
-    // A peer learns where an agent runs from a message that agent sent, so the
-    // session id has to ride the same way the host does. Slack's payload holds
-    // strings, and the runtime rides as flat keys.
+    // A peer discovers where an agent runs from the messages that the agent sends,
+    // so the message has to carry the session id in the same way that it carries the
+    // host. The Slack payload contains strings, and the runtime transports its data
+    // as flat keys.
     expect(originMetadata(RUNNING).event_payload).toEqual({
       host: "host-two",
       dir: "/srv/dev-work",
@@ -148,12 +151,12 @@ describe("it rides on Slack message metadata", () => {
       pid: "14027",
     });
     expect(readOrigin(originMetadata(RUNNING))).toEqual(RUNNING);
-    // A SESSION WITH NO RUNTIME NAME IS NO RUNTIME. Two runtimes' ids look alike
-    // and mean different things, so the name is what makes the id readable.
+    // A session requires a runtime name to be a runtime. Two runtime identifiers look
+    // alike and mean different things, so the name makes the identifier readable.
     expect(
       readOrigin({ event_type: ORIGIN_METADATA_TYPE, event_payload: { host: "h", dir: "/w", session: "s1" } }),
     ).toEqual({ host: "h", dir: "/w" });
-    // A partial runtime keeps what it has.
+    // A partial runtime retains everything it currently holds.
     expect(
       readOrigin({ event_type: ORIGIN_METADATA_TYPE, event_payload: { host: "h", dir: "/w", runtime: "akari" } }),
     ).toEqual({ host: "h", dir: "/w", runtime: { name: "akari" } });
@@ -168,9 +171,9 @@ describe("it rides on Slack message metadata", () => {
 
 describe("the peers record", () => {
   test("a peer is written once, and again only when it MOVED", () => {
-    // Appending per message would grow the file with a busy channel; writing
-    // nothing on a change would lose the move. The newest row wins on read, and
-    // the older one stays, so "it used to run there" is answerable.
+    // Appending on every message would grow the file on a busy channel. Writing
+    // nothing when a change occurs would lose the move. A reader takes the newest row
+    // on read, and the older row stays, so the record can answer where it used to run.
     const p = peersPath(join(scratch(), "slack.json"));
     expect(recordPeer(p, "dev", "dev", HERE, "2026-08-22T10:00:00Z")).toBe(true);
     expect(recordPeer(p, "dev", "dev", HERE, "2026-08-22T10:05:00Z")).toBe(false);
@@ -184,10 +187,10 @@ describe("the peers record", () => {
   });
 
   test("A NEW SESSION IS NEWS, so a restart does not leave a dead session on the record", () => {
-    // The record exists for a crash: the row has to name the session that is
-    // alive now. A key of host, dir and commit kept the FIRST session an agent
-    // ever published and dropped every later one, so the file pointed at a
-    // session that had died.
+    // The record exists for a crash, so the row has to name the session that is
+    // alive now. A key of host, dir, and commit kept the first session an agent
+    // published and dropped every later session, so the file pointed at a session
+    // that had died.
     const p = peersPath(join(scratch(), "slack.json"));
     expect(recordPeer(p, "dev", "dev", RUNNING, "2026-08-28T10:00:00Z")).toBe(true);
     expect(recordPeer(p, "dev", "dev", RUNNING, "2026-08-28T10:01:00Z")).toBe(false);
@@ -199,46 +202,46 @@ describe("the peers record", () => {
       session: "b71d0e2",
       pid: "22110",
     });
-    // The dead session stays on the record, which is what makes "which session
-    // was it before the crash" answerable.
+    // The record retains the dead session, so an operator can determine which session
+    // ran before the crash.
     expect(readPeers(p).map((r) => r.runtime?.session)).toEqual(["6a41d6cd", "b71d0e2"]);
-    // The comparison reads fields, and a row from disk lists its keys in another
+    // The comparison reads fields, and a row from disk orders its keys in a different
     // order than a fresh origin does.
     expect(sameOrigin(readPeers(p)[1]!, restarted)).toBe(true);
     expect(sameOrigin(readPeers(p)[0]!, restarted)).toBe(false);
   });
 
   test("ONE AGENT, ONE ROW: the name it publishes beats the name a line arrived under", () => {
-    // A delivered line names its sender by Slack handle and an agent's own row
-    // names itself by scramble name, and those differ: one agent held two rows
-    // carrying the same host, directory, commit and session, one under
-    // `model_failure_researc` and one under `model-failure-research`. The agent it
-    // belongs to is the authority on which name is its own.
+    // A delivered line identifies its sender by Slack handle, and an agent's own row
+    // identifies itself by scramble name. These identifiers differ. For example, one
+    // agent held two rows carrying the same host, directory, commit, and session, one
+    // under `model_failure_researc` and one under `model-failure-research`. The agent
+    // it belongs to is the authority on which name is its own.
     const p = peersPath(join(scratch(), "slack.json"));
-    // The row it wrote about itself.
+    // The system wrote this row about itself.
     expect(recordPeer(p, "model-failure-research", "model-failure-research", { ...RUNNING, agent: "model-failure-research" }, "t1")).toBe(true);
-    // A message from it, arriving under its Slack handle, carrying the same name.
+    // The message arrives from it under its Slack handle and carries the same name.
     expect(
       recordPeer(p, "model_failure_researc", "model_failure_researc", { ...RUNNING, agent: "model-failure-research" }, "t2"),
     ).toBe(true);
     expect(currentPeers(readPeers(p)).map((r) => r.agent)).toEqual(["model-failure-research"]);
-    // The handle it arrived under is kept on the row, which is what retires a row
-    // written under that handle before agents published their names.
+    // The row stores the handle it arrived under, which retires any row written under
+    // that handle before agents published their names.
     const withHandle = peersPath(join(scratch(), "slack.json"));
     expect(recordPeer(withHandle, "model_failure_researc", "model_failure_researc", RUNNING, "t0")).toBe(true);
     expect(
       recordPeer(withHandle, "model_failure_researc", "model_failure_researc", { ...RUNNING, agent: "model-failure-research" }, "t1"),
     ).toBe(true);
     expect(currentPeers(readPeers(withHandle)).map((r) => r.agent)).toEqual(["model-failure-research"]);
-    // Both rows stay in the file: the record of what was seen is never rewritten.
+    // The file retains both rows. The record of what was seen is never rewritten.
     expect(readPeers(withHandle)).toHaveLength(2);
   });
 
   test("A DAMAGED LINE IS COUNTED AND NAMED, and the rows around it survive", () => {
-    // Six agents append to one file on a shared filesystem. An agent reported a
-    // line no parser could read there, along with EIO on the write, and every
-    // reader had been stepping over that line in silence: the surface said
-    // `here are the peers` and never `one line of the record is damaged`.
+    // Six agents append to one file on a shared filesystem. An agent reported a line
+    // that no parser could read, along with an EIO on the write. Every reader
+    // silently skipped that line. The surface reported `here are the peers` and
+    // omitted `one line of the record is damaged`.
     const dir = scratch();
     const p = join(dir, "peers.jsonl");
     mkdirSync(dir, { recursive: true });
@@ -252,18 +255,18 @@ describe("the peers record", () => {
     const read = readPeerFile(p);
     expect(read.rows.map((r) => r.agent)).toEqual(["ana", "zed"]);
     expect(read.damaged).toBe(2);
-    // The count reaches the reader, in both shapes of the report.
+    // Both formats of the report deliver the count to the reader.
     expect(peersReport(read.rows, HERE, false, read.damaged)).toContain("2 line(s) in the record could not be parsed");
     expect(peersReport([], HERE, false, read.damaged)).toContain("2 line(s) in the record could not be parsed");
-    // A clean file says nothing about damage.
+    // A clean file provides no information about damage.
     expect(peersReport(read.rows, HERE, false, 0)).not.toContain("could not be parsed");
   });
 
   test("CONCURRENT WRITERS EACH LAND ONE ROW, and no line is torn", async () => {
-    // The read that decides whether to write sat outside any lock, so two agents
+    // The read that decides whether to write operated outside any lock, so two agents
     // starting together each wrote the row the other was about to write, and two
-    // appends at once on a network filesystem tear a line. This is the lock
-    // status.json and the inbox ledger already use.
+    // simultaneous appends on a network filesystem tear a line. This lock is the one
+    // that status.json and the inbox ledger already use.
     const p = peersPath(join(scratch(), "slack.json"));
     const writers = Array.from({ length: 8 }, (_, i) =>
       Promise.resolve().then(() =>
@@ -274,7 +277,7 @@ describe("the peers record", () => {
     const read = readPeerFile(p);
     expect(read.damaged).toBe(0);
     expect(read.rows).toHaveLength(8);
-    // And a repeat from every one of them adds nothing.
+    // Duplicate responses from each of them add nothing.
     for (let i = 0; i < 8; i += 1) {
       expect(
         recordPeer(p, `agent-${i}`, `agent-${i}`, { host: "h", dir: "/w", commit: "abc1234", agent: `agent-${i}` }, "t9"),
@@ -284,24 +287,26 @@ describe("the peers record", () => {
   });
 
   test("EACH WRITER OWNS ITS FILE, and the reader merges every one it finds", () => {
-    // Six agents shared one file on a host whose filesystem stalled under an
-    // orphaned `du` walking 1.3PB for 81 hours: writes returned EIO, eight
-    // processes sat in D-state, and the shared file ended with a line no parser
-    // could read. A lock degrades on that filesystem, since `withFileLock` breaks
-    // a lock it cannot take within a second and writes anyway. A writer that owns
-    // its file needs no agreement with anybody.
+    // Six agents shared one file on a host whose filesystem stalled while an
+    // orphaned `du` walked 1.3PB for 81 hours. Writes returned EIO, eight processes
+    // sat in D-state, and the shared file ended with a line no parser could read. A
+    // lock degrades on that filesystem, since `withFileLock` breaks a lock it cannot
+    // acquire within a second and writes anyway. A writer that owns its file needs no
+    // agreement with any other process.
     const cfg = join(scratch(), "slack.json");
     const p = peersPath(cfg);
     expect(recordPeer(p, "ana", "ana", { host: "h", dir: "/a", agent: "ana" }, "2026-08-28T01:00:00Z")).toBe(true);
     expect(recordPeer(p, "bo", "bo", { host: "h", dir: "/b", agent: "bo" }, "2026-08-28T01:00:01Z")).toBe(true);
-    // Two files, one per writer, and the shared file untouched by either.
+    // Each of the two writers uses a separate file, and neither writer touches the
+    // shared file.
     expect(readdirSync(peersDir(p)).sort()).toEqual(["ana.jsonl", "bo.jsonl"]);
     expect(existsSync(p)).toBe(false);
-    // The reader merges them, oldest first, so the newest row per agent wins.
+    // The reader merges rows in order from oldest to newest, so the newest row for
+    // each agent wins.
     expect(readPeerFile(p).rows.map((r) => r.agent)).toEqual(["ana", "bo"]);
-    // A NAME THAT IS A PATH stays inside the record directory, since an agent name
-    // comes from a config a person edits. The property is what matters here: the
-    // file sits in peers.d, its name carries no separator and no leading dot.
+    // A name that is a path stays inside the record directory, since an operator
+    // edits the configuration that provides an agent name. The file sits in peers.d,
+    // and its name carries no separator and no leading dot.
     for (const name of ["../../etc/passwd", ".hidden", "", "a/b", "..", "with space"]) {
       const file = peerFileFor(cfg, name);
       expect(dirname(file)).toBe(peersDir(cfg));
@@ -312,21 +317,22 @@ describe("the peers record", () => {
   });
 
   test("THE FILE IS NAMED FOR THE WRITER, so learning one peer never shares a file", () => {
-    // The name was the SUBJECT's first. Six agents on one host each learn the
-    // same remote peer from its messages, so all six appended to that peer's
-    // file: the shared writer removed an hour earlier, back under another name.
-    // An agent read the code and reported it before any line tore.
+    // The subject held the name first. Six agents on a single host each learn about
+    // the same remote peer from its messages, so all six appended to that peer's
+    // file. A shared writer removed an hour earlier had returned under another name.
+    // An agent read the code and reported the issue before any line tore.
     const p = peersPath(join(scratch(), "slack.json"));
     const peer = { host: "h2", dir: "/peer-work", agent: "remote-peer" };
     expect(recordPeer(p, "ana", "remote_peer", peer, "t1")).toBe(true);
     expect(recordPeer(p, "bo", "remote_peer", peer, "t2")).toBe(true);
     expect(readdirSync(peersDir(p)).sort()).toEqual(["ana.jsonl", "bo.jsonl"]);
-    // Both rows are ABOUT the peer, and each writer holds its own copy.
+    // Both rows describe the peer, and each writer maintains its own copy.
     for (const f of ["ana.jsonl", "bo.jsonl"]) {
       const rows = readOneFile(join(peersDir(p), f)).rows;
       expect(rows.map((r) => r.agent)).toEqual(["remote-peer"]);
     }
-    // The merged view still holds one row per agent, newest first seen.
+    // The merged view still contains one row for each agent, ordered by newest first
+    // seen.
     expect(currentPeers(readPeerFile(p).rows).map((r) => r.agent)).toEqual(["remote-peer"]);
   });
 
@@ -334,17 +340,18 @@ describe("the peers record", () => {
     const cfg = join(scratch(), "slack.json");
     const p = peersPath(cfg);
     mkdirSync(dirname(p), { recursive: true });
-    // What every build wrote up to this change.
+    // Every build wrote this output before this change.
     writeFileSync(
       p,
       `${JSON.stringify({ agent: "old", host: "h", dir: "/legacy", at: "2026-08-27T10:00:00Z" })}\n` +
         `{"agent":"torn","ho\n`,
     );
-    // And one row from a writer that owns its file, newer than the legacy row.
+    // One row comes from a writer that owns its file and is newer than the legacy row.
     expect(recordPeer(p, "old", "old", { host: "h", dir: "/now", agent: "old" }, "2026-08-28T10:00:00Z")).toBe(true);
     const read = readPeerFile(p);
     expect(read.damaged).toBe(1);
-    // Newest wins across the two files, and the older row stays readable.
+    // The newest row takes precedence across the two files, and the older row
+    // remains readable.
     expect(currentPeers(read.rows).map((r) => r.dir)).toEqual(["/now"]);
     expect(read.rows.map((r) => r.dir)).toEqual(["/legacy", "/now"]);
   });
@@ -375,16 +382,17 @@ describe("the peers report", () => {
   ];
 
   test("the report names the runtime and the session a restart needs", () => {
-    // A host and a directory say where to look. The session id says which
-    // conversation was interrupted, and it is the field nobody can reconstruct
-    // once the process is gone, so the surface an agent reads has to print it.
+    // A host and a directory indicate where to look. The session id identifies which
+    // conversation was interrupted, and nobody can reconstruct this field once the
+    // process exits, so the interface an agent reads must print it.
     const said = peersReport(
       [{ agent: "ana", ...RUNNING, at: "2026-08-28T10:00:00Z" }],
       HERE,
       false,
     );
     expect(said).toContain("claude-code 2.1.234 session 6a41d6cd pid 14027");
-    // A row from a build that published no runtime prints as it always did.
+    // A row from a build that published no runtime continues to print in its existing
+    // format.
     expect(peersReport(rows, HERE, false)).not.toContain("session");
   });
 
@@ -396,9 +404,10 @@ describe("the peers report", () => {
   });
 
   test("peersOnOtherCommits names a version disagreement across hosts", () => {
-    // THE HOST THAT STOPS UPDATING SENDS NO SIGNAL: the staleness notice
-    // compares a listener to the install beside it, so a machine nobody
-    // installs on stays quiet while it falls behind. One did, by five commits.
+    // A host that stops updating sends no signal. The staleness notice compares a
+    // listener to the installation beside it, so a machine that receives no
+    // installations stays quiet while it falls behind. One host fell behind by five
+    // commits.
     const rows = [
       { agent: "ana", host: "h2", dir: "/d", commit: "old111", at: "2026-08-26T10:00:00Z" },
       { agent: "bo", host: "h2", dir: "/d", commit: "new222", at: "2026-08-26T11:00:00Z" },
@@ -406,41 +415,44 @@ describe("the peers report", () => {
     ];
     const self: Origin = { host: "h1", dir: "/mine", commit: "new222" };
     const out = peersOnOtherCommits(rows, "new222", self);
-    // `ana` differs and is named. `bo` matches. `me` is this very process.
+    // `ana` differs and carries a name. `bo` matches. `me` refers to this specific
+    // process.
     expect(out.map((r) => r.agent)).toEqual(["ana"]);
-    // Newest sighting first when several differ.
+    // The newest sighting appears first when several differ.
     const many = peersOnOtherCommits(
       [...rows, { agent: "cy", host: "h3", dir: "/d", commit: "old111", at: "2026-08-26T13:00:00Z" }],
       "new222",
       self,
     );
     expect(many.map((r) => r.agent)).toEqual(["cy", "ana"]);
-    // No installed commit to compare against: no claim.
+    // The system makes no claim when it has no installed commit to compare against.
     expect(peersOnOtherCommits(rows, undefined, self)).toEqual([]);
     expect(peersOnOtherCommits(rows, "", self)).toEqual([]);
   });
 
   test("a peer on a different commit gets the reader-relative range named", () => {
-    // I announced two commits with "both changes touch src/cli.ts", which was
-    // MY range. An agent five commits back answered with theirs: 15 files, the
-    // delivery path included. A reader on that build who took my sentence at
-    // face value would have skipped a restart their build needs.
+    // An announcement stated that two commits touched `src/cli.ts`, describing only
+    // that local commit range. An agent five commits behind reported its own range
+    // across 15 files, including the delivery path. A reader on that build who relied
+    // on the narrower summary would have skipped a restart their build needs.
     const behind = [{ agent: "cy", host: "h", dir: "/d", commit: "0ded7ad", at: "t" }, ...rows];
     const said = peersReport(behind, HERE, false);
     expect(said).toContain("read the range from THEIR commit");
     expect(said).toContain("git diff --stat <their commit>..abc1234");
-    // Everybody on this commit: no reminder, since there is no range to read.
+    // The system sends no reminder to anyone on this commit, since there is no range
+    // to read.
     const together = [{ agent: "cy", host: "h", dir: "/d", commit: "abc1234", at: "t" }];
     expect(peersReport(together, HERE, false)).not.toContain("THEIR commit");
-    // This build publishes no commit of its own: nothing to compare against.
+    // This build publishes no commit of its own, so it leaves nothing to compare
+    // against.
     expect(peersReport(behind, { host: "h", dir: "/d" }, false)).not.toContain("THEIR commit");
   });
 
   test("--same-dir matches HOST AND directory, never the path alone", () => {
-    // Two agents measured the SAME absolute path on two machines, backed by
-    // different filesystems, and could not see each other's files. Grouping by
-    // path would have told them they shared a directory when they shared a
-    // string.
+    // Two agents measured an identical absolute path across two machines backed by
+    // different filesystems, and neither could see the other's files. Grouping these
+    // agents by path would have reported that they shared a directory when they
+    // shared only a string.
     const sameString = [{ agent: "cy", host: "other-host", dir: "/srv/dev-work", at: "t" }, ...rows];
     const said = peersReport(sameString, HERE, true);
     expect(said).toContain("1 peer(s)");
@@ -449,8 +461,8 @@ describe("the peers report", () => {
   });
 
   test("no peers says WHY the answer can be empty", () => {
-    // An empty list looks the same whether nobody is out there or nobody has
-    // spoken, and only one of those means anything.
+    // An empty list appears identical whether nobody is present or nobody has spoken,
+    // and only one of those states carries meaning.
     const said = peersReport([], HERE, false);
     expect(said).toContain("No peers have been seen yet");
     expect(said).toContain("learned from a message it SENT");
@@ -463,8 +475,10 @@ describe("the peers report", () => {
   });
 
   test("without a known origin, --same-dir reports everyone and hides nothing", () => {
-    // This build has no hostname seam, so it cannot know its own directory. It
-    // says what it knows about others, where filtering would need a guess.
+    // Because this build lacks a hostname boundary, it cannot identify its own
+    // directory. It reports what it knows about other hosts, since filtering would
+    // require a guess.
     expect(peersReport(rows, undefined, true)).toContain("2 peer(s)");
   });
 });
+

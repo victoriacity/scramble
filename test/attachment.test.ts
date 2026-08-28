@@ -1,7 +1,9 @@
-// test/attachment.test.ts: the attachment verbs against injected seams:
-// the slack three-step upload flow ORDER, message send --attach, local
-// upload + view, plus the pure attachments helpers. No token and no network:
-// the slack `fetch` seam is a fake and file writes go to real temp dirs.
+// The test suite in test/attachment.test.ts exercises attachment operations
+// against injected seams. It validates the Slack three-step upload flow order,
+// message sending with `--attach`, local upload and viewing, and pure attachment
+// helper functions. The suite runs without tokens and without network access
+// because the Slack `fetch` seam is a fake and file writes target real temporary
+// directories.
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -48,7 +50,10 @@ function writeSlackCfg(cwd: string, filesDir: string): void {
 
 type FetchSig = (input: string, init?: RequestInit) => Promise<Response>;
 
-/** An io whose fetch is a fake slack fetcher and whose cwd holds a slack cfg. */
+/**
+ *  The I/O interface uses a mock Slack fetcher for fetch operations, and its
+ *  current working directory contains a Slack configuration file.
+ */
 function slackIo(cwd: string, fetch: FetchSig): { io: Io; writes: string[]; errs: string[] } {
   const writes: string[] = [];
   const errs: string[] = [];
@@ -65,10 +70,12 @@ function slackIo(cwd: string, fetch: FetchSig): { io: Io; writes: string[]; errs
   return { io, writes, errs };
 }
 
-/** An io for the LOCAL backend whose HOME is the given dir, and whose /
- *  SCRAMBLE_SLACK_CONFIG points at the workspace's <.scramble/slack.json>, so a
- *  file-backed verb (attachment upload / view) resolves attachmentsDirFor from
- *  the config's filesDir. */
+/**
+ *  This IO handler serves the `LOCAL` backend with `HOME` set to the given
+ *  directory and `SCRAMBLE_SLACK_CONFIG` pointing at `.scramble/slack.json` in the
+ *  workspace, so a file-backed verb (attachment upload and view) resolves
+ *  `attachmentsDirFor` from the configuration's `filesDir`.
+ */
 function localIoExact(cwd: string): { io: Io; writes: string[]; errs: string[] } {
   const writes: string[] = [];
   const errs: string[] = [];
@@ -87,7 +94,7 @@ function localIoExact(cwd: string): { io: Io; writes: string[]; errs: string[] }
   return { io, writes, errs };
 }
 
-// --- pure helper functions -----------------------------------------------
+// ## Pure helper functions
 
 describe("attachments helpers", () => {
   test("sanitizeName strips path-unsafe characters and never returns empty", () => {
@@ -121,12 +128,12 @@ describe("attachments helpers", () => {
     expect(isHtmlResponse(res, new TextEncoder().encode("<html>hi</html>"))).toBe(true);
     const not = new Response("PNG", { headers: { "content-type": "image/png" } });
     expect(isHtmlResponse(not, new TextEncoder().encode("PNG"))).toBe(false);
-    // an HTML-looking body even without the header is still caught
+    // A body that resembles HTML is still caught even without the header.
     const sniffed = new Response("", { headers: { "content-type": "application/octet-stream" } });
     expect(isHtmlResponse(sniffed, new TextEncoder().encode("<!doctype html><html>"))).toBe(true);
-    // a `<head>`-prefixed body is caught too
+    // A body prefixed with `<head>` is also caught.
     expect(isHtmlResponse(new Response("", { headers: { "content-type": "application/octet-stream" } }), new TextEncoder().encode("<head></head>"))).toBe(true);
-    // a fully binary body is NOT html
+    // A fully binary body is not HTML.
     expect(isHtmlResponse(new Response("", { headers: { "content-type": "image/png" } }), new TextEncoder().encode("\x89PNG\r\n"))).toBe(false);
   });
 });
@@ -147,9 +154,9 @@ describe("the local attachment ledger", () => {
       const found = findLocalRecord(dir, rec.record.id);
       expect(found?.id).toBe(rec.record.id);
       expect(found?.path).toBe(rec.record.path);
-      // localPath builds the same dest the ledger recorded
+      // `localPath` builds the same destination path that the ledger recorded.
       expect(localPath(dir, rec.record.id, rec.record.name)).toBe(rec.record.path);
-      // the index round-trips
+      // The index preserves its state through serialization and deserialization.
       const index = readIndex(dir);
       expect(index[rec.record.id]).toBeDefined();
       writeIndex(dir, rec.record);
@@ -184,7 +191,7 @@ describe("the local attachment ledger", () => {
   });
 });
 
-// --- the slack three-step upload flow -------------------------------------
+// # The Slack three-step upload flow
 
 describe("attachment upload through the slack backend", () => {
   test("gets an upload url, POSTs the bytes as multipart, then completes WITH the channel, in that order", async () => {
@@ -201,8 +208,8 @@ describe("attachment upload through the slack backend", () => {
       }
       if (url === "https://upload.example/x") {
         order.push("put");
-        // MULTIPART POST, never a raw PUT: Slack answers 200 to a PUT and stores
-        // a file it will not share and cannot serve, with nothing failing.
+        // Use a multipart POST request. Slack answers 200 to a raw PUT request and
+        // stores a file it will not share and cannot serve, with nothing failing.
         expect(init?.method).toBe("POST");
         expect(init?.body).toBeInstanceOf(FormData);
         expect(String((init?.body as FormData).get("file"))).not.toBe("");
@@ -211,11 +218,13 @@ describe("attachment upload through the slack backend", () => {
       if (url.includes("completeUploadExternal")) {
         order.push("complete");
         const form = new URLSearchParams(String(init?.body ?? ""));
-        // The channel travels as a BARE id under `channel_id`. Slack answers
-        // channel_not_found to `channels=["C1"]`, so a JSON-array channel value
-        // is the defect this asserts against, and Slack accepts no such form.
-        // channel_id IS sent: with the bytes uploaded correctly it makes a REAL
-        // share, which is what lets the channel read the file.
+        // The request passes the channel as a bare identifier under `channel_id`. Slack
+        // returns channel_not_found for `channels=["C1"]`, so a JSON array channel
+        // value
+        // is the defect this assertion checks against, and Slack rejects that format.
+        // The
+        // request sends `channel_id`, and correctly uploaded bytes create a complete
+        // share, which lets the channel read the file.
         expect(form.get("channel_id")).toBe("C1");
         expect(form.get("channels")).toBeNull();
         expect(JSON.parse(form.get("files")!)).toEqual([{ id: "UPLOAD1", title: "upload.txt" }]);
@@ -303,7 +312,7 @@ describe("message send --attach", () => {
     expect(msgs[0]!.files).toHaveLength(1);
     expect(msgs[0]!.files![0]!.path).toBe(src);
     expect(msgs[0]!.files![0]!.name).toBe("report.txt");
-    // the local upload copied the bytes into filesDir
+    // The local upload copied the bytes into `filesDir`.
     const found = findLocalRecord(filesDir, msgs[0]!.files![0]!.id);
     expect(found).not.toBeNull();
     expect(readFileSync(found!.path, "utf8")).toBe("the report bytes");
@@ -313,18 +322,19 @@ describe("message send --attach", () => {
 // --- attachment view -------------------------------------------------------
 
 describe("attachment view", () => {
-  // A local io whose HOME=cwd and whose cwd carries a slack config with an
-  // explicit filesDir, so both the record and view resolve the same directory.
+  // The local I/O handler sets `HOME=cwd`, and its working directory contains a
+  // Slack configuration with an explicit `filesDir`, so both the record and view
+  // resolve the same directory.
   function viewCfg(cwd: string, filesDir: string): { io: Io; writes: string[]; errs: string[] } {
     writeSlackCfg(cwd, filesDir);
     return localIoExact(cwd);
   }
 
   test("a file NOT on disk is fetched from Slack, which is what makes skipping the download safe", async () => {
-    // Delivery stopped pulling the bytes of every file passing through a
-    // channel, so the id on the line has to be enough to get them later. Three
-    // agents in one room each downloaded the same 41MB archive addressed to one
-    // of them, inside the delivery path, on a filesystem at 99%.
+    // The delivery system stopped fetching the bytes of every file that passes
+    // through a channel, so the identifier on the line must suffice to retrieve them
+    // later. Three agents in one room each downloaded the same 41MB archive addressed
+    // to one of them, inside the delivery path on a filesystem at 99%.
     const cwd = scratchDir("view-fetch");
     const dir = join(cwd, ".viewfiles");
     writeSlackCfg(cwd, dir);
@@ -422,13 +432,13 @@ describe("attachment view", () => {
     const { io, errs } = viewCfg(cwd, filesDir);
     const code = await main(["attachment", "view", "nope"], io);
     expect(code).toBe(1);
-    // Not on disk is no longer the end of it: view asks Slack, so the failure
-    // that reaches the agent is Slack's own answer about that id.
+    // When an item is not on disk, the process continues. The `view` command queries
+    // Slack, so the agent receives Slack's own failure response for that id.
     expect(errs[0]).toContain("nope");
     expect(errs[0]).toContain("not on disk");
   });
 });
-// --- direct units on the shared download/upload functions -----------------
+// Direct unit tests on the shared download and upload functions
 
 describe("downloadFile (shared)", () => {
   test("a fetch exception is reported, not thrown", async () => {
@@ -468,9 +478,9 @@ describe("downloadFile (shared)", () => {
     const d = scratchDir("dl-html");
     const r = await downloadFile(async () => new Response("<html>no auth</html>", { headers: { "content-type": "text/html" } }), "https://files/x", "tok", d, "F5", "x.html");
     expect(r.ok).toBe(false);
-    // The error names WHAT ARRIVED: the status, the content type, the byte
-    // count and the body's head, because "returned HTML" hid a 19-byte
-    // `Error serving file.` from the origin and cost a wrong diagnosis.
+    // The error message reports the received status, content type, byte count, and
+    // the start of the response body, because "returned HTML" hid a 19-byte
+    // `Error serving file.` from the origin and caused an incorrect diagnosis.
     if (!r.ok) {
       expect(r.error).toContain("not the file");
       expect(r.error).toContain("text/html");
@@ -479,10 +489,10 @@ describe("downloadFile (shared)", () => {
 });
 
 describe("a send carrying a file takes the SAME road as one without", () => {
-  // `--attach` uploaded from the verb and returned before the send path ran, so
-  // it skipped the duplicate guard, the rewriter and every line the send prints.
-  // An agent posted one draft twice, seven seconds apart, saw no output either
-  // time, and deleted the copy by hand.
+  // The `--attach` flag uploaded from the verb and returned before the send path
+  // ran, so it skipped the duplicate guard, the rewriter, and every line the send
+  // path prints. An agent posted one draft twice, seven seconds apart, saw no
+  // output either time, and deleted the copy by hand.
   const okUpload = async (url: string): Promise<Response> => {
     if (url.includes("getUploadURLExternal"))
       return new Response(JSON.stringify({ ok: true, upload_url: "https://u/x", file_id: "F1" }), { status: 200 });
@@ -509,11 +519,11 @@ describe("a send carrying a file takes the SAME road as one without", () => {
     expect(
       await main(["message", "send", "--target", "general", "--attach", src, "--no-verify", "--backend", "slack"], first.io),
     ).toBe(0);
-    // THE LINE THAT STOPS A RESEND. Neither run printed one before this change.
+    // This line stops a resend. Before this change, neither run printed one.
     expect(first.errs.join(" ")).toContain("posted: general at ts 77.7");
     expect(first.errs.join(" ")).toContain("sent: general at ts 77.7");
 
-    // THE SECOND RUN IS REFUSED, from the record the first one wrote.
+    // The second run is refused based on the record the first run wrote.
     const second = slackIo(cwd, okUpload);
     second.io.readStdin = async () => "the report is attached and the numbers are in it";
     expect(
@@ -524,7 +534,7 @@ describe("a send carrying a file takes the SAME road as one without", () => {
   });
 
   test("a draft the language rules refuse never reaches the upload", async () => {
-    // The file would sit in the channel with no message to go with it.
+    // The file would remain in the channel without an accompanying message.
     const cwd = scratchDir("attach-lint");
     const filesDir = scratchDir("attach-lint-files");
     writeSlackCfg(cwd, filesDir);
@@ -545,12 +555,12 @@ describe("a send carrying a file takes the SAME road as one without", () => {
 });
 
 describe("the ts of the message a completed upload posted", () => {
-  // Completing an upload posts its own message carrying the text, so it has a ts
-  // like any other message, and everything the send does afterwards needs it:
-  // closing what the reply answers, remembering what this agent said, and
-  // reporting what it raced with. The send path took a different route with an
-  // attachment and skipped all three, which my own ledger caught, holding two
-  // questions I had answered with files.
+  // Completing an upload posts its own message carrying the text, so it receives a
+  // timestamp like any other message. Every subsequent action in the send workflow
+  // requires this timestamp to close what the reply answers, record what this agent
+  // said, and report what it raced with. The send path took a different route with
+  // an attachment and skipped all three steps, which the ledger caught because it
+  // held two questions answered with files.
   const okUpload = (complete: unknown) => async (url: string) => {
     if (url.includes("getUploadURLExternal"))
       return new Response(JSON.stringify({ ok: true, upload_url: "https://u/x", file_id: "F" }), { status: 200 });
@@ -586,9 +596,9 @@ describe("the ts of the message a completed upload posted", () => {
   });
 
   test("no share means no ts, and the upload still succeeds", async () => {
-    // ABSENT, since an invented id is worse: the caller closes against a
-    // wall-clock marker and skips the sent record, because nobody can look up an
-    // id that was made up.
+    // The record leaves the id absent, since an invented id is worse. The caller
+    // closes against a wall-clock marker and skips the sent record, because nobody can
+    // look up an id that was made up.
     for (const files of [
       [{ id: "F", permalink: "https://x/f" }],
       [{ id: "F", permalink: "https://x/f", shares: null }],
@@ -604,8 +614,8 @@ describe("the ts of the message a completed upload posted", () => {
 });
 
 describe("uploadToSlack failure branches", () => {
-  // A fetcher that answers get/put/complete ok; used where the size/read guard
-  // returns before any network call is made.
+  // This fetcher answers get, put, and complete requests with ok. The system uses
+  // it when the size or read guard returns before making any network call.
   const ok = async (url: string): Promise<Response> => {
     if (String(url).includes("getUploadURLExternal")) return new Response(JSON.stringify({ ok: true, upload_url: "https://u/x", file_id: "F" }), { status: 200 });
     if (String(url).startsWith("https://u/")) return new Response("", { status: 200 });
@@ -616,7 +626,7 @@ describe("uploadToSlack failure branches", () => {
     const d = scratchDir("up-big");
     const big = join(d, "big.bin");
     const buf = new Uint8Array(MAX_ATTACHMENT_BYTES + 1).fill(1);
-    // write the big file once, synchronously
+    // The process writes the large file once, synchronously.
     const { writeFileSync: w } = await import("node:fs");
     w(big, buf);
     const r = await uploadToSlack(ok, "tok", big, "C1");
@@ -676,10 +686,13 @@ describe("uploadToSlack failure branches", () => {
   });
 });
 
-// --- the file endpoints send FORM ENCODING with detail kept ----------------
+// The file endpoints send form encoding and keep detail.
 
 describe("slack upload form encoding and detail", () => {
-  /** Parse an x-www-form-urlencoded body into its decoded field values. */
+  /**
+   *  The parser converts an `x-www-form-urlencoded` body into its decoded field
+   *  values.
+   */
   function parseForm(body: string): Record<string, string> {
     const out: Record<string, string> = {};
     for (const [k, v] of new URLSearchParams(body)) out[k] = v;
@@ -825,7 +838,7 @@ describe("slack upload form encoding and detail", () => {
   });
 });
 
-// --- the remaining cli branches ----------------------------------------------
+// ## The remaining CLI branches
 
 describe("attachment verb edge cases", () => {
   test("upload with no --path is reported", async () => {
@@ -893,7 +906,8 @@ describe("attachment verb edge cases", () => {
       serve: async () => 0,
       readStdin: async () => "text",
     };
-    // a missing attach file -> local upload reports cannot read
+    // If an attached file is missing, the local upload reports that it cannot read
+    // the file.
     const code = await main(["message", "send", "--target", "general", "--attach", join(cwd, "missing.bin")], io);
     expect(code).toBe(1);
     expect(posts).toBe(0);
@@ -924,7 +938,7 @@ describe("findLocalRecord / readIndex behaviour", () => {
   });
 });
 
-// --- a fetch exception inside a Slack REST call -----------------------------
+// # A fetch exception inside a Slack REST call
 
 describe("uploadToSlack network failure", () => {
   test("a getUploadURLExternal network failure is reported", async () => {
@@ -991,8 +1005,8 @@ describe("a file download re-sends the auth header across a redirect", () => {
     }, "https://files.slack.com/files-pri/T1-F1/f.txt", "tok", d, "F1", "f.txt");
     expect(r.ok).toBe(true);
     if (r.ok) expect(readFileSync(r.path, "utf8")).toBe("REAL-BYTES");
-    // BOTH requests carry the token: dropping it on the second is the defect,
-    // because Slack then serves its sign-in page as a 200 text/html body.
+    // Both requests carry the token. Dropping the token on the second request is the
+    // defect, because Slack then serves its sign-in page as a 200 text/html body.
     expect(seen).toHaveLength(2);
     expect(seen[0]!.auth).toBe("Bearer tok");
     expect(seen[1]!.auth).toBe("Bearer tok");
@@ -1040,8 +1054,8 @@ describe("message send --attach on the slack backend", () => {
     io.readStdin = async () => "here is the mockup";
     expect(await main(["message", "send", "--target", "general", "--as", "alice", "--attach", src, "--backend", "slack"], io)).toBe(0);
     const form = new URLSearchParams(completeBody);
-    // The words travel WITH the file, and no separate message is posted, or the
-    // channel shows the sentence and the file as two separate things.
+    // The words accompany the file, and no separate message is posted, or the
+    // channel displays the sentence and the file as two separate items.
     expect(form.get("initial_comment")).toBe("here is the mockup");
     expect(form.get("channel_id")).toBe("C1");
     expect(posts).toBe(0);
@@ -1064,7 +1078,8 @@ describe("message send --attach on the slack backend", () => {
       return new Response(JSON.stringify({ ok: true }), { status: 200 });
     });
     io.readStdin = async () => "with a file";
-    // alice has her own token in the config; a file she sends must be her file.
+    // The configuration stores a dedicated token for Alice, and any file she sends
+    // must belong to her.
     const code = await main(["message", "send", "--target", "general", "--as", "alice", "--attach", src, "--backend", "slack"], io);
     expect(code).toBe(0);
     expect(uploadAuth).toBe("Bearer T_A");
@@ -1088,9 +1103,9 @@ describe("message send --attach on the slack backend", () => {
   });
 
   test("an unusable slack config REFUSES the upload, and says which", async () => {
-    // The upload goes through the backend now, so it reports the backend's own
-    // reason. It used to check `cfg === null || !cfg.token` itself, which is one
-    // of the two things this consolidation removed.
+    // The upload now passes through the backend, so it reports the backend's own
+    // reason. The upload previously checked `cfg === null || !cfg.token` directly,
+    // which is one of two items this consolidation removed.
     const cwd = scratchDir("attach-nocfg");
     mkdirSync(join(cwd, ".scramble"), { recursive: true });
     writeFileSync(join(cwd, ".scramble", "slack.json"), "not json at all");
@@ -1102,3 +1117,4 @@ describe("message send --attach on the slack backend", () => {
     expect(errs.join(" ")).toContain("slack.json");
   });
 });
+

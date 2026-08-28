@@ -3314,9 +3314,8 @@ async function cmdMessage(args: string[], io: Io, backend: "local" | "slack"): P
         // The system replies in a thread only when one message awaits an answer. When
         // several messages remain open, selecting the newest message is a guess, and an
         // incorrect guess places an answer inside another conversation. In one
-        // instance,
-        // the operator asked a question, another agent posted 13 seconds later, and the
-        // answer to the operator went into that agent's thread. When several messages
+        // instance a person asked a question, another agent posted 13 seconds later,
+        // and the answer to the question went into that agent's thread. When several messages
         // remain open, the sender knows which message the answer addresses and the
         // ledger
         // does not, so the ledger states this condition and stays at the channel level,

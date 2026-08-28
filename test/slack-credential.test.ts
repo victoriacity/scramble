@@ -41,7 +41,8 @@ describe("the Slack app-config credential", () => {
       expect(got.cred.exp).toBe(1787402756);
       expect(got.cred.refreshToken).toBe("xoxe-refresh-old");
     }
-    // An entry without a token is skipped. An empty return would name it as usable.
+    // The system skips an entry that lacks a token. An empty return would mark that
+    // entry as usable.
     const skipped = firstCredential(JSON.stringify({ A: { token: "" }, B: { token: "t" } }));
     expect(skipped.ok && skipped.cred.key).toBe("B");
     expect(firstCredential("not json").ok).toBe(false);
@@ -54,8 +55,8 @@ describe("the Slack app-config credential", () => {
     expect(stillGood(cred, 800)).toBe(true);
     expect(stillGood(cred, 960)).toBe(false);
     expect(stillGood(cred, 2000)).toBe(false);
-    // No `exp` at all: the file predates the field and a rotation would spend a
-    // refresh token for nothing.
+    // The file contains no `exp` field because it predates the field, and a rotation
+    // would spend a refresh token for nothing.
     expect(stillGood({ ...cred, exp: 0 }, 99999)).toBe(true);
   });
 
@@ -99,8 +100,8 @@ describe("the Slack app-config credential", () => {
   });
 
   test("a spent token is rotated and the new pair reaches disk before it is used", async () => {
-    // Slack retires the old refresh token the moment it issues a new pair, so a
-    // rotation whose result is never written destroys the credential.
+    // Slack invalidates the old refresh token as soon as it issues a new pair, so
+    // a rotation that fails to write its result destroys the credential.
     const home = scratch("rotate");
     const path = credentialsPath(home);
     writeFileSync(path, FILE);
@@ -125,7 +126,7 @@ describe("the Slack app-config credential", () => {
     expect(onDisk.E01EXAMPLE1.token).toBe("xoxe.xoxp-new");
     expect(onDisk.E01EXAMPLE1.refresh_token).toBe("xoxe-refresh-new");
     expect(onDisk.E01EXAMPLE1.exp).toBe(1787500000);
-    // The fields the Slack CLI put there are still there.
+    // The fields that the Slack CLI added remain in place.
     expect(onDisk.E01EXAMPLE1.team_domain).toBe("examplecorp");
   });
 
@@ -173,8 +174,8 @@ describe("the Slack app-config credential", () => {
     const badFile = await freshCliToken("{}", path, async () => new Response("{}", { status: 200 }), at, "STAMP");
     expect(badFile.ok === false && badFile.why).toContain("no entry");
 
-    // The write failing is the dangerous case: the old refresh token is dead by
-    // then, and the report has to say so.
+    // A failed write is the dangerous case. The old refresh token is dead by then,
+    // and the report has to say so.
     const unwritable = await freshCliToken(
       FILE,
       join(home, "no-such-dir", "credentials.json"),
@@ -188,3 +189,4 @@ describe("the Slack app-config credential", () => {
     expect(unwritable.ok === false && unwritable.why).toContain("old refresh token is now dead");
   });
 });
+

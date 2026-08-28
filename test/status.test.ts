@@ -1,8 +1,8 @@
-// test/status.test.ts: the AUTOMATIC working-status surface. Status is set by
-// delivery of an addressed message and cleared by a reply, has a TTL, records to
-// .scramble/status.json, and talks to Slack through an injected fetch seam so no
-// token and no network are needed. Status is never a message and SCRAMBLE_STATUS=off
-// silences it entirely.
+// The `test/status.test.ts` suite tests the automatic working-status interface.
+// Delivery of an addressed message sets the status, and a reply clears it. The
+// status has a TTL, writes to `.scramble/status.json`, and connects to Slack
+// through an injected fetch seam so it requires no token and no network.
+// Status is never a message, and `SCRAMBLE_STATUS=off` silences it entirely.
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -31,7 +31,10 @@ function recorded(dir: string): ReturnType<typeof readRecords> {
   return readRecords(statusPath(dir));
 }
 
-/** A local-mode StatusManager plus a controllable clock and its scratch dir. */
+/**
+ *  The system includes a local-mode StatusManager, a controllable clock, and its
+ *  scratch directory.
+ */
 function makeLocal(): { mgr: StatusManager; advance(ms: number): void; setNow(n: number): void; dir: string } {
   const dir = scratch("local");
   let now = 0;
@@ -52,14 +55,18 @@ interface SlackHarness {
   errs: string[];
   advance(ms: number): void;
   setNow(n: number): void;
-  /** The scratch workspace, so a test can plant a ledger record written by an
-   *  older version of this code. */
+  /**
+   *  Tests use the scratch workspace, so a test can plant a ledger record written by
+   *  an older version of this code.
+   */
   dir: string;
 }
 
-/** A slack-mode StatusManager whose fetch records every call. `router` decides
- *  the answer; the default answers ok:true and gives chat.postMessage a ts so the
- *  living-message path is captured. */
+/**
+ *  The Slack-mode StatusManager records every fetch call. The `router` determines
+ *  the answer. By default, it returns ok:true and provides chat.postMessage with a
+ *  ts so the living-message path is captured.
+ */
 function makeSlack(opts?: {
   router?: (url: string, body: Record<string, unknown>) => Response;
   noToken?: boolean;
@@ -94,7 +101,9 @@ function makeSlack(opts?: {
   return { mgr, setNow: (n) => (now = n), advance: (ms) => (now += ms), calls, errs, dir };
 }
 
-/** Drive the CLI with a fully faked io over a scratch workspace. */
+/**
+ *  Drive the CLI with simulated input and output across a scratch workspace.
+ */
 async function mainIo(
   dir: string,
   fetch: Io["fetch"],
@@ -123,8 +132,10 @@ async function mainIo(
   return { io, writes, errs };
 }
 
-/** A store seeded with ana joined into `general`, plus a bob message. Channel
- *  handler routes CLI requests against it. */
+/**
+ *  The store initializes with ana joined to `general` and includes a message from
+ *  bob. The channel handler routes CLI requests against this store.
+ */
 function seededStore(dir: string, text: string): ChannelStore {
   const store = createStore(dir);
   store.join("ana", "goal", "general");
@@ -135,7 +146,7 @@ function seededStore(dir: string, text: string): ChannelStore {
 
 const POST = "chat.postMessage";
 
-// --- ledger IO ----------------------------------------------------------
+// # Ledger IO
 
 describe("status ledger", () => {
   test("writeStatus round-trips entries; readRecords reads them back", () => {
@@ -145,12 +156,12 @@ describe("status ledger", () => {
   });
 
   test("A LEDGER WRITE THAT FAILS IS REPORTED, and the caller carries on", async () => {
-    // `save` called mkdirSync and writeFileSync with nothing around them, and
-    // `withFileLock` calls mkdirSync before either, while the class comment
-    // promised that a failed status never fails the work it describes. On a host
-    // whose writes returned EIO that throw left `startExpiryTicker` holding a
-    // rejected promise nobody awaits, which takes a listener down. An agent read
-    // the source and reported it against the comment.
+    // The `save` method called mkdirSync and writeFileSync without error handling,
+    // and `withFileLock` calls mkdirSync before either operation. The class comment
+    // stated that a failed status never fails the work it describes. On a host whose
+    // writes returned EIO, that thrown error left `startExpiryTicker` holding a
+    // rejected promise that nobody awaits, which takes a listener down. An agent
+    // read the source code and reported the defect against the comment.
     const dir = scratch("ledger-unwritable");
     const errs: string[] = [];
     const mgr = new StatusManager({
@@ -161,7 +172,8 @@ describe("status ledger", () => {
       writeErr: (l) => errs.push(l),
       fetch: async () => new Response(JSON.stringify({ ok: true }), { status: 200 }),
     });
-    // A FILE where the `.scramble` directory belongs: every write under it throws.
+    // If a file exists where the `.scramble` directory belongs, every write under it
+    // throws.
     writeFileSync(join(dir, ".scramble"), "this is a file");
     await mgr.setOn("general", "ana");
     await mgr.clearOn("general", "ana");
@@ -178,7 +190,7 @@ describe("status ledger", () => {
   });
 });
 
-// --- local backend ------------------------------------------------------
+// ## local backend
 
 describe("status local backend", () => {
   test("a fresh set records channel+agent+expiry and becomes active", async () => {
@@ -202,15 +214,15 @@ describe("status local backend", () => {
   });
 
   test("two agents working one channel each keep their own status", async () => {
-    // The ledger held ONE record per channel, so one agent's status overwrote
-    // another's, and any agent's reply cleared whatever the channel held. The
-    // live smoke caught it: a peer's message took down the status the listener
-    // had set for itself.
+    // The ledger stored one record per channel, so one agent's status overwrote
+    // another agent's status, and any agent reply cleared whatever the channel held.
+    // The live smoke test caught this issue when a peer's message removed the status
+    // the listener had set for itself.
     const { mgr, dir } = makeLocal();
     await mgr.setOn("general", "ana");
     await mgr.setOn("general", "bob");
     expect(recorded(dir).map((r) => r.agent).sort()).toEqual(["ana", "bob"]);
-    // And bob finishing leaves ana working.
+    // When bob finishes, ana continues working.
     await mgr.clearOn("general", "bob");
     expect(recorded(dir).map((r) => r.agent)).toEqual(["ana"]);
   });
@@ -256,12 +268,12 @@ describe("status local backend", () => {
   });
 });
 
-// --- slack backend ------------------------------------------------------
+// # slack backend
 
 describe("status slack backend", () => {
-  // A status is SLACK'S OWN status on a thread. Posting a
-  // `working` line into the channel was the wrong shape, and setStatus works on
-  // an ordinary channel thread, which is what makes the message unnecessary.
+  // Slack maintains its own status on a thread. Posting a `working` line into the
+  // channel used the wrong structure, and setStatus operates on an ordinary channel
+  // thread, which makes that message unnecessary.
   test("a status on a thread is Slack's own status, and NO message is posted", async () => {
     const { mgr, calls } = makeSlack();
     await mgr.setOn("general", "ana", "thread.9");
@@ -273,7 +285,7 @@ describe("status slack backend", () => {
   });
 
   test("with NO thread there is no native status, so nothing is sent at all", async () => {
-    // Silence beats a message pretending to be a status.
+    // Silence outperforms a message that simulates a status.
     const { mgr, calls } = makeSlack();
     await mgr.setOn("general", "ana");
     expect(calls.filter((c) => c.url.includes(POST))).toHaveLength(0);
@@ -306,7 +318,8 @@ describe("status slack backend", () => {
     await mgr.setOn("general", "ana", "thread.9");
     await mgr.clearOn("general", "ana");
     expect(errs.join(" ")).toContain("invalid_thread_ts");
-    // One attempt to set, and no attempt to clear a status that was never set.
+    // The operation makes one attempt to set the status, and makes no attempt to
+    // clear a status that was never set.
     expect(calls.filter((c) => c.url.includes("assistant.threads.setStatus"))).toHaveLength(1);
   });
 
@@ -320,7 +333,8 @@ describe("status slack backend", () => {
     const { mgr, errs } = makeSlack({ router: failing });
     await mgr.setOn("general", "ana", "thread.9");
     expect(errs.join(" ")).toContain("invalid_auth");
-    // the status is recorded despite the failed Slack call, so the lifecycle stays.
+    // Despite the failed Slack call, the status is recorded, so the lifecycle
+    // remains.
   });
 
   test("a network failure and a non-JSON answer are surfaced as failures", async () => {
@@ -361,7 +375,7 @@ describe("status slack backend", () => {
   });
 });
 
-// --- CLI integration ----------------------------------------------------
+// ## CLI integration
 
 describe("status through the CLI", () => {
   test("a message addressed to this agent sets the status for that channel", async () => {
@@ -414,12 +428,13 @@ describe("status through the CLI", () => {
         dmChannels: {},
       }),
     );
-    // an active status on a thread: the reply must clear it.
+    // When a thread has an active status, the reply must clear it.
     writeStatus(statusPath(dir), [{ channel: "general", agent: "bob", thread: "1.9", expiresAt: Date.now() + 60_000 }]);
     let messagePosts = 0;
     const { io, errs } = await mainIo(dir, async (url) => {
       const u = String(url);
-      // Slack refuses the CLEAR, which must not take the post down with it.
+      // Slack refuses the CLEAR request, and this rejection must not take down the
+      // post.
       if (u.includes("assistant.threads.setStatus")) {
         return new Response(JSON.stringify({ ok: false, error: "invalid_thread_ts" }), { status: 200 });
       }
@@ -431,8 +446,9 @@ describe("status through the CLI", () => {
     }, {});
     const code = await main(["post", "general", "hi", "--as", "bob", "--backend", "slack"], io);
     expect(code).toBe(0); // the status failure never fails the post
-    // NO settle timer: the short-lived verb AWAITs the status clear, so the
-    // ledger is already written (the cleared reply) when main() returns.
+    // The system uses no settle timer. The short-lived command awaits the status
+    // clear, so the ledger is already written with the cleared reply when `main()`
+    // returns.
     expect(errs.some((e) => e.includes("invalid_thread_ts"))).toBe(true);
     expect(messagePosts).toBe(1); // the message itself went out
     expect(recorded(dir)).toEqual([]); // the status was still dropped locally
@@ -452,7 +468,7 @@ describe("status through the CLI", () => {
         dmChannels: {},
       }),
     );
-    // an active status backs the reply: the reply must write the CLEARED ledger.
+    // An active status backs the reply, so the reply must write the CLEARED ledger.
     writeStatus(statusPath(dir), [{ channel: "general", agent: "bob", thread: "ts.9", expiresAt: Date.now() + 60_000 }]);
     const { io } = await mainIo(dir, async (url, init) => {
       const u = String(url);
@@ -461,8 +477,8 @@ describe("status through the CLI", () => {
     }, {});
     const code = await main(["post", "general", "hi", "--as", "bob", "--backend", "slack"], io);
     expect(code).toBe(0);
-    // NO settle/timer and NO promise inspection: the verb AWAITED clearOn, so
-    // the ledger is already empty the moment main() returned.
+    // The test uses no settle timers and performs no promise inspection. The operation
+    // awaited `clearOn`, so the ledger is already empty the moment `main()` returned.
     expect(recorded(dir)).toEqual([]);
   });
 
@@ -480,17 +496,19 @@ describe("status through the CLI", () => {
         dmChannels: {},
       }),
     );
-    // an active status the failed reply must still attempt to clear (and report).
+    // The failed reply must still attempt to clear and report an active status.
     writeStatus(statusPath(dir), [{ channel: "general", agent: "bob", thread: "ts.7", expiresAt: Date.now() + 60_000 }]);
     const { io, errs } = await mainIo(dir, async (url, init) => {
       const u = String(url);
-      // the POST to general fails: the underlying post earns exit 1.
+      // The POST request to general fails. The underlying post command exits with
+      // status 1.
       if (u.includes("chat.postMessage")) return new Response(JSON.stringify({ ok: false, error: "not_in_channel" }), { status: 200 });
       if (u.includes("chat.delete")) return new Response(JSON.stringify({ ok: false, error: "cannot_delete" }), { status: 200 });
       return new Response(JSON.stringify({ ok: true }), { status: 200 });
     }, {});
     const code = await main(["post", "general", "hi", "--as", "bob", "--backend", "slack"], io);
-    // the failing status never changes the exit: the verb earns 1 from the post.
+    // The failure status never changes the exit code. The command returns 1 from the
+    // post operation.
     expect(code).toBe(1);
     expect(errs.join(" ")).toContain("not_in_channel");
   });
@@ -515,7 +533,7 @@ describe("status through the CLI", () => {
     await main(["message", "check", "--as", "ana"], ioCheck);
     expect(recorded(dir)).toHaveLength(1); // a status EXISTS in the ledger
 
-    // history: the one real message alone, with no status line in it.
+    // The history holds only the one real message, with no status line in it.
     const { io, writes } = await mainIo(dir, (u, init) => handler(new Request(u, init)), { SCRAMBLE_STATUS: "off" });
     const code = await main(["history", "general"], io);
     expect(code).toBe(0);
@@ -531,8 +549,8 @@ describe("status through the CLI", () => {
     store.join("ana", "goal", "general");
     store.post({ channel: "general", from: "bob", text: "@ana hi", id: "1" });
     const handler = createHandler(store);
-    // status.json as a DIRECTORY makes the ledger write reject: the awaited
-    // status call throws, settleStatus catches it, and the check still exits 0.
+    // When `status.json` is a directory, the ledger write rejects. The awaited status
+    // call throws, `settleStatus` catches the error, and the check still exits 0.
     mkdirSync(join(dir, ".scramble", "status.json"), { recursive: true });
     const { io, errs } = await mainIo(dir, (u, init) => handler(new Request(u, init)), {});
     const code = await main(["message", "check", "--as", "ana"], io);
@@ -542,12 +560,12 @@ describe("status through the CLI", () => {
 });
 
 describe("a channel the config map does not hold", () => {
-  // The map is a hand-kept copy of what Slack holds, and this is the fourth
-  // place in this repo where the copy was missing or stale. Measured live: an
-  // agent was invited into a channel, `message send` to it worked because the
-  // post path ASKS Slack, and the status path read the map, found nothing, and
-  // the whole feature was dead in that channel. A stale entry ended the same
-  // way, as a bare `status: channel_not_found`.
+  // The map is a manually maintained copy of data stored in Slack, and this is the
+  // fourth place in this repository where the copy was missing or stale. In a live
+  // measurement, an agent was invited into a channel; `message send` to the agent
+  // worked because the post path queries Slack, but the status path read the map,
+  // found nothing, and the whole feature failed in that channel. A stale entry ended
+  // the same way, producing a bare `status: channel_not_found`.
 
   test("resolves live, and the status lands in the resolved channel", async () => {
     const h = makeSlack({ resolve: async (c) => (c === "invited-channel" ? "C-INVITED" : undefined) });
@@ -588,9 +606,9 @@ describe("a channel the config map does not hold", () => {
   });
 
   test("a Slack refusal names the channel and what was asked", async () => {
-    // `status: channel_not_found` said which error came back and nothing about
-    // the request, in a feature whose failures are reported and never escalated,
-    // so the report is the only trace it leaves.
+    // The `status: channel_not_found` output indicated which error returned and
+    // contained no details about the request. Failures in this feature are reported
+    // and never escalated, so the report is the only trace it leaves.
     const h = makeSlack({
       router: () => new Response(JSON.stringify({ ok: false, error: "channel_not_found" }), { status: 200 }),
     });
@@ -601,8 +619,9 @@ describe("a channel the config map does not hold", () => {
 
 describe("a wedged lock", () => {
   test("is broken, and the break is REPORTED on the status channel", async () => {
-    // A process killed while holding the lock must not freeze every status in
-    // the workspace, and breaking one silently would hide a wedged process.
+    // A process terminated while holding the lock must not freeze every status
+    // across the workspace, and breaking a lock silently would conceal a wedged
+    // process.
     const h = makeSlack();
     mkdirSync(`${statusPath(h.dir)}.lock`, { recursive: true });
     await h.mgr.setOn("general", "dev", "root.1");
@@ -613,9 +632,10 @@ describe("a wedged lock", () => {
 
 describe("an expiry sweep touches only the sweeping agent's own rows", () => {
   test("another agent's expired row is left where it is", async () => {
-    // One manager holds ONE token, so taking down another agent's status means calling Slack under
-    // the wrong credential, in a channel this agent may not be in. Measured as `status in team:
-    // channel_not_found (channel_id C0EXAMPLE006)` for a row belonging to a different agent.
+    // A manager holds one token, so taking down another agent's status means calling
+    // Slack under the wrong credential, in a channel this agent may not be in. This
+    // was measured as `status in team: channel_not_found (channel_id C0EXAMPLE006)`
+    // for a row belonging to a different agent.
     const dir = scratch("sweep-own");
     const file = statusPath(dir);
     mkdirSync(join(dir, ".scramble"), { recursive: true });
@@ -640,12 +660,12 @@ describe("an expiry sweep touches only the sweeping agent's own rows", () => {
     });
     expect(await mgr.clearExpired()).toBe(1);
     expect(recorded(dir).map((r) => r.agent)).toEqual(["someone-else"]);
-    // And no Slack call was made about the other agent's row.
+    // No Slack call was sent regarding the other agent's row.
     expect(calls).toEqual([]);
   });
 
   test("with no agent named, the sweep clears everything", async () => {
-    // The local backend and a one-agent workspace want the old behaviour.
+    // The local backend and a one-agent workspace require the previous behavior.
     const dir = scratch("sweep-all");
     const file = statusPath(dir);
     mkdirSync(join(dir, ".scramble"), { recursive: true });
@@ -667,14 +687,13 @@ describe("an expiry sweep touches only the sweeping agent's own rows", () => {
 });
 
 describe("the ledger survives several processes writing at once", () => {
-  // MEASURED before the fix: eight processes each adding one channel left TWO
-  // entries of eight. Every mutation read the file, changed what it read and
-  // wrote the whole thing back, while a listener, a send and an expiry sweep did
-  // the same in separate processes. The last writer won.
+  // Before the fix, eight processes each added one channel and left two entries of
+  // eight. Every mutation read the file, changed what it read, and wrote the entire
+  // file back, while a listener, a send operation, and an expiry sweep did the same
+  // in separate processes. The last writer won.
   //
-  // The live smoke caught it as a status that existed a moment earlier and had
-  // disappeared, which is the shape a lost update takes when you are looking at
-  // it.
+  // The live smoke test caught the defect when a status that existed a moment
+  // earlier disappeared, which is the shape a lost update takes when observed.
   test("eight concurrent writers all survive", async () => {
     const dir = scratch("concurrent");
     const file = statusPath(dir);
@@ -700,3 +719,4 @@ describe("the ledger survives several processes writing at once", () => {
     );
   }, 30_000);
 });
+

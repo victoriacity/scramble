@@ -21,7 +21,8 @@ test("post appends and returns seq plus crossings", () => {
   expect(r.seq).toBe(1);
   expect(r.crossings).toEqual([]);
 
-  // b races: lastSeen 0, should see a's message as crossing (not its own)
+  // When b races and lastSeen is 0, b should recognize a's message as a crossing
+  // message from a.
   const r2 = s.post({ channel: "general", from: "b", text: "yo", id: "2", lastSeen: 0 });
   expect(r2.seq).toBe(2);
   expect(r2.crossings).toEqual([expect.objectContaining({ from: "a", seq: 1, text: "hi" })]);
@@ -31,11 +32,11 @@ test("crossings exclude sender's own messages and respect lastSeen", () => {
   const dir = freshDir();
   const s = open(dir);
   s.post({ id: "a", from: "a", text: "one", channel: "r", lastSeen: 0 });
-  // a posts again after seeing seq 1: no crossings
+  // a posts again after it observes sequence 1, and no crossings occur.
   const second = s.post({ id: "a2", from: "a", text: "two", channel: "r", lastSeen: 1 });
   expect(second.seq).toBe(2);
   expect(second.crossings).toEqual([]);
-  // a's own earlier message should never appear as a crossing to a
+  // An earlier message sent by a should never appear to a as a crossing message.
   const b = s.post({ id: "b1", from: "b", text: "b", channel: "r", lastSeen: 0 });
   expect(b.crossings.map((m) => m.from)).toEqual(["a", "a"]);
 });
@@ -72,7 +73,7 @@ test("crash-safe seq recovery across a reopened store", () => {
   const next = s2.post({ id: "3", from: "a", text: "z", channel: "g", lastSeen: 0 });
   expect(next.seq).toBe(3);
   expect(s2.readAll()).toHaveLength(3);
-  // dedup keys survive a reboot too
+  // Deduplication keys also persist across a reboot.
   const dup = s2.post({ id: "1", from: "a", text: "x", channel: "g", lastSeen: 0 });
   expect(dup.seq).toBe(1);
   expect(s2.readAll()).toHaveLength(3);
@@ -115,9 +116,11 @@ test("automatic membership in dm/<name>/* channels", () => {
   const s = open(dir);
   s.post({ id: "1", from: "x", text: "hi", channel: "dm/dev/ana", lastSeen: 0 });
   s.join("dev", "p", "other");
-  // dev is the dm/<name> first segment: auto-membered.
+  // dev forms the first segment of `dm/<name>`, and the system assigns membership
+  // automatically.
   expect(s.channelsFor("dev")).toContain("dm/dev/ana");
-  // ana is not auto-membered in dev's DM; she joins only by posting there.
+  // Ana is not added automatically to a developer's direct message channel. She
+  // joins only by posting a message to it.
   expect(s.channelsFor("ana")).not.toContain("dm/dev/ana");
   s.post({ id: "2", from: "ana", text: "reply", channel: "dm/dev/ana", lastSeen: 0 });
   expect(s.channelsFor("ana")).toContain("dm/dev/ana");

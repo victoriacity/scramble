@@ -1,9 +1,10 @@
-// test/hooks.test.ts: positive control for the .scramble/hooks decision logic.
+// The test/hooks.test.ts test serves as a positive control for the decision logic
+// in .scramble/hooks.
 //
-// Each hook's decide function is exercised against known-BAD input (it must
-// BLOCK) and known-GOOD input (it must PASS). The Stop hook's
-// not-addressed-and-silent case must pass untouched. A hook that never blocks
-// is the defect this test exists to catch.
+// The test runs each hook's decide function against known-bad input, which must
+// block, and known-good input, which must pass. The Stop hook must let an
+// unaddressed, silent case pass untouched. This test exists to catch any hook that
+// never blocks.
 import { describe, expect, test } from "bun:test";
 import { postGate, type PostGateDecision } from "../.scramble/hooks/post_gate";
 import { stopBackstop, type StopDecision } from "../.scramble/hooks/stop_backstop";

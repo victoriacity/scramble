@@ -6,18 +6,19 @@ import { SCOPE_NAMES, BOT_EVENT_NAMES } from "../src/app-manifest";
 const ROOT = join(import.meta.dir, "..");
 const plan = readFileSync(join(ROOT, "PLAN.md"), "utf8");
 const readme = readFileSync(join(ROOT, "README.md"), "utf8");
-// The onboarding script builds the app manifest from src/app-manifest.ts, which
-// `doctor` checks a live app against. The script's TEXT is still read here for
-// the settings it writes literally (socket mode, org deploy).
+// The onboarding script generates the app manifest from src/app-manifest.ts, and
+// `doctor` verifies a live app against that manifest. This process still reads
+// the script's TEXT for the settings it writes literally (socket mode, org
+// deploy).
 const onboard = readFileSync(join(ROOT, "scripts", "onboard-agent.ts"), "utf8");
 const joinDoc = readFileSync(join(ROOT, "JOIN.md"), "utf8");
 
-// The global contract note grants --url / --token to EVERY command regardless of
-// the row it appears in ("Every command accepts --url / --token ...").
+// The global contract note specifies that every command accepts `--url` and
+// `--token`, regardless of the row in which the command appears.
 const GLOBAL_FLAGS = ["--url", "--token"];
 
-// Parse the authoritative CLI contract table out of PLAN.md into
-// verb -> Set<flags>, leaving the global flags out.
+// The parser extracts the authoritative CLI contract table from PLAN.md into
+// verb -> Set<flags>, omitting global flags.
 function parseContract(): Map<string, Set<string>> {
   const verbs = new Map<string, Set<string>>();
   const lines = plan.split("\n");
@@ -31,11 +32,11 @@ function parseContract(): Map<string, Set<string>> {
     if (cells[0] === "command") continue; // column header row
     const verb = cells[1]!.replace(/`/g, "").trim().split(/\s+/)[0]!;
     const flags = cells[2]!.match(/--[a-z-]+/g) ?? [];
-    // MERGED INTO WHAT IS THERE. The key is the first word, and the contract has
-    // several rows per verb: `message send`, `message read`, `message react`.
-    // Replacing kept only the last row's flags, so a flag documented on
-    // `message send` failed this check because a later `message` row had none
-    // of it.
+    // The check merges new data into existing entries. The key is the first word, and
+    // the contract defines several rows per verb, including `message send`,
+    // `message read`, and `message react`. Replacing entries kept only the flags from
+    // the last row, so a flag documented on `message send` failed this check because a
+    // later `message` row had none of it.
     const already = verbs.get(verb) ?? new Set<string>();
     for (const f of flags) already.add(f);
     verbs.set(verb, already);
@@ -50,8 +51,9 @@ function allowedFlags(verb: string): Set<string> {
   return base;
 }
 
-// Pull every command-like line out of the README: the contents of fenced code
-// blocks plus any inline `code` spans, split into logical lines.
+// Extract every command-like line from the README, including the contents of
+// fenced code blocks and all inline `code` spans, and split them into logical
+// lines.
 function codeLines(md: string): string[] {
   const chunks: string[] = [];
   let inFence = false;
@@ -74,7 +76,7 @@ function codeLines(md: string): string[] {
 function scrambleCommands(md: string): string[] {
   const out: string[] = [];
   for (const rawLine of codeLines(md)) {
-    // strip a shell prompt marker, if present
+    // The command strips a shell prompt marker if one is present.
     const line = rawLine.replace(/^\s*\$?\s*/, "");
     const tokens = line.split(/\s+/).filter((t) => t !== "");
     const i = tokens.indexOf("scramble");
@@ -112,9 +114,8 @@ describe("README content", () => {
   test("opens by saying what scramble is, in the product's own words", () => {
     const second = readme.split("\n\n");
     const intro = second[1] ?? second[0] ?? "";
-    // Not "chat channel": scramble is the INTERFACE an existing session uses to
-    // take part in a messaging app, which is the distinction the whole design
-    // rests on, and the opening has to carry it.
+    // Scramble is the interface an existing session uses to take part in a messaging
+    // app. The entire design rests on this distinction, which the opening must carry.
     expect(intro).toContain("interface");
     expect(intro).toContain("messaging app");
     expect(intro).toContain("agent session");
@@ -124,8 +125,9 @@ describe("README content", () => {
   test("the onboarding call to action is one sentence pointing at JOIN.md", () => {
     const cta = "Onboard yourself into our Slack by following JOIN.md in <path-to-scramble>.";
     expect(readme).toContain(cta);
-    // One sentence, and no machine path: the walkthrough belongs in the document
-    // the line points at, where the agent can ask the person its two questions.
+    // The section contains one sentence and no machine path. The walkthrough belongs
+    // in the document the line points at, where the agent can ask the person its two
+    // questions.
     expect(cta.split(". ").length).toBe(1);
     expect(cta).not.toContain("/opt/");
   });
@@ -149,18 +151,18 @@ describe("README content", () => {
   });
 
   test("leads with Slack and keeps the local store to a short fallback", () => {
-    // The README is for the situation scramble exists for: the conversation is
-    // already in Slack. The local store is a fallback and a test fixture, so it
-    // gets a mention, where a tour of daemons, tokens and tunnels would bury the
-    // Slack path a reader came for.
+    // This README addresses the scenario scramble exists for, where the conversation
+    // is already in Slack. The local store is a fallback and a test fixture, so the
+    // documentation mentions it, whereas a tour of daemons, tokens, and tunnels would
+    // obscure the Slack path the reader came for.
     const slack = readme.indexOf("## Slack");
     const local = readme.indexOf("## The local store");
     expect(slack).toBeGreaterThan(0);
     expect(local).toBeGreaterThan(slack);
-    // Its section is short: everything after that heading is a handful of lines.
+    // The section is short. A handful of lines follow that heading.
     const tail = readme.slice(local).split("\n").filter((l) => l.trim() !== "");
     expect(tail.length).toBeLessThan(22);
-    // And the daemon's operational detail lives in OPERATING.md.
+    // The OPERATING.md file provides operational details for the daemon.
     expect(readme).toContain("OPERATING.md");
     expect(readme).not.toContain("ssh -L");
   });
@@ -170,16 +172,16 @@ describe("README content", () => {
     expect(raft).toBeGreaterThan(0);
     expect(raft).toBeLessThan(readme.indexOf("## Quickstart"));
     expect(readme).toContain("raft.build");
-    // The reason scramble exists at all, which is the only thing that justifies
-    // choosing it over raft.
+    // The reason scramble exists is the only justification for choosing it over raft.
     expect(readme).toContain("already reside in Slack");
   });
 });
 
 describe("the app manifest the onboarding script builds", () => {
   test("declares every scope a feature needs", () => {
-    // No chat:write.customize: one app per agent means each agent is a real
-    // Slack user, so an identity that is only a display name has no purpose.
+    // The integration omits `chat:write.customize`. Running one app per agent means
+    // each agent is a real Slack user, so an identity that is only a display name has
+    // no purpose.
     for (const scope of [
       "chat:write",
       "channels:history",
@@ -199,8 +201,9 @@ describe("the app manifest the onboarding script builds", () => {
       expect(SCOPE_NAMES).toContain(scope);
     }
     expect(SCOPE_NAMES).not.toContain("chat:write.customize");
-    // No channels:join either: an app cannot add itself to a Slack conversation,
-    // public or private, so a member invites it and the scope buys nothing.
+    // The app does not request channels:join. An app cannot add itself to a public or
+    // private Slack conversation, so a member invites the app and the scope provides
+    // no benefit.
     expect(SCOPE_NAMES).not.toContain("channels:join");
   });
 
@@ -208,19 +211,20 @@ describe("the app manifest the onboarding script builds", () => {
     expect(BOT_EVENT_NAMES).toContain("message.channels");
     expect(BOT_EVENT_NAMES).toContain("message.groups");
     expect(BOT_EVENT_NAMES).toContain("message.im");
-    // Without this one an invite delivers NOTHING and nothing reports it: Slack
-    // sends no event an app has not subscribed to, so being added to a channel
-    // is news the agent never hears. Every app created before it was added kept
-    // three events until `doctor` learned to compare.
+    // Without this subscription, an invite delivers nothing and nothing reports it.
+    // Slack sends no event that an app has not subscribed to, so the agent never
+    // hears when someone adds it to a channel. Every app created before this event was
+    // added kept three events until `doctor` learned to compare.
     expect(BOT_EVENT_NAMES).toContain("member_joined_channel");
   });
 
   test("enables socket mode AND declares org deploy, or the inbox is silently dead", () => {
     expect(onboard).toContain("socket_mode_enabled: true");
-    // NOT false. apps.developerInstall with an org-level credential produces an
-    // enterprise install whatever team_id is passed, and an org install whose
-    // manifest says org_deploy_enabled:false receives NO events while every
-    // REST call keeps working. Measured live.
+    // `apps.developerInstall` with an organization-level credential creates an
+    // enterprise installation regardless of the `team_id` passed to the call. An
+    // organization installation whose manifest sets `org_deploy_enabled: false`
+    // receives no events, while every REST API call continues to function. Live
+    // measurements confirm these results.
     expect(onboard).toContain("org_deploy_enabled: true");
     expect(onboard).not.toContain("org_deploy_enabled: false,");
   });

@@ -3,14 +3,13 @@ import { LANGUAGE_RULES, WORD_LIMIT, languageRefusal, lengthRefusal, lintLanguag
 
 describe("the language rules, checked where the message leaves", () => {
   test("THE MESSAGE THAT GOT THROUGH: a long dash is refused", () => {
-    // The incident. The rule existed and the check was a separate script the
-    // sender had to run first; I piped text straight into `message send` all
-    // day, so it ran on nothing, and the operator read this shape in a message
-    // and told me the linting had failed.
+    // During the incident, the rule existed, and the check was a separate script that
+    // the sender had to run first. The sender piped text straight into `message send`
+    // all day, so the check ran on nothing. The operator read this shape in a message
+    // and reported that the linting had failed.
     const hits = lintLanguage("Both are landed in the closing gate — controlled on six transcripts.");
-    // Two hits, and the second was added hours later: the sentence also says
-    // `landed`, which was my private word for committing until the operator
-    // asked what it meant.
+    // Two hits appear, and the second was added hours later. The sentence also says
+    // `landed`, which means committing.
     expect(hits).toEqual([
       { label: "coined jargon: 'land' for committing", match: "landed", index: 9 },
       { label: "em dash", match: "—", index: 36 },
@@ -44,8 +43,8 @@ describe("the language rules, checked where the message leaves", () => {
       ["redundant closer / meta-commentary", "In short, the invite delivered nothing."],
       ["announcement scaffolding", "The measurement, restated in one sentence: we compared rolls."],
     ];
-    // Every rule in the list has a case here, so a rule added without one fails
-    // this test and never ships unexercised.
+    // This test includes a case for every rule in the list, so any rule added
+    // without one fails the test and never ships unexercised.
     expect(cases.map(([label]) => label).sort()).toEqual(LANGUAGE_RULES.map((r) => r.label).sort());
     for (const [label, text] of cases) {
       expect(lintLanguage(text).map((h) => h.label)).toContain(label);
@@ -53,10 +52,9 @@ describe("the language rules, checked where the message leaves", () => {
   });
 
   test("THE PHRASE THAT GOT THROUGH: the ban is the class, not two written-down phrasings", () => {
-    // The operator, reading a message I had sent, quoted its opening back at me:
-    // `One thing I should say plainly` is not acceptable language.
-    // The rule named `stated plainly` and `plainly put` and nothing else, so a
-    // third phrasing of the same preamble passed a check built to stop it.
+    // The opening phrase `One thing I should say plainly` is unacceptable language.
+    // The rule matched only `stated plainly` and `plainly put`, so a third phrasing
+    // of the preamble passed the check built to stop it.
     for (const said of [
       "One thing I should say plainly: it went out unchecked.",
       "To put it plainly, the lint never ran.",
@@ -66,22 +64,21 @@ describe("the language rules, checked where the message leaves", () => {
     ]) {
       expect(lintLanguage(said).length).toBeGreaterThan(0);
     }
-    // THIRD PERSON IS NOT SPARED. I argued it should be, on the grounds that a
-    // document describing itself that way states a fact about the document, with
-    // no speaker making a preamble. The operator refused the exemption:
-    // "Third person should not be allowed either." The word is banned outright,
-    // so there is no verb list to fall outside of.
+    // Third-person phrasing receives no exemption from the rule. A document
+    // describing itself that way states a fact about the document with no speaker
+    // making a preamble, but the rule disallows third person. The restriction bans
+    // the word outright, so there is no verb list to fall outside of.
     expect(lintLanguage("The manifest says plainly which events it subscribes to.").length).toBeGreaterThan(0);
     expect(lintLanguage("The error names the field plainly enough to act on.").length).toBeGreaterThan(0);
-    // And the sentence those wanted to be says the same thing without the word.
+    // The sentence expresses the same meaning without the word.
     expect(lintLanguage("The manifest names every event it subscribes to.")).toEqual([]);
     expect(lintLanguage("The error names the field, which is enough to act on.")).toEqual([]);
   });
 
   test("THE LINE THE ROOM COULD NOT READ: internal shorthand is refused", () => {
-    // Operator, on a message of mine:
-    // `Nobody else ever understands 'Gate green at 457, six live stages pass.'`
-    // A channel is a room of people who do not share my terminal.
+    // A channel consists of people who do not share the author's terminal, and a
+    // status line built from local shorthand tells them nothing. The rows below are
+    // the shapes this rule refuses.
     for (const said of [
       "Gate green at 457, six live stages pass.",
       "gate red, looking now",
@@ -90,17 +87,17 @@ describe("the language rules, checked where the message leaves", () => {
     ]) {
       expect(lintLanguage(said).length).toBeGreaterThan(0);
     }
-    // What those sentences were trying to say, which a reader outside my
-    // terminal can act on.
+    // This text clarifies the meaning of those sentences so that readers outside
+    // the original terminal can act on them.
     expect(lintLanguage("The test suite passes, and so do the checks that talk to the real workspace.")).toEqual([]);
     expect(lintLanguage("457 tests pass, including the ones that send a real message.")).toEqual([]);
   });
 
-  test("COINED JARGON: 'landing' for committing, and the compounds that are English", () => {
-    // Operator:
-    // `What is 'landing'? How can we ensure that it is only used at proper places as 'landing page'?`
-    // It was my word for committing a change through `scripts/land.sh`, and it
-    // means nothing outside this session.
+  test("COINED JARGON for committing, and the compounds that are English", () => {
+    // The coined verb means committing a change through `scripts/land.sh`, and it
+    // means nothing outside this session. Ensure that a page a reader arrives on
+    // appears only in
+    // proper places.
     for (const said of [
       "Landed a44ac75.",
       "Both skills corrected and landed.",
@@ -109,23 +106,23 @@ describe("the language rules, checked where the message leaves", () => {
     ]) {
       expect(lintLanguage(said).map((h) => h.label)).toContain("coined jargon: 'land' for committing");
     }
-    // The ordinary English senses, spared by the compound that follows.
+    // The compound that follows spares the ordinary English senses.
     expect(lintLanguage("The landing page is ready for review.")).toEqual([]);
     expect(lintLanguage("Check the landing pages before the launch.")).toEqual([]);
-    // And the letters inside another word are not the word.
+    // Letters contained inside another word do not constitute the word.
     expect(lintLanguage("England and Iceland are unaffected.")).toEqual([]);
     expect(lintLanguage("The island survey is unrelated.")).toEqual([]);
-    // What to say in its place.
+    // State the replacement phrasing.
     expect(lintLanguage("Committed a44ac75 and pushed it.")).toEqual([]);
   });
 
   test("someone else's words in backticks are DATA, not this agent's prose", () => {
-    // The only exemption, and the reason it must exist: reporting what another
-    // person wrote has to carry their words unchanged, and this repo's own rule
-    // list names the tokens it bans.
+    // The only exemption exists because reporting what another person wrote must
+    // carry their words unchanged, and this repository's own rule list names the
+    // tokens it bans.
     expect(lintLanguage("The operator wrote `you sent a long dash — fix it`.")).toEqual([]);
     expect(lintLanguage("```\nhonestly, basically, — \n```\nNothing above is mine.")).toEqual([]);
-    // ...and the exemption does not swallow the rest of the line.
+    // The exemption does not consume the remainder of the line.
     expect(lintLanguage("They said `honestly` and then I wrote basically.").map((h) => h.match)).toEqual(["basically"]);
   });
 
@@ -137,9 +134,10 @@ describe("the language rules, checked where the message leaves", () => {
   });
 
   test("a second message in one process is scanned from its own start", () => {
-    // A shared /g literal carries lastIndex between calls, so message two would
-    // be scanned from wherever message one stopped and the hit near its start
-    // would be missed. Same rule, two calls, both must report.
+    // A shared `/g` regular expression literal preserves `lastIndex` across calls, so
+    // the engine scans a second message from where the first message stopped and
+    // misses a match near its start. When the same rule evaluates two calls, both
+    // calls must report.
     const one = "basically the first message, and basically again later in it";
     expect(lintLanguage(one).length).toBe(2);
     expect(lintLanguage("basically the second").map((h) => h.match)).toEqual(["basically"]);
@@ -168,10 +166,9 @@ describe("announcement scaffolding", () => {
   });
 
   test("the bare verb is NOT the rule, so prose about restating passes", () => {
-    // Written as a bare word it matched four lines across three files, every
-    // one of them an instruction NOT to restate. A rule written as a bare word
-    // matches prose ABOUT the rule, which is the trap taken out of the wake
-    // filter.
+    // A rule written as a bare word matched four lines across three files, where
+    // every line was an instruction not to restate. A rule written as a bare word
+    // matches prose about the rule, which is the trap removed from the wake filter.
     for (const fine of [
       "Do not restate what the channel settled without you.",
       "Do not end a passage by restating it.",
@@ -183,9 +180,9 @@ describe("announcement scaffolding", () => {
 });
 
 describe("the word limit on one message", () => {
-  // The operator: "We need to impose a message length limit in words. Maybe
-  // 200", with the reason in the same instruction: "nobody cares about the way
-  // you get your answer unless they explicitly ask for it."
+  // The system must enforce a message length limit in words, maybe 200 words,
+  // because readers do not care about the way an answer is reached unless they
+  // explicitly ask for it.
 
   test("a message within the limit passes", () => {
     expect(lengthRefusal("a short answer")).toBe("");
@@ -196,26 +193,28 @@ describe("the word limit on one message", () => {
     const said = lengthRefusal(Array.from({ length: WORD_LIMIT + 1 }, () => "word").join(" "));
     expect(said).toContain(`${WORD_LIMIT + 1} words of prose, and the limit is ${WORD_LIMIT}`);
     expect(said).toContain("Send the answer alone");
-    // EVERY REFUSAL NAMES THE SKILL. A skill an agent has to remember to open is
-    // advice; this arrives at the moment someone is writing and got it wrong.
+    // Every refusal specifies the skill. A skill that an agent must remember to open
+    // functions as advice. This notification arrives at the moment someone is writing
+    // and makes an error.
     expect(said).toContain("the `communication` skill");
   });
 
   test("code and backtick spans cost nothing", () => {
-    // Charging for evidence would push a sender to paraphrase what it could
-    // have shown, which is the opposite of what the limit is for.
+    // Charging for evidence would encourage a sender to paraphrase information it
+    // could have displayed directly, which contradicts the purpose of the limit.
     const code = ["```", Array.from({ length: 500 }, () => "line").join("\n"), "```"].join("\n");
     expect(lengthRefusal(`here is the measurement:\n${code}`)).toBe("");
     expect(wordCount("see `a b c d e f g h` there")).toBe(2);
   });
 
   test("a language with no spaces counts by character", () => {
-    // A space-splitting count reads a 300-character Chinese message as one word,
-    // and the operator asked for this in both languages.
+    // A space-splitting counter reads a 300-character Chinese message as one word,
+    // and the operator requested support in both languages.
     //
-    // WRITTEN AS ESCAPES so this file stays English, which the gate enforces on
-    // every tracked file. The characters are the subject of the test, and a
-    // literal here would be the one case where the rule and the test disagree.
+    // Escape sequences represent the characters so this file stays English, which the
+    // gate enforces on every tracked file. The characters are the subject of the test,
+    // and a literal here would create the one case where the rule and the test
+    // disagree.
     const cjk = "\u8fd9\u6761\u6d88\u606f\u5f88\u957f"; // six Han characters
     expect(wordCount(cjk)).toBe(6);
     expect(lengthRefusal("\u5b57".repeat(WORD_LIMIT + 1))).toContain(`${WORD_LIMIT + 1} words of prose`);
@@ -226,3 +225,4 @@ describe("the word limit on one message", () => {
     expect(wordCount("two words")).toBe(2);
   });
 });
+
