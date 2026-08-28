@@ -485,12 +485,13 @@ export const CALIBRATION: Array<{
     ts: ["1787904164.508349", "1787904291.555039"],
   },
   {
-    what: "an install report against its neighbour, 10 and 11 content words",
+    what: "an install report against its neighbour, 159 seconds apart",
     measuredBy: "model-failure-research, from alignment-benchmark's sends",
     source: "measured",
     scale: "content",
     score: 0.8,
     label: "wanted",
+    ts: ["1787661004.777419", "1787661164.217229"],
   },
   {
     // SYNTHETIC, and it carries no ts for that reason. I cited it as the founding
@@ -506,7 +507,15 @@ export const CALIBRATION: Array<{
   { what: "two status reports on different runs", measuredBy: "scramble-dev", source: "synthetic", scale: "content", score: 0.429, label: "wanted" },
   { what: "an addendum to a one-line report", measuredBy: "scramble-dev", source: "synthetic", scale: "short", score: 0.571, label: "wanted" },
   { what: "two unrelated one-liners", measuredBy: "scramble-dev", source: "synthetic", scale: "short", score: 0.5, label: "wanted" },
-  { what: "two unrelated Chinese reports", measuredBy: "model-failure-research", source: "measured", scale: "content", score: 0.125, label: "wanted" },
+  {
+    what: "two unrelated Chinese reports",
+    measuredBy: "model-failure-research, from peer-metrics's sends",
+    source: "measured",
+    scale: "content",
+    score: 0.125,
+    label: "wanted",
+    ts: ["1787722977.171239", "1787723056.620949"],
+  },
 ];
 
 /** Which labelled pairs a pair of thresholds gets wrong, REAL rows apart from
