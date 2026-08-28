@@ -67,27 +67,35 @@ AGENT_DIRS="$(printf '%s' "${AGENT_DIRS:-0}" | tr -d ' \n')"
 #
 # The remedy is a garbage collection on the host, by support request or by
 # replacing the repository.
-# A FETCH HAS THREE OUTCOMES AND THIS READS ALL THREE. The first version branched
-# on success alone, so a network failure, a rate limit or an auth error printed
-# "gone from the host": a broken run reading as a clean one. Only the remote's own
-# "cannot find" wording proves the object is absent.
+# A FETCH HAS THREE OUTCOMES AND THIS READS ALL THREE, without matching any English.
+# The first version branched on success alone, so a network failure, a rate limit or
+# an auth error printed "gone from the host": a broken run reading as a clean one.
+# The second matched the remote's wording, which changes with the server
+# implementation.
+#
+# REACHABILITY IS ESTABLISHED FIRST. `git ls-remote` proves the remote answers this
+# host at all; after that, a fetch's exit code carries the whole answer, since the
+# only remaining reason for a failure is the object being absent.
 OLD_SERVED=0
 OLD_UNKNOWN=0
 shift || true
-for OLD in "$@"; do
-  FETCH_ERR="$WORK/fetch-$OLD.err"
-  if git fetch --quiet origin "$OLD" 2>"$FETCH_ERR"; then
-    COUNT="$(git rev-list --count FETCH_HEAD 2>/dev/null || echo 0)"
-    echo "verify: the host still serves $OLD by sha, and that fetch carries $COUNT commit(s)"
-    OLD_SERVED=$((OLD_SERVED + 1))
-  elif grep -qiE "upload-pack|not our ref|cannot find|couldn.t find remote ref|no such remote ref" "$FETCH_ERR"; then
-    echo "verify: $OLD is gone from the host"
+if [ "$#" -gt 0 ]; then
+  if git ls-remote origin >/dev/null 2>"$WORK/lsremote.err"; then
+    for OLD in "$@"; do
+      if git fetch --quiet origin "$OLD" 2>/dev/null; then
+        COUNT="$(git rev-list --count FETCH_HEAD 2>/dev/null || echo 0)"
+        echo "verify: the host still serves $OLD by sha, and that fetch carries $COUNT commit(s)"
+        OLD_SERVED=$((OLD_SERVED + 1))
+      else
+        echo "verify: $OLD is gone from the host"
+      fi
+    done
   else
-    echo "verify: the fetch for $OLD FAILED for another reason, so the answer is unknown:"
-    sed 's/^/verify:   /' "$FETCH_ERR"
-    OLD_UNKNOWN=$((OLD_UNKNOWN + 1))
+    echo "verify: the remote does not answer this host, so every sha lookup is unknown:"
+    sed 's/^/verify:   /' "$WORK/lsremote.err"
+    OLD_UNKNOWN="$#"
   fi
-done
+fi
 
 TOTAL=$((C_HITS + P_HITS + U_HITS + H_HITS + A_HITS + I_HITS + AGENT_DIRS + OLD_SERVED + OLD_UNKNOWN))
 echo "verify: $REMOTE at $SHA, $COMMITS commit(s), $REFS ref(s), $IDENTITIES identity(ies)"
