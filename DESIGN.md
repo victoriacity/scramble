@@ -1,6 +1,6 @@
 # scramble: the messaging app interface for agents
 
-Date:, revised. Status: built, three backends, every check passing.
+This revision is built with three backends, and every check passes.
 
 ## What scramble is
 
@@ -39,11 +39,13 @@ supersedes it, so the bridge and the web page are deleted, and the daemon with
 its HTTP server is a test fixture and an offline mode. It is no longer the
 product.
 
+
 ## Problem
 
-Let multiple already-running agent sessions (Claude Code, codex) and humans chat in one
-channel. The sessions must be the ones you already have open, with their context, tools,
-and subscriptions: not fresh hosted agents. Humans join from Slack or a browser.
+This tool allows multiple already-running agent sessions (Claude Code, codex)
+and humans to chat in one channel. The sessions must be the ones you already have
+open, preserving their context, tools, and subscriptions. Humans join from Slack
+or a browser.
 
 ## Why nothing existing solves it
 
@@ -63,6 +65,7 @@ The gap is a conjunction: (a) join by an EXISTING externally-running session,
 | Google A2A protocol | envelope + auth | Point-to-point task delegation between agent services; no channel primitive, no human membership, and a CLI session still needs the unsolved injection adapter. (IBM ACP merged into A2A 2025-08; dead as a separate track.) |
 | tmux send-keys hacks (claude-squad etc.) | (a)+(b)+(d) | Types into the prompt and screen-scrapes replies: races with mid-turn prompts, breaks on redraws, no identity, no history. |
 | In-process frameworks (Agents SDK, CrewAI, AutoGen, LangGraph) | none | "Agents" are objects in one process; an external session can never be a member. |
+
 
 ## The two capabilities that make it solvable now
 
@@ -119,6 +122,7 @@ a session that exposes a resume API (`codex exec resume`, `claude -p`). It is
 unnecessary once blocking-attach works, so scramble has no driver code.
 
 Every harness surveyed fits one of the two. New harness support = one small adapter.
+
 
 ## Design
 
@@ -393,11 +397,14 @@ A session on another machine joins the same channels; only the transport hop cha
 - Guaranteed delivery to a busy/mid-turn agent. The listener buffers; the agent
   catches up at its next wake. `since=<seq>` makes catch-up exact.
 
+
 ## Size estimate
 
-Daemon + CLI: ~400-600 lines (bun or python, single file each). Slack bridge: ~150
-lines. Claude join skill: one SKILL.md. Codex driver: ~100 lines. First demo (two
-Claude sessions + web page): daemon + CLI + skill only.
+The daemon and CLI require ~400-600 lines, written as a single file each in Bun
+or Python. The Slack bridge requires ~150 lines, and the Codex driver requires
+~100 lines. The Claude join skill consists of one SKILL.md. The first demo,
+which runs two Claude sessions and a web page, requires only the daemon, the
+CLI, and the skill.
 
 ## Sources
 
@@ -413,3 +420,4 @@ Claude sessions + web page): daemon + CLI + skill only.
 - Slack 2025 rate-limit change (internal apps exempt): https://docs.slack.dev/changelog/2025/05/29/rate-limit-changes-for-non-marketplace-apps/
 - MCP mailbox prior art: https://github.com/tkellogg/postal-mcp, https://github.com/Dicklesworthstone/mcp_agent_mail
 - Slack multi-bot prior art: https://github.com/jeremylongshore/claude-code-slack-channel
+

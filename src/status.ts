@@ -1,123 +1,171 @@
-// src/status.ts: scramble's AUTOMATIC working-status surface.
+// src/status.ts: scramble's automatic working-status surface.
 //
-// Status is NOT an agent-invoked verb. It is set and cleared by scramble from
-// events scramble already sees:
+// Agents do not invoke status as a verb. Scramble sets and clears status
+// from events it already sees:
 //
-//   delivery of a message addressed to this agent ->  status ON for that channel
-//   a post by this agent to that channel          ->  status OFF
-//   no post within the TTL                        ->  status OFF
+// delivery of a message addressed to this agent -> status ON for that channel
+// a post by this agent to that channel -> status OFF
+// no post within the TTL -> status OFF
 //
-// An agent that has to remember to set a status would forget; the lifecycle is
-// bracketed by the delivery verbs (next / listen / message check) on one side
-// and the post verbs (post / message send) on the other. `SCRAMBLE_STATUS=off`
-// is the one switch for an operator who wants silence.
+// An agent that has to remember to set a status would forget. The delivery
+// verbs (next, listen, message check) open the lifecycle on one side, and the
+// post verbs (post, message send) close it on the other. `SCRAMBLE_STATUS=off` is
+// the single switch for an operator who wants silence.
 //
-// Status is never a message: it has no seq, it is absent from history, and it
-// is never delivered to a listener. A status line waking a peer agent would
-// turn progress into traffic. A failed status call NEVER fails the work it
-// brackets: it is reported on stderr and the underlying verb carries on.
+// Status is never a message: it has no seq, it is absent from history, and
+// scramble never delivers it to a listener. A status line waking a peer agent
+// would turn progress into traffic. A failed status call never fails the work
+// it brackets: scramble reports the error on stderr, and the underlying verb
+// carries on.
 //
-// The active statuses are recorded in `.scramble/status.json` as channel,
-// agent, the Slack ts of a living message that backs the status, and an expiry.
-// A second status set on one channel updates the living message it already
-// has: one living message per channel. Slack calls go
-// through an injected `fetch` seam so tests need no token and no network.
+// Scramble records active statuses in `.scramble/status.json` as the channel, the
+// agent, the Slack ts of the living message backing the status, and an expiry.
+// Setting a second status on a channel updates the living message it already
+// has, maintaining one living message per channel. Slack calls pass through an
+// injected `fetch` seam so tests need no token and no network.
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { withFileLock } from "./filelock";
 
-/** The fixed, short text a status carries. Agent-authored progress prose is a
- *  message pretending to be a status, so scramble owns this text. */
+/**
+ *  A status carries short, fixed text. Agent-authored progress prose acts as a
+ *  message pretending to be a status, so scramble owns this text.
+ */
 export const STATUS_TEXT = "working";
 
-/** Slack message metadata marking a line as a scramble status. It rides on the
- *  message itself, so ANY agent can recognise ANY agent's status: the ts ledger
- *  only ever knew about its own, which let a peer's `working` line arrive in
- *  this agent's transcript as if someone had said it. Keyed on the metadata,
- *  because a human, or an agent, is allowed to say "working". */
+/**
+ *  Slack message metadata marks a line as a scramble status. The metadata travels
+ *  on the message itself, so any agent can recognize any agent's status. The
+ *  timestamp ledger only ever tracked its own messages, which let a peer's
+ *  `working` line arrive in an agent's transcript as if someone had said it. The
+ *  agent keys on the metadata, because a human, or an agent, is allowed to say
+ *  "working".
+ */
 export const STATUS_METADATA_TYPE = "scramble_status";
 
 const THREAD_STATUS_URL = "https://slack.com/api/assistant.threads.setStatus";
 
-/** Backend-selection answers the CLI already knows: the local daemon records
- *  the status so a test (or a reader) can see it; the slack backend talks to
- *  Slack through the injected fetch seam. */
+/**
+ *  The CLI already knows the backend-selection answers. The local daemon records
+ *  the status so a test (or a reader) can see it, and the slack backend talks to
+ *  Slack through the injected fetch seam.
+ */
 export type StatusBackend = "local" | "slack";
 
-/** One active status: channel + agent + the living-message ts (when one backs
- *  it) + the moment the status expires and is cleared. */
+/**
+ *  An active status records the channel, the agent, the timestamp of the living
+ *  message when one backs it, and the moment the status expires and is cleared.
+ */
 export interface StatusRecord {
   channel: string;
   agent: string;
-  /** The thread whose Slack status this agent set, cleared by setting it back
-   *  to empty. */
+  /**
+   *  The agent clears the Slack status it set on the thread by setting it back
+   *  to empty.
+   */
   thread?: string;
-  /** epoch ms after which the status is stale and must be cleared. */
+  /**
+   *  The status is stale and must be cleared after this timestamp in epoch
+   *  milliseconds.
+   */
   expiresAt: number;
 }
 
-/** Mounted seams for the status manager. `fetch` is injected so a test needs no
- *  token and no network; `now` and `ttlMs` drive the expiry clock. */
+/**
+ *  The status manager provides mounted seams. A caller injects `fetch` so a test
+ *  needs no token and no network, while `now` and `ttlMs` drive the expiry clock.
+ */
 export interface StatusConfig {
-  /** path of the `.scramble/status.json` ledger. */
+  /**
+   *  The ledger resides at the `.scramble/status.json` path.
+   */
   file: string;
-  /** which backend the status rides on. */
+  /**
+   *  The backend that carries the status.
+   */
   backend: StatusBackend;
-  /** injected clock. */
+  /**
+   *  A clock is injected.
+   */
   now: () => number;
-  /** how long an unbracketed status lives, in ms. */
+  /**
+   *  An unbracketed status lives for this duration, in milliseconds.
+   */
   ttlMs: number;
-  /** injected network seam (Slack backend only). */
+  /**
+   *  The system provides an injected network seam for the Slack backend only.
+   */
   fetch: (input: string, init?: RequestInit) => Promise<Response>;
-  /** diagnostics channel: a failed status is REPORTED here. */
+  /**
+   *  The diagnostics channel reports a failed status.
+   */
   writeErr(line: string): void;
-  /** Slack channel name -> Slack channel id. */
+  /**
+   *  A Slack channel name maps to a Slack channel ID.
+   */
   channels?: Record<string, string>;
-  /** LIVE resolution for a channel the map does not hold, which is every channel
-   *  an agent was invited into without a config edit. The map stays as the fast
-   *  path; this is what makes the answer true. */
+  /**
+   *  The system performs live resolution for any channel the map does not hold,
+   *  which is every channel an agent was invited into without a configuration edit.
+   *  The map stays as the direct path, and live resolution makes the answer true.
+   */
   resolve?: (channel: string) => Promise<string | undefined>;
-  /** the Slack bot token. */
+  /**
+   *  The token for the Slack bot.
+   */
   token?: string;
-  /** WHICH AGENT is acting. An expiry sweep can only take down a status through
-   *  the credential that set it, and this manager holds one token, so it sweeps
-   *  its own rows and leaves other agents' rows to the processes that own them.
-   *  Absent means sweep everything, which is right for the local backend and for
-   *  a workspace with one agent. */
+  /**
+   *  This field identifies which agent is acting. An expiry sweep can only take down
+   *  a status through the credential that set it, and this manager holds one token,
+   *  so it sweeps its own rows and leaves other agents' rows to the processes that
+   *  own them. An absent value means the manager sweeps everything, which is right
+   *  for the local backend and for a workspace with one agent.
+   */
   agent?: string;
 }
 
-/** One Slack REST answer, morally the same triangle as the backend: `ok:true`
- *  carries the message ts when the call returned one; `ok:false` carries Slack
- *  error text. A transport failure is surfaced as `ok:false`, never read as
- *  work. */
+/**
+ *  A Slack REST response follows the same structure as the backend. An `ok:true`
+ *  response carries the message timestamp when the call returned one, and an
+ *  `ok:false` response carries Slack error text. A transport failure surfaces as
+ *  `ok:false` and is never read as work.
+ */
 interface SlackAnswer {
   ok: boolean;
   error?: string;
   ts?: string;
 }
 
-/** Read the ledger. A missing or unparseable ledger reads as a fresh empty one,
- *  because a corrupt status file must not take an underlying verb down. */
+/**
+ *  The command reads the ledger. If the ledger is missing or unparseable, the
+ *  command reads it as a fresh empty ledger, because a corrupt status file must
+ *  not take down an underlying command.
+ */
 export function readRecords(file: string): StatusRecord[] {
   try {
     const j = JSON.parse(readFileSync(file, "utf8")) as { entries?: unknown };
     if (Array.isArray(j.entries)) return j.entries as StatusRecord[];
   } catch {
-    /* absent or corrupt ledger: fresh */
+    /**
+     *  The system creates a fresh ledger if the ledger is absent or corrupt.
+     */
   }
   return [];
 }
 
-/** Persist the ledger, creating `.scramble/` when needed. */
+/**
+ *  The system persists the ledger and creates `.scramble/` when needed.
+ */
 export function writeStatus(file: string, entries: StatusRecord[]): void {
   const dir = file.slice(0, file.lastIndexOf("/"));
   if (dir.length > 0) mkdirSync(dir, { recursive: true });
   writeFileSync(file, JSON.stringify({ entries }));
 }
 
-/** The automatic working-status manager: records active statuses and drives the
- *  Slack backend. Every method reports Slack failures on `writeErr` and never
- *  throws, so a failed status can never fail the work it describes. */
+/**
+ *  The automatic working-status manager records active statuses and drives the
+ *  Slack backend. Each method reports Slack failures on `writeErr` and never
+ *  throws an exception, so a failed status can never fail the work it describes.
+ */
 export class StatusManager {
   private readonly cfg: StatusConfig;
 
@@ -133,18 +181,21 @@ export class StatusManager {
     writeStatus(this.cfg.file, records);
   }
 
-  /** Read, change and write the ledger as one step, across processes, through
-   *  the shared file lock. The Slack call stays OUTSIDE it: holding a lock
-   *  across a network request would stall every other process for as long as
-   *  Slack takes. */
+  /**
+   *  The process reads, changes, and writes the ledger as one step across processes
+   *  through the shared file lock. The Slack call remains outside the lock, because
+   *  holding a lock across a network request would stall every other process for as
+   *  long as Slack takes.
+   */
   private locked<T>(change: (records: StatusRecord[]) => T, onFailure: T): T {
-    // A LEDGER WRITE THAT FAILS IS REPORTED, and it never reaches the caller.
-    // The class above promises exactly that and this did not keep it: `save`
-    // calls `mkdirSync` and `writeFileSync` with nothing around them, and
-    // `withFileLock` calls `mkdirSync` before either. On a host whose writes
-    // returned EIO that throw left `startExpiryTicker` holding a rejected
-    // promise nobody awaits, which takes the listener down. An agent read the
-    // source and reported it against the comment.
+    // The system reports a ledger write that fails, and the failure never reaches the
+    // caller. The class above promises this behavior, but the implementation failed
+    // to maintain it. In that version, `save` calls `mkdirSync` and `writeFileSync`
+    // without handling errors, and `withFileLock` calls `mkdirSync` before either
+    // function. On a host whose writes returned `EIO`, that thrown error left
+    // `startExpiryTicker` holding a rejected promise that nobody awaits, which takes
+    // the listener down. An agent read the source and reported it against the
+    // comment.
     //
     // The change is lost when the write fails, which is right for accounting: a
     // status is a courtesy to the room, and the work it describes carries on.
@@ -177,14 +228,19 @@ export class StatusManager {
     }
   }
 
-  /** A status failure is REPORTED and never escalated, so the report is the only
-   *  trace it leaves: it names the channel it was acting on. `channel_not_found`
-   *  alone said which error Slack returned and nothing about what was asked. */
+  /**
+   *  The system reports a status failure and never escalates it, so the report is the
+   *  only trace it leaves. The report names the channel that the operation acted on.
+   *  The `channel_not_found` code alone indicated which error Slack returned, omitting
+   *  the details of what was requested.
+   */
   private report(error: string, channel?: string): void {
     this.cfg.writeErr(channel === undefined ? `status: ${error}` : `status in ${channel}: ${error}`);
   }
 
-  /** One Slack REST edit, normalized to the ok/error/ts triangle. */
+  /**
+   *  One Slack REST edit is normalized to the `ok`, `error`, and `ts` fields.
+   */
   private async call(url: string, body: Record<string, unknown>): Promise<SlackAnswer> {
     if (this.cfg.token === undefined) return { ok: false, error: "status needs a Slack token" };
     let res: Response;
@@ -210,17 +266,22 @@ export class StatusManager {
     return { ok: true, ts: typeof o.ts === "string" ? o.ts : undefined };
   }
 
-  /** Post the living-message status into a channel. Captures the new ts so the
-   *  update/delete/expire paths can address it. Returns the ts, or undefined on
-   *  a failure, which is reported here. */
-  // THERE IS NO LIVING MESSAGE. A status is Slack's own status on a thread and
-  // nothing else: no post, no edit, no delete, and no `ts` on the record. The operator:
-  // `we don't need living messages, only assistant status`.
-  // Nothing here writes a message into a channel.
+  /**
+   *  This function posts the living-message status into a channel and captures the
+   *  new `ts` so the update, delete, and expire paths can address it. It returns the
+   *  `ts`, or `undefined` on a failure, which is reported here.
+   */
+  // Living messages do not exist in this system. A status is Slack's own status on a
+  // thread, with no post, no edit, and no delete, and the record contains no `ts`.
+  // The system needs only assistant status. Nothing here writes a message into a
+  // channel.
 
 
-  /** Set Slack's own status on a thread. Reports a failure and answers whether
-   *  it took, so the caller records the thread only when Slack accepted it. */
+  /**
+   *  This call sets Slack's status on a thread. The call reports a failure and
+   *  returns whether the update succeeded, so the caller records the thread only
+   *  when Slack accepted it.
+   */
   private async setThreadStatus(
     channelId: string,
     threadTs: string,
@@ -235,24 +296,26 @@ export class StatusManager {
     return true;
   }
 
-  /** Set the status ON: Slack's OWN status where Slack has one, and nothing at
-   *  all where it does not.
+  /**
+   *  Set status on Slack's native status surface where one exists, and display
+   *  nothing where one does not.
    *
-   * `assistant.threads.setStatus` works on an ordinary channel thread, which I
-   * had assumed needed an assistant DM: probed on a real channel thread it
-   * answers ok:true. The living message existed for that one reason. A status
-   * belongs on Slack's own status surface, so posting one into the channel was
-   * the wrong shape. The operator: `why did you send a working text` and
-   * `this should be implemented in slack assistant status, not message`.
+   *  `assistant.threads.setStatus` functions on standard channel threads, returning
+   *  ok:true when called on a live channel thread without requiring an assistant
+   *  direct message. The living message existed solely under that earlier
+   *  assumption. Status belongs on Slack's native status surface, so posting working
+   *  text into the channel creates the wrong layout. The system must implement status
+   *  within Slack assistant status.
    *
-   *  With no thread there is no native status, and the answer there is
-   *  silence. */
+   *  When no thread exists, Slack provides no native status surface, and the system
+   *  emits silence.
+   */
   async setOn(channel: string, agent: string, threadTs?: string): Promise<void> {
-    // KEYED BY CHANNEL AND AGENT. Several agents work in one channel, and this
-    // ledger held one record per channel, so one agent's status overwrote
-    // another's, and ANY agent's reply cleared it. The live smoke caught that:
-    // a peer's message in the channel took down the status the listener had set
-    // for itself.
+    // The ledger keys entries by channel and agent. Several agents work in one
+    // channel, and this ledger held one record per channel, so one agent's status
+    // overwrote another's, and any agent's reply cleared it. The live smoke test
+    // caught this behavior when a peer's message in the channel removed the status
+    // the listener had set for itself.
     const existing = this.load().find((r) => r.channel === channel && r.agent === agent);
     const thread = existing?.thread ?? threadTs;
     let took = existing?.thread !== undefined;
@@ -273,18 +336,20 @@ export class StatusManager {
     }, undefined);
   }
 
-  /** Clear the status OFF for a channel by deleting (or replacing the text of)
-   *  the living message, then dropping the record. Nothing when no active
-   *  status exists. */
+  /**
+   *  The system clears a channel's status by deleting the active message or
+   *  replacing its text, and then dropping the record. It takes no action when no
+   *  active status exists.
+   */
   async clearOn(channel: string, agent: string): Promise<void> {
-    // ONLY THIS AGENT'S OWN STATUS. The parameter was ignored, so a message from
-    // any agent cleared whatever status the channel held, including one another
-    // agent had set while it was still working.
+    // The system applies changes only to this agent's own status. The system ignored
+    // the parameter, so a message from any agent cleared whatever status the channel
+    // held, including a status another agent had set while it was still working.
     const rec = this.load().find((r) => r.channel === channel && r.agent === agent);
     if (rec === undefined) return;
     if (this.cfg.backend === "slack") {
       const cid = await this.channelId(channel);
-      // An EMPTY status is how Slack is told the agent stopped working.
+      // An EMPTY status notifies Slack that the agent stopped working.
       if (cid !== undefined && rec.thread !== undefined) await this.setThreadStatus(cid, rec.thread, "", channel);
     }
     this.locked((records) => {
@@ -293,41 +358,48 @@ export class StatusManager {
     }, undefined);
   }
 
-  // livingTs and livingTts are GONE with the living message. They existed so a
-  // read could hide a status LINE from history; a status is no longer a line, so
-  // there is nothing to hide and no ts to hide it by. A peer's status from an
-  // older build is recognised by its metadata marker instead (isStatusLine).
+  // The living message has been removed, taking livingTs and livingTts with it.
+  // They existed so a read could hide a status line from history. A status is no
+  // longer a line, so there is nothing to hide and no timestamp to hide it by.
+  // The system recognizes a peer's status from an older build by its isStatusLine
+  // metadata marker.
 
-  /** True when a channel has an active, unexpired status. */
+  /**
+   *  The value is true when a channel has an active, unexpired status.
+   */
   isActive(channel: string): boolean {
     const now = this.cfg.now();
     return this.load().some((r) => r.channel === channel && r.expiresAt > now);
   }
 
-  /** Every scramble invocation clears whatever has expired before its own work.
-   *  An expired status's living message is deleted (or text-replaced) and the
-   *  record is dropped. Returns the number of entries cleared so a listen loop
-   *  can report on the sweep. */
+  /**
+   *  Each invocation of scramble removes all expired items before it executes its
+   *  own work. The process deletes or replaces the text of an active message for an
+   *  expired status and drops the record. The call returns the number of cleared
+   *  entries so a listen loop can report on the sweep.
+   */
   async clearExpired(): Promise<number> {
     const records = this.load();
     const now = this.cfg.now();
     const mine = (r: StatusRecord): boolean => this.cfg.agent === undefined || r.agent === this.cfg.agent;
-    // ONLY THIS AGENT'S OWN. Sweeping every row meant calling Slack about another agent's status
-    // under this agent's token, in a channel this agent may not even be in: measured as `status in
-    // team: channel_not_found (channel_id C0EXAMPLE006)` for a row belonging to a different agent. A
-    // row whose owner never runs again sits expired and inert, which `isActive` already ignores.
+    // An agent sweeps only its own rows. Sweeping every row meant querying Slack about
+    // another agent's status under this agent's token, in a channel this agent may not
+    // even be in. This was measured as
+    // `status in team: channel_not_found (channel_id C0EXAMPLE006)` for a row
+    // belonging to a different agent. A row whose owner never runs again sits expired
+    // and inert, which `isActive` already ignores.
     const stale = records.filter((r) => r.expiresAt <= now && mine(r));
     if (stale.length === 0) return 0;
     for (const rec of stale) {
       if (this.cfg.backend === "slack") {
         const cid = await this.channelId(rec.channel);
-        // Slack's own status is what an expiry takes down.
+        // An expiry removes Slack's own status.
         if (cid !== undefined && rec.thread !== undefined) await this.setThreadStatus(cid, rec.thread, "", rec.channel);
       }
     }
-    // DROPS ONLY WHAT IS STILL EXPIRED when the lock is held. Writing the `kept`
-    // list computed before the Slack calls would delete every entry another
-    // process added while they were in flight.
+    // The process drops only what is still expired when the lock is held. Writing
+    // the `kept` list computed before the Slack calls would delete every entry
+    // another process added while they were in flight.
     return this.locked((current) => {
       const cutoff = this.cfg.now();
       let dropped = 0;
@@ -341,9 +413,11 @@ export class StatusManager {
     }, 0);
   }
 
-  /** Long-lived listeners clear on expiry while they run: a ticker that calls
+  /**
+   *  Long-lived listeners clear expired entries while they run. A ticker calls
    *  clearExpired on an interval until the returned stop is called. `sleep` is
-   *  injectable so a test drives it without a real delay. */
+   *  injectable so a test drives it without a real delay.
+   */
   startExpiryTicker(
     intervalMs: number,
     sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms)),

@@ -1,79 +1,107 @@
-// WHERE AN AGENT IS RUNNING, published by every message it sends.
+// Every message an agent sends publishes the location where that agent is
+// running.
 //
-// The operator: "Does each agent record its hostname and working directory on
-// scramble and an agent may know its same directory peers?" It did not, and the
-// absence cost two round trips in one afternoon: an agent introduced itself by
-// typing its hostname and `C:\xingyu-agent` into a message by hand, and later a
-// drive letter on somebody else's machine needed a human to ask a human.
+// Each agent records its hostname and working directory on scramble so an agent
+// may know its same-directory peers. The system previously lacked this record,
+// and the absence cost two round trips in one afternoon: an agent introduced
+// itself by typing its hostname and `C:\xingyu-agent` into a message by hand, and
+// later a drive letter on another machine required a human to ask a human.
 //
-// IT RIDES ON SLACK MESSAGE METADATA, which is the same channel a status line
-// already uses to be recognised by every other agent. Nothing is parsed out of
-// prose, no app manifest changes, and an app owned by a different login carries
-// it as readily as one of ours, which is where reading a peer's manifest fails.
+// This information travels in Slack message metadata, which is the channel a
+// status line already uses to be recognized by every other agent. The receiver
+// parses nothing out of prose, no app manifest changes, and an app owned by a
+// different login carries the data as readily as one of our own apps, which is
+// where reading a peer's manifest fails.
 //
-// The limit, and it is inherent: an agent learns a peer's location from a
-// message that peer has SENT. A silent agent stays unknown until it speaks.
+// An inherent limit remains: an agent learns a peer's location from a message
+// that peer has sent. A silent agent stays unknown until it speaks.
 import { appendFileSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { withFileLock } from "./filelock";
 
-/** The metadata event_type marking a message as carrying its sender's origin. */
+/**
+ *  The metadata `event_type` marks a message as carrying its sender's origin.
+ */
 export const ORIGIN_METADATA_TYPE = "scramble_origin";
 
-/** WHAT RUNS AN AGENT, as its own runtime names it.
+/**
+ *  WHAT RUNS AN AGENT, as its own runtime names it.
  *
- *  The operator: "Scramble should store the agent runtime, work dir and session
- *  ids for each agent in case of a system restart or crash." A host and a
- *  directory survive a crash on their own; the session an agent belonged to does
- *  not, and it is the field that says which conversation to resume and which
- *  transcript holds what the agent was doing. */
+ *  Scramble should store the agent runtime, working directory, and session ID for
+ *  each agent in case of a system restart or crash. A host and a directory survive
+ *  a crash on their own, but the session an agent belonged to does not. The session
+ *  is the field that says which conversation to resume and which transcript holds
+ *  what the agent was doing.
+ */
 export interface Runtime {
-  /** `claude-code`, `akari`, or whatever a runtime publishes for itself. */
+  /**
+   *  A runtime publishes `claude-code`, `akari`, or whatever it publishes for
+   *  itself.
+   */
   name: string;
-  /** The runtime's own version, when it publishes one. */
+  /**
+   *  The runtime reports its own version when it publishes one.
+   */
   version?: string;
-  /** The session this agent belongs to, in its runtime's own id space. */
+  /**
+   *  The agent belongs to this session, identified in the runtime's own ID space.
+   */
   session?: string;
-  /** The process id on the host that recorded it. */
+  /**
+   *  This value represents the process ID on the host that recorded it.
+   */
   pid?: string;
 }
 
 export interface Origin {
-  /** The machine's hostname. */
+  /**
+   *  The field contains the machine's hostname.
+   */
   host: string;
-  /** The working directory the agent runs in. */
+  /**
+   *  The agent runs in this working directory.
+   */
   dir: string;
-  /** The scramble commit it runs, when the install knows one. */
+  /**
+   *  The install runs the scramble commit when it knows one.
+   */
   commit?: string;
-  /** What runs the agent, absent when nothing in the environment says. */
+  /**
+   *  The process that runs the agent is absent when nothing in the environment
+   *  specifies it.
+   */
   runtime?: Runtime;
-  /** THE SENDER'S OWN NAME FOR ITSELF, which settles which id space this row
+  /**
+   *  The sender provides its own name to determine which identifier space this row
    *  belongs to.
    *
    *  A delivered line carries the Slack handle in `from`, and an agent's own row
-   *  carries its scramble name. Those differ (`model-failure-research` is
-   *  `model_failure_researc` on Slack), so one agent appeared twice in the peer
-   *  list with the same host, directory and session on both rows. An agent
-   *  publishes its own name, and the receiver records it under that. */
+   *  carries its scramble name. Because these names differ (`model-failure-research`
+   *  is `model_failure_researc` on Slack), one agent appeared twice in the peer list
+   *  with the same host, directory, and session on both rows. An agent publishes its
+   *  own name, and the receiver records the agent under that name.
+   */
   agent?: string;
 }
 
-/** The runtime this process is running under, read from the environment.
+/**
+ *  The process reads the runtime it is running under from the environment.
  *
- *  NOTHING IS GUESSED. An environment naming no runtime yields undefined, since a
- *  made-up runtime or an invented session id would be read as fact by every peer
- *  and by whoever is restarting the fleet.
+ *  The system guesses nothing. An environment that names no runtime yields
+ *  undefined, since every peer and whoever is restarting the fleet would read an
+ *  invented runtime or an invented session id as fact.
  *
- *  NO SECRET IS EVER RECORDED. `CLAUDE_CODE_MESSAGING_TOKEN` sits beside the
+ *  The system never records a secret. `CLAUDE_CODE_MESSAGING_TOKEN` sits beside the
  *  variables read here, this record is world-readable on the host, and its fields
- *  ride out on a Slack message. Only identifiers go in. */
+ *  travel in a Slack message. Only identifiers enter the record.
+ */
 export function runtimeOf(env: (name: string) => string | undefined): Runtime | undefined {
   const value = (name: string): string | undefined => {
     const v = env(name);
     return v === undefined || v.trim() === "" ? undefined : v.trim();
   };
-  // AN OVERRIDE FIRST, so a runtime this code has never heard of still publishes
-  // itself without a change here.
+  // Provide an override first, so a runtime this code does not recognize still
+  // publishes itself without requiring changes here.
   const named = value("SCRAMBLE_RUNTIME");
   if (named !== undefined) {
     return {
@@ -85,8 +113,9 @@ export function runtimeOf(env: (name: string) => string | undefined): Runtime | 
   }
   const claudeSession = value("CLAUDE_CODE_SESSION_ID");
   if (claudeSession !== undefined || value("CLAUDECODE") !== undefined) {
-    // `AI_AGENT` carries `claude-code_2-1-234_agent...`, so the version sits in
-    // the second underscore field with dashes where the dots belong.
+    // The `AI_AGENT` value carries `claude-code_2-1-234_agent...`, so the second
+    // underscore-delimited field contains the version with dashes where the dots
+    // belong.
     const marker = value("AI_AGENT") ?? "";
     const field = marker.split("_")[1] ?? "";
     const version = /^[0-9]+(-[0-9]+)+$/.test(field) ? field.replace(/-/g, ".") : undefined;
@@ -108,22 +137,31 @@ export function runtimeOf(env: (name: string) => string | undefined): Runtime | 
   return undefined;
 }
 
-/** One peer, and where it was last seen running. */
+/**
+ *  The entry lists one peer and where it was last seen running.
+ */
 export interface PeerRow extends Origin {
   agent: string;
-  /** When this was recorded, ISO, so a stale row reads as stale. */
+  /**
+   *  The record stores its timestamp in ISO format, so a stale row reads as stale.
+   */
   at: string;
-  /** The name the message arrived under, when it differs from the agent's own.
+  /**
+   *  The system records the name the message arrived under when it differs from the
+   *  agent's own name.
    *
-   *  This is what retires the rows written before an agent published its name:
-   *  a row keyed on a Slack handle is dropped from the current list once another
-   *  row claims that handle. */
+   *  This value retires rows written before an agent published its name. The system
+   *  drops a row keyed on a Slack handle from the current list once another row
+   *  claims that handle.
+   */
   handle?: string;
 }
 
-/** Build the origin for THIS process. `commit` is omitted when the running copy
- *  is a checkout with no installed sha: an absent field says nothing, and a
- *  made-up one says something false. */
+/**
+ *  The routine builds the origin for this process. The routine omits `commit` when
+ *  the running copy is a checkout with no installed SHA, because an absent field
+ *  states nothing and an invented value states something false.
+ */
 export function originOf(host: string, dir: string, commit?: string, runtime?: Runtime, agent?: string): Origin {
   return {
     host,
@@ -134,9 +172,11 @@ export function originOf(host: string, dir: string, commit?: string, runtime?: R
   };
 }
 
-/** The metadata block to attach to an outbound message.
+/**
+ *  This metadata block attaches to an outbound message.
  *
- *  Slack's payload holds strings, so the runtime rides as flat keys. */
+ *  Slack payloads hold strings, so the runtime stores its metadata as flat keys.
+ */
 export function originMetadata(o: Origin): { event_type: string; event_payload: Record<string, string> } {
   const r = o.runtime;
   return {
@@ -154,13 +194,15 @@ export function originMetadata(o: Origin): { event_type: string; event_payload: 
   };
 }
 
-/** Read an origin off an inbound message's metadata, or undefined when it
- *  carries none.
+/**
+ *  The function reads an origin from an inbound message's metadata, or returns
+ *  undefined when the message carries none.
  *
- *  DEFENSIVE ON PURPOSE: the payload is written by another agent, possibly on a
- *  build older or newer than this one, and a message whose metadata is malformed
- *  must still be delivered. Anything that is not two non-empty strings is no
- *  origin at all. */
+ *  This check is intentionally defensive because another agent writes the payload,
+ *  possibly on a build older or newer than this one, and the system must still
+ *  deliver a message whose metadata is malformed. The parser treats any value
+ *  that is not two non-empty strings as no origin.
+ */
 export function readOrigin(metadata: unknown): Origin | undefined {
   if (typeof metadata !== "object" || metadata === null) return undefined;
   const m = metadata as { event_type?: unknown; event_payload?: unknown };
@@ -178,9 +220,9 @@ export function readOrigin(metadata: unknown): Origin | undefined {
     dir: p.dir,
     ...(str("commit") === undefined ? {} : { commit: str("commit")! }),
     ...(str("agent") === undefined ? {} : { agent: str("agent")! }),
-    // A PAYLOAD WITH A SESSION AND NO RUNTIME NAME carries no runtime: the name
-    // is what makes the session id readable, since two runtimes' ids look alike
-    // and mean different things.
+    // A payload containing a session without a runtime name carries no runtime. The
+    // runtime name makes the session id readable, since session ids from two runtimes
+    // look alike and mean different things.
     ...(name === undefined
       ? {}
       : {
@@ -194,11 +236,14 @@ export function readOrigin(metadata: unknown): Origin | undefined {
   };
 }
 
-/** Whether two origins say the same thing, field by field in a fixed order.
+/**
+ *  The check determines whether two origins contain matching values, field by
+ *  field in a fixed order.
  *
- *  A `JSON.stringify` of each side was tried and it compares KEY ORDER: a row
- *  read back from disk lists `agent` first and a fresh origin does not, so every
- *  origin looked new and the file grew a line per message. */
+ *  Serializing each side with `JSON.stringify` evaluates key order. A row read back
+ *  from disk lists `agent` first and a fresh origin does not, so every origin
+ *  looked new and the file grew a line per message.
+ */
 export function sameOrigin(a: Origin, b: Origin): boolean {
   const flat = (o: Origin): string =>
     [o.host, o.dir, o.commit ?? "", o.runtime?.name ?? "", o.runtime?.version ?? "", o.runtime?.session ?? "", o.runtime?.pid ?? ""].join(
@@ -211,40 +256,51 @@ export function peersPath(configPath: string): string {
   return join(dirname(configPath), "peers.jsonl");
 }
 
-/** ONE FILE PER WRITER, so no two processes ever append to the same file.
+/**
+ *  Assign one file to each writer, so no two processes ever append to the same
+ *  file.
  *
- *  Six agents shared `peers.jsonl` on one host. That host's filesystem stalled
- *  under an orphaned `du -shx` walking 1.3PB for 81 hours: writes returned EIO,
- *  eight processes sat in D-state, and the shared file ended up with a line no
- *  parser could read. A lock helps a healthy filesystem and degrades on that one,
- *  since `withFileLock` breaks a lock it cannot take within a second and writes
- *  anyway.
+ *  Six agents shared `peers.jsonl` on one host. An orphaned `du -shx` walked 1.3PB
+ *  for 81 hours on that host and stalled the filesystem. Writes returned `EIO`,
+ *  eight processes sat in `D-state`, and the shared file ended up with a line that
+ *  no parser could read. A lock helps a healthy filesystem and degrades on a
+ *  stalled one, since `withFileLock` breaks a lock it cannot take within one
+ *  second and writes anyway.
  *
- *  A writer that owns its file needs no agreement with anybody. A torn write can
- *  only damage the writer's own rows, and the reader merges every file it finds. */
+ *  A writer that owns its file needs no coordination with other processes. A torn
+ *  write can only damage that writer's own rows, and the reader merges every file it
+ *  finds.
+ */
 export function peersDir(pathInRecordDir: string): string {
   return join(dirname(pathInRecordDir), "peers.d");
 }
 
-/** The file one agent writes. The name is sanitised because it becomes a path,
- *  and an agent name arrives from a config a person edits. */
+/**
+ *  An agent writes this file. The system sanitises the name because it becomes a
+ *  path, and an agent name arrives from a configuration that a person edits.
+ */
 export function peerFileFor(configPath: string, agent: string): string {
   const safe = agent.replace(/[^A-Za-z0-9._-]/g, "_").replace(/^\.+/, "_") || "agent";
   return join(peersDir(configPath), `${safe}.jsonl`);
 }
 
-/** Every peer row, oldest first, skipping anything unparseable: a half-written
- *  line from a killed process must not take the whole record down. */
+/**
+ *  The process parses every peer row, oldest first, and skips unparseable entries,
+ *  because a half-written line from a killed process must not take the whole
+ *  record down.
+ */
 export function readPeers(path: string): PeerRow[] {
   return readPeerFile(path).rows;
 }
 
-/** THE WHOLE RECORD: the shared file every build wrote before this change, plus
- *  one file per writer. Rows come back oldest first across all of them, since the
- *  newest row per agent is what `currentPeers` keeps.
+/**
+ *  The full record comprises the shared file that every build wrote before this
+ *  change, plus one file per writer. The system returns rows oldest first across all
+ *  of these files, since `currentPeers` keeps the newest row per agent.
  *
- *  The shared file is still READ. It holds every row written up to this change,
- *  and rewriting a record of what was seen is never on the table. */
+ *  The system still reads the shared file. It holds every row written up to this
+ *  change, and the system never rewrites a record of what was seen.
+ */
 export function readPeerFile(path: string): { rows: PeerRow[]; damaged: number } {
   const shared = readOneFile(path);
   const rows = [...shared.rows];
@@ -260,18 +316,22 @@ export function readPeerFile(path: string): { rows: PeerRow[]; damaged: number }
     rows.push(...one.rows);
     damaged += one.damaged;
   }
-  // OLDEST FIRST ACROSS FILES. Each file is already in order, and a merge of two
-  // files is not, so the newest-row-wins read would pick whichever file sorted
-  // last. A row with no timestamp keeps its place.
+  // Read records oldest first across files. Each file is already ordered, but a
+  // merge of two files loses this ordering, so a newest-row-wins read would pick
+  // whichever file sorted last. A row with no timestamp keeps its place.
   return { rows: rows.sort((a, b) => (a.at ?? "").localeCompare(b.at ?? "")), damaged };
 }
 
-/** The rows AND the count of lines no parser could read, from ONE file.
+/**
+ *  The output returns the parsed rows and the count of lines that no parser could
+ *  read from a single file.
  *
- *  A SKIPPED LINE IS A SIGNAL, and this dropped it. Six agents appended to one
- *  file on a shared filesystem, an agent reported a line nothing could parse, and
- *  the reader had been stepping over it in silence since it appeared: the surface
- *  said `here are the peers` and never `one line of the record is damaged`. */
+ *  A skipped line is a signal that the system dropped. Six agents appended to one
+ *  file on a shared filesystem, and an agent reported a line that no parser could
+ *  read. The reader had stepped over that line in silence since it appeared. The
+ *  interface reported `here are the peers` and did not report
+ *  `one line of the record is damaged`.
+ */
 export function readOneFile(path: string): { rows: PeerRow[]; damaged: number } {
   let raw: string;
   try {
@@ -294,43 +354,48 @@ export function readOneFile(path: string): { rows: PeerRow[]; damaged: number } 
   return { rows, damaged };
 }
 
-/** Record where a peer was seen, when that is news.
+/**
+ *  The system records where a peer was seen whenever that information is new.
  *
- *  APPENDED, and the newest row wins on read. An agent that moves host or
- *  directory has both facts on the record with their times, which is what makes
- *  "it used to run there" answerable. A repeat of what the newest row already
- *  says is not written, so a busy channel does not grow the file per message. */
+ *  The file appends entries, and reads resolve to the newest row. An agent that
+ *  moves host or directory keeps both facts on record with their times, which makes
+ *  "it used to run there" answerable. The system does not write a duplicate of
+ *  what the newest row already says, so a busy channel does not grow the file per
+ *  message.
+ */
 export function recordPeer(path: string, writer: string, arrivedAs: string, o: Origin, at: string): boolean {
-  // THE NAME THE AGENT PUBLISHES WINS. A delivered line names its sender by Slack
-  // handle, and an agent's own row names itself by scramble name, so one agent
-  // held two rows carrying the same host, directory and session under
-  // `model_failure_researc` and `model-failure-research`. The agent it belongs to
-  // is the authority on which it is; `arrivedAs` is the fallback for a message
-  // from a build that publishes no name.
+  // The name an agent publishes takes precedence. A delivered line names its sender
+  // by Slack handle, and an agent's own row names itself by scramble name, so one
+  // agent held two rows carrying the same host, directory, and session under
+  // `model_failure_researc` and `model-failure-research`. The agent is the authority
+  // on its own identity, and `arrivedAs` serves as the fallback for a message from a
+  // build that publishes no name.
   const agent = o.agent === undefined || o.agent === "" ? arrivedAs : o.agent;
   const handle = agent === arrivedAs ? undefined : arrivedAs;
-  // THIS AGENT'S OWN FILE, which nobody else writes. Six agents shared one file
-  // on a host whose filesystem stalled: writes returned EIO, eight processes sat
-  // in D-state, and the shared file ended with a line no parser could read. A
-  // lock was the first fix and it degrades on exactly that filesystem, since
-  // `withFileLock` breaks a lock it cannot take within a second and writes
-  // anyway. A writer that owns its file needs no agreement with anybody.
+  // Each agent writes exclusively to its own file, with no shared writes across
+  // agents. Six agents previously shared one file on a host whose filesystem
+  // stalled, where writes returned EIO, eight processes sat in D-state, and the
+  // shared file ended with a line no parser could read. A lock was the first fix,
+  // but it degrades on that filesystem because `withFileLock` breaks a lock it
+  // cannot take within a second and writes anyway. A writer that owns its file
+  // needs no agreement with any other writer.
   //
-  // The lock stays for the processes of THIS agent, which are several: a
-  // listener, a send, and a sweep on a timer all record the same row.
-  // THE FILE IS NAMED FOR THE WRITER, and it held the SUBJECT's name first. Six
-  // agents on one host each learn the same remote peer from its messages, so all
-  // six appended to that peer's file: the shared writer I had just removed, back
-  // under another name. An agent read the code and reported it before any line
-  // tore. A writer owns one file and records whoever it learns about in it.
+  // The lock remains for the internal processes of this agent, since a listener,
+  // a send process, and a timer sweep all record the same row. The file is named
+  // for the writer. It previously held the subject's name, so when six agents on
+  // one host each learned about the same remote peer from its messages, all six
+  // appended to that peer's file, returning the shared writer under another name.
+  // An agent read the code and reported the defect before any line tore. A writer
+  // owns one file and records whoever it learns about in it.
   const mine = peerFileFor(path, writer);
   return withFileLock(mine, () => {
     const rows = readOneFile(mine).rows;
     const last = rows.filter((r) => r.agent === agent).at(-1);
-    // THE WHOLE ORIGIN DECIDES WHETHER THIS IS NEWS, runtime and session
-    // included. A key of host, dir and commit alone kept the first session id an
-    // agent ever published and dropped every later one, so a restart into a new
-    // session left the record pointing at a session that had died.
+    // The full origin determines whether an update is new, and that origin includes
+    // both the runtime and the session. A key composed of only the host, directory,
+    // and commit retained the first session identifier that an agent published and
+    // dropped every subsequent identifier, so a restart into a new session left the
+    // record pointing at a session that had died.
     if (last !== undefined && sameOrigin(last, o) && last.handle === handle) return false;
     mkdirSync(dirname(mine), { recursive: true });
     appendFileSync(mine, `${JSON.stringify({ agent, ...o, ...(handle === undefined ? {} : { handle }), at })}\n`);
@@ -338,13 +403,15 @@ export function recordPeer(path: string, writer: string, arrivedAs: string, o: O
   });
 }
 
-/** The newest row per agent, with the handle-keyed rows an agent has since
- *  claimed left out.
+/**
+ *  The output keeps the newest row for each agent and leaves out handle-keyed
+ *  rows that an agent has since claimed.
  *
  *  A row written before agents published their names is keyed on a Slack handle.
- *  Once the same agent writes a row naming that handle as its own, the old row is
- *  the same agent under its other id, and printing both says two agents run in
- *  one directory in one session. */
+ *  Once the same agent writes a row that names that handle as its own, the old row
+ *  represents the same agent under another identifier, and printing both rows
+ *  indicates that two agents run in one directory in one session.
+ */
 export function currentPeers(rows: PeerRow[]): PeerRow[] {
   const byAgent = new Map<string, PeerRow>();
   for (const r of rows) byAgent.set(r.agent, r);
@@ -354,22 +421,26 @@ export function currentPeers(rows: PeerRow[]): PeerRow[] {
     .sort((a, b) => a.agent.localeCompare(b.agent));
 }
 
-/** The line an agent reads. `sameDir` narrows to peers sharing a directory with
- *  this agent, which is the question the operator asked: who is working where I
- *  am working. */
-/** Peers whose commit differs from the one installed HERE, newest sighting
- *  first.
+/**
+ *  An agent reads this line. The `sameDir` filter narrows the list to peers that
+ *  share a directory with this agent, which answers the operator's question about
+ *  who is working in the same directory.
+ */
+/**
+ *  This view lists peers whose commit differs from the commit installed locally,
+ *  ordered by the newest sighting first.
  *
- * THE HOST THAT STOPS UPDATING SENDS NO SIGNAL. The staleness notice compares a
- * running listener against the commit installed on the same machine, so a
- * machine nobody installs on has nothing to disagree with and stays quiet. An
- * agent found that on a host five commits behind, where every listener matched
- * its install and no notice had ever fired.
+ *  A host that stops updating sends no signal. The staleness notice compares a
+ *  running listener against the commit installed on that same machine, so a machine
+ *  where nobody installs updates has nothing to disagree with and stays quiet. An
+ *  agent observed this on a host five commits behind, where every listener matched
+ *  its install and no notice had ever fired.
  *
- *  A peer's own message carries the commit it ran, so a difference between that
- *  and this install is visible without git and without a network. WHICH SIDE IS
- *  OLDER IS LEFT OPEN: commit ids carry no order, and `git log` answers it in
- *  one command. */
+ *  A peer's message carries the commit it ran, so a difference between that commit
+ *  and the local install is visible without git and without a network. The system
+ *  leaves open which side is older, because commit ids carry no order and `git log`
+ *  answers the question in one command.
+ */
 export function peersOnOtherCommits(
   rows: PeerRow[],
   installed: string | undefined,
@@ -383,9 +454,10 @@ export function peersOnOtherCommits(
 }
 
 export function peersReport(rows: PeerRow[], self: Origin | undefined, sameDir: boolean, damaged = 0): string {
-  // A DAMAGED LINE IS NAMED, and it used to be stepped over in silence. Six
-  // agents append to this file on a shared filesystem; one reported a line no
-  // parser could read, and every reader had been skipping it without a word.
+  // The reader names a damaged line that it previously stepped over in silence.
+  // Six agents append to this file on a shared filesystem. One agent reported
+  // a line that no parser could read, and every reader had been skipping it
+  // without a word.
   const torn =
     damaged === 0
       ? ""
@@ -403,9 +475,9 @@ export function peersReport(rows: PeerRow[], self: Origin | undefined, sameDir: 
       `old to stamp it.${torn}`
     );
   }
-  // THE RUNTIME AND THE SESSION ARE WHAT A RESTART NEEDS. A host and a directory
-  // say where to look; the session id says which conversation was interrupted,
-  // and it is the field nobody can reconstruct after the process is gone.
+  // A restart requires the runtime and the session. A host and a directory identify
+  // where to look. The session id specifies which conversation was interrupted, and
+  // nobody can reconstruct this field after the process is gone.
   const lines = shown.map((r) => {
     const rt = r.runtime;
     const ran =
@@ -415,14 +487,15 @@ export function peersReport(rows: PeerRow[], self: Origin | undefined, sameDir: 
           `${rt.session === undefined ? "" : ` session ${rt.session}`}${rt.pid === undefined ? "" : ` pid ${rt.pid}`}`;
     return `  ${r.agent}  ${r.host}  ${r.dir}${r.commit === undefined ? "" : `  (${r.commit})`}${ran}  seen ${r.at}`;
   });
-  // WHAT TO TELL EACH OF THEM DEPENDS ON THEIR OWN COMMIT. I announced two
-  // commits with "both changes touch src/cli.ts", which was the range I had
-  // just written. An agent five commits back answered with their own range: 15
-  // files, the delivery path included. A reader on that build who took my
-  // sentence at face value would have skipped a restart their build needs.
+  // The message sent to each recipient depends on that recipient's own commit. An
+  // announcement for two commits stated that both changes touch `src/cli.ts`, which
+  // covered the range written in that update. An agent five commits back replied
+  // with its own range of 15 files, including the delivery path. A reader on that
+  // build who took that statement at face value would have skipped a restart their
+  // build needs.
   //
-  // The commits above are the input to that sentence, so the reminder goes where
-  // they are printed.
+  // The commits above provide the input to that statement, so the reminder goes
+  // where they are printed.
   const behind = [...new Set(shown.map((r) => r.commit).filter((c): c is string => c !== undefined))];
   const note =
     self?.commit === undefined || behind.every((c) => c === self.commit)
@@ -432,3 +505,4 @@ export function peersReport(rows: PeerRow[], self: Origin | undefined, sameDir: 
         `Your own last diff describes nobody's build except yours.`;
   return `${shown.length} peer(s):\n${lines.join("\n")}${note}${torn}`;
 }
+
