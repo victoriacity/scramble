@@ -13,6 +13,7 @@ import {
   readInbox,
   readSent,
   readSentRows,
+  COMPARABLE_SIZE_RATIO,
   contentWords,
   NEAR_DUPLICATE_FLOOR,
   saidAlready,
@@ -602,6 +603,34 @@ describe("the record of what this agent said", () => {
     const asciiA = "peers 9, damaged 0, my row is on fad46a5 at 04:18";
     const asciiB = "peers 10, damaged 1, my row is on fad46a5 at 05:20";
     expect(wordOverlap(contentWords(asciiA), contentWords(asciiB))).toBeLessThan(0.8);
+  });
+
+  test("A SHORT FOLLOW-UP IS NOT A RE-TELLING, however much of it the report held", () => {
+    // Containment alone called it one. An agent measured an 8-word note whose
+    // every word appeared in a 22-word report: containment 1.000, size ratio
+    // 0.36, and the guard would have refused a legitimate addendum. The reworded
+    // retry this guard exists for measures a ratio of 0.80.
+    const report =
+      "The end-to-end run finished on ports 3005 and 8600, and the judge scored " +
+      "mushroom_shaman, blueberry_pie and copper_kettle without a fallback. Coverage held " +
+      "at 100% and the gate passed every stage including the language check.";
+    const followUp = "The judge scored copper_kettle without a fallback on ports 3005 and 8600.";
+    const big = contentWords(report);
+    const small = contentWords(followUp);
+    expect(Math.min(big.length, small.length) / Math.max(big.length, small.length)).toBeLessThan(
+      COMPARABLE_SIZE_RATIO,
+    );
+    // Every word of the follow-up is in the report, and the score says fragment.
+    expect(small.every((word) => big.includes(word))).toBe(true);
+    expect(wordOverlap(big, small)).toBeLessThan(0.8);
+    // THE PAIR THIS GUARD EXISTS FOR is unaffected: comparable sizes, 0.833.
+    const retryA =
+      "The end-to-end run finished on ports 3005 and 8600, and the judge scored " +
+      "mushroom_shaman, blueberry_pie and copper_kettle without a fallback.";
+    const retryB =
+      "On ports 3005 and 8600 the end-to-end run completed, and the judge scored " +
+      "the three assets mushroom_shaman, blueberry_pie and copper_kettle, with no fallback taken.";
+    expect(wordOverlap(contentWords(retryA), contentWords(retryB))).toBeGreaterThan(0.8);
   });
 
   test("a malformed row reads as an empty ts, never taking the file down", () => {

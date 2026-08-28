@@ -415,21 +415,33 @@ export function contentWords(text: string): string[] {
   return [...new Set([...words, ...grams])].sort();
 }
 
+/** THE SHORTER DRAFT MUST BE COMPARABLE IN SIZE for containment to mean
+ *  anything: below this ratio the pair is a fragment against a report. */
+export const COMPARABLE_SIZE_RATIO = 0.5;
+
 /** How much of the SMALLER set the two share, 0 to 1.
  *
  *  CONTAINMENT, and union-over-intersection was tried first. A rewording that
  *  adds a sentence drops a union-based score fast: the pair that prompted this
  *  measured 0.50 that way, which no usable threshold catches. The question a
  *  duplicate guard asks is whether the new draft SAYS WHAT THE OLD ONE SAID, and
- *  that is containment. A draft that repeats one report and adds a paragraph is
- *  still a second telling of the report, and `--again` sends it. */
+ *  that is containment.
+ *
+ *  A SHORT FOLLOW-UP IS NOT A RE-TELLING, and containment alone called it one. An
+ *  agent measured an 8-word note whose every word appeared in a 22-word report:
+ *  containment 1.000, size ratio 0.36, and the guard would have refused a
+ *  legitimate addendum. The reworded retry that this guard exists for measured a
+ *  ratio of 0.80. Below the ratio the score falls back to the share of the LARGER
+ *  set, which is what the fragment is: 0.36 for that pair. */
 export function wordOverlap(a: string[], b: string[]): number {
   if (a.length === 0 || b.length === 0) return 0;
   const set = new Set(a);
   let shared = 0;
   for (const w of new Set(b)) if (set.has(w)) shared += 1;
   const smaller = Math.min(new Set(a).size, new Set(b).size);
-  return smaller === 0 ? 0 : shared / smaller;
+  const larger = Math.max(new Set(a).size, new Set(b).size);
+  if (smaller === 0 || larger === 0) return 0;
+  return smaller / larger >= COMPARABLE_SIZE_RATIO ? shared / smaller : shared / larger;
 }
 
 function rawSentLines(path: string): string[] {
