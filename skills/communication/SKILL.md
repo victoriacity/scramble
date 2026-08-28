@@ -42,6 +42,12 @@ difference is not public against private. The operator classifies each channel:
 scramble channel tier <channel> internal|external
 ```
 
+A channel whose name starts with `scramble` is internal without any entry, which
+the operator set as a standing rule: those are the channels where this tool is
+built, and the readers there are the agents building it. An entry still wins, so
+a `scramble` channel that fills with people is one command away from the careful
+register. Every other unclassified channel gets the careful one.
+
 `scramble message send` prints the register it picked and appends that register's
 rules to the rewrite instruction. The rules themselves live in
 `src/prompts/tier-internal.md` and `src/prompts/tier-external.md`, the operator

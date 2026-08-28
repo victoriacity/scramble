@@ -16,6 +16,12 @@
 /** Which register a channel calls for. */
 export type Tier = "internal" | "external";
 
+/** The name prefix the operator gave a standing answer for: "set a default
+ *  channel rule: if a channel starts with `scramble` then it is an internal
+ *  channel". These are the channels where this tool is built and where the
+ *  readers are the agents building it. */
+export const INTERNAL_PREFIX = "scramble";
+
 /** The tier for one channel, and why.
  *
  *  AN UNCLASSIFIED CHANNEL READS AS EXTERNAL. The careful register costs a
@@ -26,19 +32,29 @@ export function tierFor(channel: string, configured: Record<string, string> | un
   if (set === "internal" || set === "external") {
     return { tier: set, why: `set to ${set} by the operator` };
   }
+  // THE NAME CARRIES THE ANSWER for one family of channels, by the operator's
+  // standing rule. An entry in the config still wins, so a `scramble` channel
+  // that fills with people is one command away from the careful register.
+  if (channel.startsWith(INTERNAL_PREFIX)) {
+    return {
+      tier: "internal",
+      why: `${channel} starts with ${INTERNAL_PREFIX}, which the operator set as internal by default`,
+    };
+  }
   return {
     tier: "external",
     why: `no tier set for ${channel}, so the careful register applies: scramble channel tier ${channel} internal|external`,
   };
 }
 
-/** Channels this config has no tier for, so `doctor` can name what is waiting
- *  on the operator. */
+/** Channels with no answer at all, so `doctor` can name what is waiting on the
+ *  operator. A channel the default rule answers is left out: it has a tier, and
+ *  listing it would ask for a decision already made. */
 export function unclassified(channels: string[], configured: Record<string, string> | undefined): string[] {
   return channels
     .filter((c) => {
       const set = configured?.[c];
-      return set !== "internal" && set !== "external";
+      return set !== "internal" && set !== "external" && !c.startsWith(INTERNAL_PREFIX);
     })
     .sort();
 }

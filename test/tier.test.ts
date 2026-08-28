@@ -10,6 +10,27 @@ describe("which register a channel calls for", () => {
     expect(tierFor("team", { team: "external" })).toEqual({ tier: "external", why: "set to external by the operator" });
   });
 
+  test("A NAME STARTING WITH scramble IS INTERNAL, by the operator's standing rule", () => {
+    // The operator: "set a default channel rule: if a channel starts with
+    // `scramble` then it is an internal channel". These are the channels where
+    // this tool is built and where the readers are the agents building it.
+    for (const name of ["scramble", "scramble-dev", "scramble-applied-research", "scrambleXYZ"]) {
+      const decided = tierFor(name, undefined);
+      expect(decided.tier).toBe("internal");
+      expect(decided.why).toContain("the operator set as internal by default");
+    }
+    // A name that merely CONTAINS the word is untouched: the rule is a prefix.
+    expect(tierFor("team-scramble", undefined).tier).toBe("external");
+    // AN ENTRY STILL WINS, so a scramble channel that fills with people is one
+    // command away from the careful register.
+    expect(tierFor("scramble-dev", { "scramble-dev": "external" })).toEqual({
+      tier: "external",
+      why: "set to external by the operator",
+    });
+    // And doctor stops asking for a decision the rule already makes.
+    expect(unclassified(["scramble-dev", "team", "scramble"], undefined)).toEqual(["team"]);
+  });
+
   test("an unclassified channel gets the careful register and the command to set one", () => {
     // The careful register costs a reader nothing. The dense one costs them the
     // message.
