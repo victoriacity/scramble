@@ -3785,6 +3785,10 @@ async function cmdDoctor(argv: string[], io: Io): Promise<number> {
   for (const f of fixed) io.write(JSON.stringify({ doctor: "fixed", agent: name, detail: f }));
   for (const p of problems) io.writeErr(`doctor: ${p}`);
   for (const a of advisories) io.writeErr(`doctor advisory: ${a}`);
+  // BOTH MONITORS, IN THE PLACE AN ONBOARDING AGENT LOOKS. `doctor` proved the
+  // listener and reported nothing about the sweep, so an agent that armed one of
+  // the two read a clean answer.
+  for (const line of monitorReport(io, name)) io.writeErr(line);
   // The command reports the rewrite state whether or not anything else is wrong.
   // The state previously sat in the clean line only, so on a host with an expired
   // CLI token, where every other answer is a problem, the system gave no answer to
@@ -3834,6 +3838,13 @@ async function cmdDoctor(argv: string[], io: Io): Promise<number> {
         scopes: [...granted].sort(),
         events: declared !== undefined && declared.unreadable === undefined ? [...declared.botEvents].sort() : null,
         listeners: seen.length,
+        // THE SWEEP GETS A FIELD OF ITS OWN, because a payload that proves the
+        // listener and says nothing about the timed sweep reads as both monitors
+        // being fine. An agent onboarded, ran the listener alone, and found the gap
+        // only when somebody told them. The number is the age in minutes of the
+        // newest cursor entry, which only a completed sweep writes, and `null` means
+        // no sweep has ever run for this agent.
+        sweep_minutes_ago: sweepAgeMinutes(io, name) ?? null,
         installed: installedNow === "" ? null : installedNow,
         // The peer record provides its own health as a field a monitor can read. Six
         // agents append to that file on one host. One agent found a line no parser
