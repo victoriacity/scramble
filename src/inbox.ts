@@ -508,11 +508,16 @@ export const CALIBRATION: Array<{
   { what: "an addendum to a one-line report", measuredBy: "scramble-dev", source: "synthetic", scale: "short", score: 0.571, label: "wanted" },
   { what: "two unrelated one-liners", measuredBy: "scramble-dev", source: "synthetic", scale: "short", score: 0.5, label: "wanted" },
   {
+    // 0.285, AND THIS ROW SAID 0.125 UNTIL `--calibrate` READ THE MESSAGES. My
+    // number came from Chinese text I typed to approximate them, recorded as a
+    // measurement of the pair. Two agents ran the re-measure on its first day and
+    // both got 0.285 from Slack. The same error class as the synthetic pair I
+    // cited as the founding incident, caught this time by the tool.
     what: "two unrelated Chinese reports",
-    measuredBy: "model-failure-research, from peer-metrics's sends",
+    measuredBy: "model-failure-research and scramble-dev, from peer-metrics's sends",
     source: "measured",
     scale: "content",
-    score: 0.125,
+    score: 0.285,
     label: "wanted",
     ts: ["1787722977.171239", "1787723056.620949"],
   },
