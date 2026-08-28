@@ -736,6 +736,16 @@ describe("the record of what this agent said", () => {
     // A THRESHOLD ABOVE THE CONFIRMED DUPLICATE FAILS THE REAL SET, which is what
     // a proposal to raise it has to clear.
     expect(calibrationMisses({ content: 0.97, short: 0.85 }).real).toHaveLength(1);
+    // A ROW WITH NO SCALE IS JUDGED AT BOTH CUTS. Three byte-identical pairs came
+    // from another agent's log with no scale, and half of each pair is deleted, so
+    // nothing here can derive one. A short cut above 1.000 has to fail them.
+    const noScale = CALIBRATION.filter((c) => c.source === "measured" && c.scale === undefined);
+    expect(noScale).toHaveLength(3);
+    expect(calibrationMisses({ content: 0.81, short: 1.01 }).real).toHaveLength(noScale.length);
+    expect(calibrationMisses({ content: 0.81, short: 1.01 }).real.join(" ")).toContain("unrecorded scale");
+    // AND EQUAL HASHES ARE WHAT SHOWS THE IDENTITY. The score reads 1.000 for a
+    // reword that shares every content word too.
+    expect(noScale.every((c) => c.score === 1 && c.sha![0] === c.sha![1])).toBe(true);
     // And one below the highest wanted pair fails it from the other side.
     expect(calibrationMisses({ content: 0.79, short: 0.85 }).real).toHaveLength(1);
   });

@@ -2398,7 +2398,7 @@ async function cmdRewrites(argv: string[], io: Io): Promise<number> {
         continue;
       }
       const again = pairScore(allWords(first.text), allWords(second.text));
-      const moved = Math.abs(again.overlap - row.score) > 0.005 || again.scale !== row.scale;
+      const moved = Math.abs(again.overlap - row.score) > 0.005 || (row.scale !== undefined && again.scale !== row.scale);
       if (moved) drifted += 1;
       // THE HASH IS CHECKED HERE, and this line is what says which text it is a
       // hash of. An agent recorded these from their wake files and another agent

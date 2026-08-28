@@ -458,7 +458,14 @@ export function contentWords(text: string): string[] {
 export const CALIBRATION: Array<{
   what: string;
   measuredBy: string;
-  scale: "content" | "short";
+  /** Which of the two cuts the pair is judged against, when somebody measured it.
+   *
+   *  A ROW WITHOUT ONE IS JUDGED AT BOTH. Three byte-identical pairs arrived from
+   *  another agent's log as a channel, two timestamps, a score and a hash, with no
+   *  scale, and half of each pair is deleted from Slack so nothing here can derive
+   *  it. Writing "content" in that gap would record a measurement nobody took,
+   *  which is the error this table exists to stop. */
+  scale?: "content" | "short";
   score: number;
   label: "duplicate" | "wanted";
   /** The channel the two messages were sent in. A ts is unique inside one
@@ -548,6 +555,44 @@ export const CALIBRATION: Array<{
   { what: "an addendum to a one-line report", measuredBy: "scramble-dev", source: "synthetic", scale: "short", score: 0.571, label: "wanted" },
   { what: "two unrelated one-liners", measuredBy: "scramble-dev", source: "synthetic", scale: "short", score: 0.5, label: "wanted" },
   {
+    // BYTE-IDENTICAL, WHICH THE SCORE ALONE CANNOT SHOW. A 1.000 and a heavy
+    // reword that happens to share every content word read the same in this
+    // column; the two hashes being equal is what separates them. Half of each
+    // pair was deleted by its sender after the duplicate report, so these rows
+    // stand on the log of the agent who read them and carry no scale.
+    what: "one report sent twice unchanged, 22 seconds apart",
+    measuredBy: "model-failure-research, from peer-metrics's sends",
+    source: "measured",
+    score: 1,
+    label: "duplicate",
+    channel: "scramble-dev",
+    gone: true,
+    sha: ["721e6b2fff34f1d3", "721e6b2fff34f1d3"],
+    ts: ["1787715753.687609", "1787715776.111169"],
+  },
+  {
+    what: "one report sent twice unchanged, 19 seconds apart",
+    measuredBy: "model-failure-research, from peer-metrics's sends",
+    source: "measured",
+    score: 1,
+    label: "duplicate",
+    channel: "scramble-dev",
+    gone: true,
+    sha: ["30cd746759f7fc9e", "30cd746759f7fc9e"],
+    ts: ["1787715959.589289", "1787715978.816959"],
+  },
+  {
+    what: "one report sent twice unchanged, 26 seconds apart",
+    measuredBy: "model-failure-research, from peer-metrics's sends",
+    source: "measured",
+    score: 1,
+    label: "duplicate",
+    channel: "scramble-dev",
+    gone: true,
+    sha: ["620a3f0723c55e64", "620a3f0723c55e64"],
+    ts: ["1787760243.492319", "1787760270.208519"],
+  },
+  {
     // 0.285, AND THIS ROW SAID 0.125 UNTIL `--calibrate` READ THE MESSAGES. My
     // number came from Chinese text I typed to approximate them, recorded as a
     // measurement of the pair. Two agents ran the re-measure on its first day and
@@ -577,11 +622,13 @@ export function calibrationMisses(threshold: { content: number; short: number })
   synthetic: string[];
 } {
   const wrong = CALIBRATION.filter((c) => {
-    const cut = c.scale === "short" ? threshold.short : threshold.content;
-    return c.label === "duplicate" ? c.score < cut : c.score >= cut;
+    // A SCALE-LESS ROW CONSTRAINS BOTH NUMBERS, since either cut may be the one
+    // that judges it.
+    const cuts = c.scale === undefined ? [threshold.content, threshold.short] : [c.scale === "short" ? threshold.short : threshold.content];
+    return cuts.some((cut) => (c.label === "duplicate" ? c.score < cut : c.score >= cut));
   }).map((c) => ({
     real: c.source === "measured",
-    line: `${c.label} at ${c.score} on the ${c.scale} scale: ${c.what} (${c.measuredBy})`,
+    line: `${c.label} at ${c.score} on the ${c.scale ?? "unrecorded"} scale: ${c.what} (${c.measuredBy})`,
   }));
   return {
     real: wrong.filter((w) => w.real).map((w) => w.line),
