@@ -10,16 +10,20 @@ import { KNOWN_ENV, unknownEnvNote, hashVerdict, textHash, differenceLine, autoK
 import { SCOPE_NAMES, BOT_EVENT_NAMES } from "../src/app-manifest";
 import { readTierBlock } from "../src/rewrite";
 
-/** The register block as the SHIPPED file holds it. A test that copies the
- *  wording fails the day the operator rewords the file, and says nothing about
- *  whether the send reached the model with it. */
+/**
+ *  The register block contains the text as the `SHIPPED` file holds it. A test
+ *  that copies the wording fails the day the operator rewords the file, and says
+ *  nothing about whether the send reached the model with it.
+ */
 function shippedRegister(tier: string): string {
   const r = readTierBlock(join(import.meta.dir, "..", "src"), tier);
   if (!r.ok) throw new Error(r.why);
   return r.text;
 }
 
-/** The prompt out of a captured Gemini request body. */
+/**
+ *  The prompt comes from a captured Gemini request body.
+ */
 function promptText(body: string): string {
   const parsed = JSON.parse(body) as { contents?: { parts?: { text?: string }[] }[] };
   return String(parsed.contents?.[0]?.parts?.[0]?.text ?? "");
@@ -47,10 +51,11 @@ function msg(seq: number | string, from: string, text: string, mentions: string[
 
 function ndjs(lines: unknown[], mode: "close" | "error" = "close"): Response {
   const enc = new TextEncoder();
-  // Two-phase pull: the first pull delivers the lines; the second ends the
-  // stream (close -> clean stop, error -> dropped connection). Erroring a
-  // stream discards anything enqueued in the same pull, so the terminate
-  // must be a separate pull to guarantee the lines are read first.
+  // A pull operation runs in two phases. The first pull delivers the lines, and the
+  // second pull ends the stream. A close stops the stream cleanly, whereas an error
+  // drops the connection. Erroring a stream discards anything enqueued in the same
+  // pull, so the termination must occur in a separate pull to guarantee the lines
+  // are read first.
   let phase = 0;
   const body = new ReadableStream<Uint8Array>({
     pull(controller) {
@@ -94,20 +99,20 @@ function stubIo(cwd: string, fetch: Io["fetch"]): { io: Io; writes: string[]; er
 }
 
 describe("an override that misses is REPORTED", () => {
-  // An agent pointed a check at a copy of a file with `SCRAMBLE_CONFIG`, which
-  // nothing reads. The command read the production file, answered `damaged: 0`,
-  // and that answer was true of the file it read. They nearly filed a bug saying
-  // the field did not work, and reading `slackConfigPath` is what stopped them.
-  // An override that misses reads exactly like a clean result.
+  // An agent targeted a file copy for a check using `SCRAMBLE_CONFIG`, which
+  // nothing reads. The command read the production file and returned `damaged: 0`,
+  // and that result accurately described the inspected file. The agent nearly filed
+  // a bug stating that the field did not work, and reading `slackConfigPath` is what
+  // stopped them. An override that misses appears identical to a clean result.
   test("a SCRAMBLE_ name this build never reads is named, with the nearest one it does", () => {
     expect(unknownEnvNote(["SCRAMBLE_CONFIG"])).toContain("SCRAMBLE_CONFIG is set and this build reads no such name");
     expect(unknownEnvNote(["SCRAMBLE_CONFIG"])).toContain("Did you mean SCRAMBLE_SLACK_CONFIG?");
     expect(unknownEnvNote(["SCRAMBLE_KEY"])).toContain("Did you mean SCRAMBLE_REWRITE_KEY?");
-    // Every name this build reads stays quiet, and so does the rest of the
-    // environment.
+    // This build reads every name silently, and the rest of the environment stays
+    // silent.
     expect(unknownEnvNote(KNOWN_ENV)).toBe("");
     expect(unknownEnvNote(["HOME", "PATH", "CLAUDE_CODE_SESSION_ID"])).toBe("");
-    // Several at once, sorted, one line each.
+    // The output lists several items at once in sorted order, with one item per line.
     expect(unknownEnvNote(["SCRAMBLE_ZZZ", "SCRAMBLE_AAA"]).split("\n")).toHaveLength(2);
     expect(unknownEnvNote(["SCRAMBLE_ZZZ", "SCRAMBLE_AAA"]).split("\n")[0]).toContain("SCRAMBLE_AAA");
   });
@@ -115,12 +120,12 @@ describe("an override that misses is REPORTED", () => {
   test("the note reaches stderr on any verb, and the verb still runs", async () => {
     const cwd = scratchDir("env-typo");
     const { io, writes, errs } = stubIo(cwd, async () => new Response("{}", { status: 200 }));
-    // `version` exits 1 from a checkout, which is its own signal; what matters
-    // here is that the note reached stderr and the verb still answered.
+    // `version` exits 1 from a checkout as its own signal. The note reached stderr,
+    // and the verb still answered.
     await main(["version"], { ...io, envNames: () => ["SCRAMBLE_CONFIG", "HOME"] });
     expect(errs.join(" ")).toContain("SCRAMBLE_CONFIG is set");
     expect(writes.join(" ")).toContain("scramble");
-    // A build with no way to list its environment stays silent.
+    // A build stays silent when it has no way to list its environment.
     const quiet = stubIo(cwd, async () => new Response("{}", { status: 200 }));
     await main(["version"], quiet.io);
     expect(quiet.errs.join(" ")).not.toContain("reads no such name");
@@ -135,26 +140,27 @@ describe("config resolution", () => {
       join(cwd, ".scramble", "config.json"),
       JSON.stringify({ url: "http://config:9", token: "cfgtok" }),
     );
-    // (a) config wins over localhost default when neither env nor flag present
+    // (a) The configuration value overrides the default localhost setting when
+    // neither an environment variable nor a flag is present.
     const a = stubIo(cwd, async (u) => new Response("[]", { status: 200 }));
     await main(["history", "general"], a.io);
     expect(a.urls[0]).toContain("http://config:9");
-    // (b) env wins over config
+    // (b) Environment variables take precedence over configuration settings.
     const b = stubIo(cwd, async (u) => new Response("[]", { status: 200 }));
     b.io.env = (n) => (n === "SCRAMBLE_URL" ? "http://env:8" : undefined);
     await main(["history", "general"], b.io);
     expect(b.urls[0]).toContain("http://env:8");
-    // (c) --url wins over env
+    // The `--url` flag takes precedence over the environment variable.
     const c = stubIo(cwd, async (u) => new Response("[]", { status: 200 }));
     c.io.env = (n) => (n === "SCRAMBLE_URL" ? "http://env:8" : undefined);
     await main(["history", "general", "--url", "http://flag:1"], c.io);
     expect(c.urls[0]).toContain("http://flag:1");
-    // (d) localhost default when nothing configured
+    // (d) The system defaults to localhost when nothing is configured.
     const bare = scratchDir("bare");
     const dres = stubIo(bare, async (u) => new Response("[]", { status: 200 }));
     await main(["history", "general"], dres.io);
     expect(dres.urls[0]).toContain("http://127.0.0.1:7737");
-    // (e) --token override produces a bearer header
+    // The `--token` override produces a bearer header.
     const e = stubIo(cwd, async (u, init) => {
       expect((init?.headers as Record<string, string>)?.authorization).toBe("Bearer flagtok");
       return new Response("[]", { status: 200 });
@@ -179,7 +185,8 @@ describe("config resolution", () => {
     const cwd = scratchDir("cfg2");
     mkdirSync(join(cwd, ".scramble"), { recursive: true });
     writeFileSync(join(cwd, ".scramble", "config.json"), JSON.stringify({ url: 42, token: true }));
-    // env provides the real url when config fields are the wrong type
+    // The environment provides the real URL when configuration fields contain the
+    // wrong type.
     const s = stubIo(cwd, async (u) => new Response("[]", { status: 200 }));
     s.io.env = (n) => (n === "SCRAMBLE_URL" ? "http://env:7" : undefined);
     await main(["history", "general"], s.io);
@@ -191,7 +198,7 @@ describe("post", () => {
   test("posts and prints the crossings as one JSON line each", async () => {
     const cwd = scratchDir("post");
     const handler = createHandler(createStore(scratchDir("st1")));
-    // seed a crossing from bob
+    // The operator seeds a crossing from Bob.
     await handler(
       new Request("http://x/channels/general", {
         method: "POST",
@@ -247,7 +254,7 @@ describe("listen", () => {
     });
     const code = await main(["listen", "--as", "ana"], io);
     expect(code).toBe(0);
-    // resume at the last seen seq
+    // The process resumes at the last seen sequence number.
     expect(seenSince).toEqual([0, 5]);
     const lines = writes.map((l) => JSON.parse(l) as { seq: number; mentioned: boolean });
     expect(lines.map((l) => l.seq)).toEqual([5, 7]);
@@ -255,17 +262,17 @@ describe("listen", () => {
   });
 
   test("the SERIALISED shape of a delivery is pinned, since two claims were made against a guess", async () => {
-    // Any filter outside this process reads the serialised line, and two
-    // separate claims were published about what such a filter matches, neither
-    // measured against this serialiser. One said prose quoting
-    // `"mentioned":true` woke four hosts; one measured with Python's
-    // json.dumps, which emits a space after the colon, and nearly reported a
-    // filter as already broken. Both are settled here, executably, so nobody
-    // re-derives the shape in an ad-hoc shell again.
+    // Any filter outside this process reads the serialised line. Two separate claims
+    // were published about what such a filter matches, and neither was measured
+    // against this serialiser. One claim stated that prose quoting `"mentioned":true`
+    // woke four hosts. Another measurement used Python's json.dumps, which emits a
+    // space after the colon, and nearly reported a filter as already broken.
+    // Executable tests settle both cases here, so nobody re-derives the shape in an
+    // ad-hoc shell again.
     //
-    // Postmortems: akrust
+    // Postmortems:
     // `log/postmortems/-published-another-agents-mechanism-as-fact-without-running-it.md`
-    //             akrust `log/postmortems/2026-08-22-control-set-used-a-foreign-serialiser.md`
+    // `log/postmortems/2026-08-22-control-set-used-a-foreign-serialiser.md`
     const cwd = scratchDir("listen-serialised");
     const quoting = 'the filter greps "mentioned":true and that is the defect';
     const { io, writes } = stubIo(cwd, async () =>
@@ -273,32 +280,34 @@ describe("listen", () => {
     );
     expect(await main(["listen", "--as", "ana"], io)).toBe(0);
     const [prose, mention] = writes as [string, string];
-    // NO SPACE AFTER THE COLON. A serialiser that adds one silently stops every
-    // external filter matching, so this test pins the assumption.
+    // Do not include a space after the colon. A serialiser that adds a space silently
+    // prevents every external filter from matching, so this test pins this assumption.
     expect(mention).toContain('"mentioned":true');
     expect(mention).not.toContain('"mentioned": true');
-    // AND PROSE CANNOT FORGE THE FIELD: quoting it in a message body comes back
-    // with the quotes escaped, out of a bare pattern's reach. A pattern carrying
-    // a quote character protects itself; a bare word has nothing to hide behind.
+    // Prose cannot forge the field because quoting it in a message body returns with
+    // the quotes escaped, which places it out of reach of a bare pattern. A pattern
+    // carrying a quote character protects itself. A bare word has nothing to hide
+    // behind.
     expect(prose).toContain('\\"mentioned\\":true');
     expect(prose).not.toContain('"mentioned":true');
   });
 
   test("--addressed filters IN THE LISTENER, and the ledger still sees everything", async () => {
-    // `scripts/inbox.sh` and JOIN.md told every agent to pipe this through `grep
-    // '"mentioned":true'` over the serialised line. That matches only while the serialiser emits no
-    // space after the colon and the field keeps its name: add a space, reorder, rename, and it
-    // stops matching with no error and no exit, so the inbox goes quiet and looks calm. The rule
-    // belongs where the field is computed.
+    // Both `scripts/inbox.sh` and JOIN.md directed agents to pipe serialized lines
+    // through `grep '"mentioned":true'`. This filter matches only while the serializer
+    // emits no space after the colon and keeps the field name. If the serializer adds
+    // a space, reorders fields, or renames the field, the pattern stops matching
+    // without an error and without an exit, so the inbox goes quiet and looks calm.
+    // The rule belongs where the field is computed.
     const cwd = scratchDir("listen-addressed");
     const { io, writes } = stubIo(cwd, async () =>
       ndjs([msg("b1", "bob", "nothing for you"), msg("b2", "bob", "@ana hello", ["ana"])], "close"),
     );
     expect(await main(["listen", "--addressed", "--as", "ana"], io)).toBe(0);
     expect(writes.map((l) => (JSON.parse(l) as { id: string }).id)).toEqual(["idb2"]);
-    // BOTH were recorded: the filter decides what wakes the agent, and never what
-    // the ledger knows, or `trace` would answer "not delivered" for every line
-    // the filter dropped.
+    // The system recorded both lines. The filter determines what wakes the agent,
+    // while the ledger preserves all records, or `trace` would answer "not
+    // delivered" for every line the filter dropped.
     const traced = stubIo(cwd, async () => new Response("{}", { status: 200 }));
     expect(await main(["inbox", "trace", "idb1", "--as", "ana"], traced.io)).toBe(0);
     expect(traced.writes.join(" ")).toContain("WAS delivered to ana");
@@ -376,7 +385,7 @@ describe("next", () => {
   test("exits 64 on timeout with nothing printed", async () => {
     const cwd = scratchDir("next2");
     const { io, writes } = stubIo(cwd, async () => {
-      // a stream that stays open, never delivering a line
+      // A stream stays open and never delivers a line.
       return new Response(
         new ReadableStream<Uint8Array>({
           start() {},
@@ -384,7 +393,8 @@ describe("next", () => {
         { status: 200 },
       );
     });
-    // bare `--timeout` (no value) parses to the 0s default fallback -> immediate 64
+    // A bare `--timeout` flag without a value parses to the 0s default fallback,
+    // which produces an immediate 64.
     const code = await main(["next", "--timeout"], io);
     expect(code).toBe(64);
     expect(writes).toHaveLength(0);
@@ -485,7 +495,7 @@ describe("join", () => {
     const { io, writes, errs } = stubIo(dir, async () => new Response("{}", { status: 200 }));
     const code = await main(["join", "general", "--as", "alice"], io);
     expect(code).toBe(0);
-    // stdout stays JSON-only: the pointer must never appear there
+    // The stdout stream remains JSON-only, and the pointer must never appear there.
     expect(writes).toHaveLength(0);
     expect(errs).toHaveLength(2);
     expect(errs[0]).toContain("JOIN.md");
@@ -500,7 +510,7 @@ describe("join", () => {
     });
     const code = await main(["join", "general", "--as", "bob"], io);
     expect(code).toBe(0);
-    // the scaffolded stub persona was read and sent
+    // The scaffolded stub persona was read and transmitted.
     const stub = readFileSync(join(dir, ".scramble", "persona.md"), "utf8");
     expect(stub.length).toBeGreaterThan(0);
   });
@@ -601,7 +611,8 @@ describe("serve", () => {
     io.env = (n) => (n === "HOME" ? home : undefined);
     let code = await main(["serve"], io);
     expect(code).toBe(0);
-    // HOME present -> survives (the store under $HOME/.scramble is created)
+    // If `HOME` is present, the process survives and creates the store under
+    // `$HOME/.scramble`.
     expect(existsSync(join(home, ".scramble"))).toBe(true);
   });
 
@@ -701,8 +712,8 @@ describe("unknown backend", () => {
     const { io } = stubIo(cwd, (u, init) => handler(new Request(u, init)));
     const local = await main(["post", "general", "hi", "--as", "dev", "--backend", "local"], io);
     expect(local).toBe(0);
-    // slack without a config: reported as a missing-config error, which names
-    // the repair. An unknown-backend rejection would name nothing.
+    // When Slack runs without a configuration, the system reports a missing-config
+    // error that names the repair. An unknown-backend rejection would name nothing.
     const io2 = stubIo(cwd, async () => new Response("[]", { status: 200 })).io;
     const slack = await main(["post", "general", "hi", "--as", "dev", "--backend", "slack"], io2);
     expect(slack).toBe(1);
@@ -710,8 +721,8 @@ describe("unknown backend", () => {
 });
 
 // --- the mirrored raft grammar (message / profile / channel) -------------
-// scramble speaks the same noun-verb grammar as the raft CLI; these keep the
-// old verbs as aliases and cover the mirror's parsing under the local backend.
+// scramble uses the same noun-verb grammar as the raft CLI. The tool preserves
+// the old verbs as aliases and handles mirror parsing under the local backend.
 
 describe("message send (mirrored)", () => {
   test("--target sends the STDIN message and prints crossings", async () => {
@@ -737,15 +748,15 @@ describe("message send (mirrored)", () => {
     io.readStdin = async () => "hi";
     const code = await main(["message", "send", "--target=general", "--as", "ana"], io);
     expect(code).toBe(0);
-    // no crossings, clean exit
+    // The process makes no crossings and exits cleanly.
     expect(writes).toHaveLength(0);
   });
 
   test("a message breaking a language rule is REFUSED before anything is sent", async () => {
-    // The incident: the rules were checked by a separate script the sender ran
-    // first, so piping text straight into `message send` skipped them and
-    // messages went out unlinted for a day. The check moved to the send, and
-    // this asserts the part that matters: the send does not HAPPEN.
+    // A separate script run by the sender previously checked the rules, so piping
+    // text directly into `message send` skipped them and messages went out unlinted
+    // for a day. The check moved into the send, and this asserts that the send does
+    // not happen.
     const cwd = scratchDir("msgsend-lint");
     const { io, errs } = stubIo(cwd, async () => {
       throw new Error("REFUSED means no request is made");
@@ -758,9 +769,10 @@ describe("message send (mirrored)", () => {
   });
 
   test("`post` is not the way around what `message send` enforces", async () => {
-    // The check lives at the choke point both verbs funnel through, so a second
-    // entry point cannot ship unlinted prose. Found while writing up the first
-    // fix: `post <channel> <text>` took the same words and never saw the rules.
+    // The check runs at the common path that both verbs pass through, so a second
+    // entry point cannot ship unlinted prose. This issue was found while writing up
+    // the first fix, when `post <channel> <text>` received the same words and did not
+    // apply the rules.
     const cwd = scratchDir("post-lint");
     const { io, errs } = stubIo(cwd, async () => {
       throw new Error("REFUSED means no request is made");
@@ -815,7 +827,7 @@ describe("message send (mirrored)", () => {
     const msgs = store.read("general");
     expect(msgs).toHaveLength(1);
     expect(msgs[0]!.thread).toBe("1787291684.717739");
-    // through the history verb it prints the thread back
+    // The `history` verb prints the thread back.
     const writes: string[] = [];
     const { io: io2 } = stubIo(cwd, (u, init) => handler(new Request(u, init)));
     io2.write = (l) => writes.push(l);
@@ -859,7 +871,7 @@ describe("message check (local => cursor drain)", () => {
     expect(a.writes.length).toBeGreaterThan(0);
     const cursor = JSON.parse(readFileSync(join(cwd, ".scramble", "cursors", "dev.json"), "utf8"));
     expect(cursor.dev).toBeGreaterThan(0);
-    // second check: nothing new pending, prints nothing, still exits 0
+    // The second check finds nothing new pending, prints nothing, and still exits 0.
     const b = stubIo(cwd, (u, init) => handler(new Request(u, init)));
     const code2 = await main(["message", "check", "--as", "dev"], b.io);
     expect(code2).toBe(0);
@@ -876,10 +888,11 @@ describe("message check (local => cursor drain)", () => {
 });
 
 describe("`--help`, and the agent name that is not a directory", () => {
-  // A remote agent: "`--help` is unknown CLI-wide, and `doctor --help` falls
-  // through to the working directory as the agent name: doctor: no agent
-  // "mbench3d"... From /tmp it says "tmp", from home it says the user name." An
-  // unknown flag turned a directory into an identity.
+  // The `--help` flag is unknown across the CLI. Running `doctor --help` falls
+  // through to the working directory as the agent name: from `mbench3d` the command
+  // reports `doctor: no agent "mbench3d"`, from `/tmp` it reports "tmp", and from
+  // home it reports the user name. An unknown flag turns a directory into an
+  // identity.
   test("--help lists the verbs and exits 0, from any verb", async () => {
     const cwd = scratchDir("help");
     for (const argv of [["--help"], ["doctor", "--help"], ["message", "send", "-h"], []]) {
@@ -893,7 +906,7 @@ describe("`--help`, and the agent name that is not a directory", () => {
   });
 
   test("the help says WHERE the agent name comes from without --as", async () => {
-    // The surprise was the fallback, so the fallback is what the help names.
+    // The fallback behavior was unexpected, so the help text names the fallback.
     const { io, writes } = stubIo(scratchDir("help-as"), async () => new Response("{}", { status: 200 }));
     expect(await main(["--help"], io)).toBe(0);
     expect(writes.join("\n")).toContain("directory's basename");
@@ -901,11 +914,13 @@ describe("`--help`, and the agent name that is not a directory", () => {
 });
 
 describe("`scramble rewrite --document`: a repository document for an outside reader", () => {
-  /** A document with two sections and a fenced block, written the way an engineer
-   *  writes for themselves. */
-  // A REAL SECTION, since the subject guard needs the eight content words a real
-  // one has: the duplicate guard uses the same floor, and a two-word fixture skips
-  // the check it exists to exercise.
+  /**
+   *  An engineer writes a document containing two sections and a fenced block for
+   *  their own use.
+   */
+  // The fixture uses a real section, since the subject guard needs the eight
+  // content words a real section has. The duplicate guard uses the same floor,
+  // and a two-word fixture skips the check it exists to exercise.
   const DOC = [
     "# Title",
     "",
@@ -934,10 +949,10 @@ describe("`scramble rewrite --document`: a repository document for an outside re
   }
 
   test("each section is rewritten and the fenced block survives", async () => {
-    // THE MESSAGE INSTRUCTION WOULD GUT A DOCUMENT: it caps prose at 300 words and
-    // asks the model to drop reasoning, and a design document carries 4000 words of
-    // reasoning by design. This path reads its own instruction and sends one
-    // section per call.
+    // The message instruction would gut a document because it caps prose at 300
+    // words and asks the model to drop reasoning, while a design document carries
+    // 4000 words of reasoning by design. This path reads its own instruction and
+    // sends one section per call.
     const { io, writes, errs, dir } = docIo("doc-ok", (body) =>
       body.includes("## Section")
         ? "## Section\n```bash\necho hi\n```\nThe install writes the committed tree of HEAD into a directory named by its commit."
@@ -951,8 +966,8 @@ describe("`scramble rewrite --document`: a repository document for an outside re
   });
 
   test("`--once` sends one call per section and runs no guard", async () => {
-    // A whole-file call ran past a 300-second ceiling on a 7KB document, so this
-    // mode keeps one call per section and spends nothing on guards.
+    // A single whole-file call exceeded the 300-second limit on a 7KB document, so
+    // this mode runs one call per section and spends nothing on guards.
     const { io, writes, errs, dir } = docIo("doc-once", () => "short prose that carries nothing");
     expect(await main(["rewrite", "--document", "--once", join(dir, "doc.md")], io)).toBe(0);
     expect(writes.join("\n")).toContain("short prose that carries nothing");
@@ -960,8 +975,8 @@ describe("`scramble rewrite --document`: a repository document for an outside re
   });
 
   test("A SECTION THE GUARDS REFUSE KEEPS ITS ORIGINAL TEXT and says so", async () => {
-    // A pass that dropped a section it could not rewrite would hand back a shorter
-    // document that reads as finished.
+    // A pass that drops a section it cannot rewrite returns a shorter document that
+    // reads as finished.
     const { io, writes, errs, dir } = docIo("doc-refused", () => "a replacement that carries none of the input");
     expect(await main(["rewrite", "--document", join(dir, "doc.md")], io)).toBe(0);
     expect(writes.join("\n")).toContain("echo hi");
@@ -1019,9 +1034,10 @@ describe("`scramble rewrite --comments`: the prose of a source file", () => {
   });
 
   test("A REWRITE THAT CHANGES A LINE OF CODE REFUSES THE WHOLE FILE", async () => {
-    // A comment rewrite is prose work, and reflowing a line of code would be a
-    // silent edit to a program. An answer carrying a block terminator closes the
-    // comment early and turns the rest into code, which is the shape this catches.
+    // A comment rewrite modifies prose, and reflowing a line of code would silently
+    // edit a program. An answer that contains a block terminator closes the comment
+    // early and turns the remaining text into code, which is the pattern this check
+    // detects.
     const dir = scratchDir("cmt-code");
     mkdirSync(join(dir, "prompts"), { recursive: true });
     writeFileSync(join(dir, "prompts", "document.md"), "# Document rewrite instruction\nRewrite.\n");
@@ -1063,10 +1079,10 @@ describe("`scramble rewrite --comments`: the prose of a source file", () => {
 });
 
 describe("`scramble version`: which copy is running", () => {
-  // A peer agent: "My scramble executes your working tree. bun link points at
-  // the maintainer's checkout and runs src directly... if you save halfway
-  // through an edit, the syntax error runs inside my listener, and I meet it
-  // before you do." An agent could not tell which scramble it ran.
+  // A peer agent executes the maintainer's working tree because bun link points at
+  // the maintainer's checkout and runs src directly. If an author saves halfway
+  // through an edit, the syntax error runs inside the peer agent's listener before
+  // the author encounters it. An agent could not determine which execution it ran.
   test("an installed copy names its commit", async () => {
     const dir = scratchDir("ver-installed");
     writeFileSync(join(dir, "COMMIT"), "6fe75ff\n");
@@ -1093,8 +1109,8 @@ describe("`scramble version`: which copy is running", () => {
 });
 
 describe("`scramble lint`: the send's rules, pointed at any document", () => {
-  // Operator: "the linter should be individually callable to check other
-  // documents such as lark docs or markdown files."
+  // The linter should be individually callable to check other documents, such as
+  // Lark documents or Markdown files.
   test("a file's hits are reported with the line, and the exit code is nonzero", async () => {
     const cwd = scratchDir("lint-file");
     const f = join(cwd, "doc.md");
@@ -1132,7 +1148,7 @@ describe("`scramble lint`: the send's rules, pointed at any document", () => {
   });
 
   test("a file that cannot be read is a FAILURE, never a silent pass", async () => {
-    // A lint that skips what it cannot open reports clean on a typo.
+    // When a linter skips a file that it cannot open, it reports clean on a typo.
     const cwd = scratchDir("lint-missing");
     const { io, errs } = stubIo(cwd, async () => new Response("{}", { status: 200 }));
     expect(await main(["lint", join(cwd, "nope.md")], io)).toBe(1);
@@ -1141,8 +1157,10 @@ describe("`scramble lint`: the send's rules, pointed at any document", () => {
 });
 
 describe("`inbox pending`: the count of what is owed, per ITEM", () => {
-  /** Drive a real delivery through the local daemon, so the ledger is written by
-   *  the delivery path and never by the test. */
+  /**
+   *  Send a real delivery through the local daemon so that the delivery path writes
+   *  the ledger and the test never writes it.
+   */
   async function deliverOne(cwd: string, text = "@dev why are stale bots created") {
     const handler = createHandler(createStore(scratchDir(`${basename(cwd)}-store`)));
     await handler(
@@ -1158,10 +1176,10 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
   }
 
   test("`inbox trace` answers DELIVERED and ADDRESSED separately, from the ledger", async () => {
-    // Four agents spent grepping a text log for a timestamp because nothing
-    // could answer this. A line that names somebody else is delivered and wakes
-    // nobody, and until the ledger recorded it, its absence and a message that
-    // never arrived were the same output.
+    // Four agents searched a text log for a timestamp because nothing could answer
+    // this. A line that names another recipient is delivered and wakes nobody. Until
+    // the ledger recorded it, its absence and a message that never arrived produced
+    // the same output.
     const cwd = scratchDir("inbox-trace");
     const a = await deliverOne(cwd, "@someoneelse a question for you");
     expect(await main(["message", "check", "--as", "dev"], a.io)).toBe(0);
@@ -1171,20 +1189,20 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     expect(said).toContain("WAS delivered to dev");
     expect(said).toContain("NOT addressed to dev");
     expect(said).toContain("Searched 1 delivered row(s)");
-    // It owes nobody an answer, so it stays out of what is pending.
+    // The request owes no one an answer, so it remains outside the pending queue.
     const c = stubIo(cwd, async () => new Response("{}", { status: 200 }));
     expect(await main(["inbox", "pending", "--as", "dev"], c.io)).toBe(0);
-    // And a message that never arrived reads differently from that one.
+    // A message that did not arrive reads differently from that message.
     const d = stubIo(cwd, async () => new Response("{}", { status: 200 }));
     expect(await main(["inbox", "trace", "999.9", "--as", "dev"], d.io)).toBe(0);
     expect(d.writes.join(" ")).toContain("999.9 was NOT delivered to dev");
   });
 
   test("a reply carrying a FILE closes what it answers, like any other reply", async () => {
-    // The attach path posts through the upload and returned before everything a
-    // send does afterwards, so a reply with a file closed nothing, remembered
-    // nothing and reported nothing. My own ledger caught it: two questions I had
-    // answered with attachments sat open in `inbox pending`.
+    // The attachment path posts through the upload and returns before executing the
+    // actions that follow a standard send, so a reply with a file closed nothing,
+    // recorded nothing, and reported nothing. The ledger detected the issue when two
+    // questions answered with attachments remained open in `inbox pending`.
     const cwd = scratchDir("attach-closes");
     mkdirSync(join(cwd, ".scramble", "inbox"), { recursive: true });
     writeFileSync(
@@ -1218,13 +1236,15 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     expect(
       await main(["message", "send", "--target", "general", "--as", "dev", "--attach", file, "--backend", "slack"], io),
     ).toBe(0);
-    // Closed, and named by the ts of the message the upload posted.
+    // The item is closed and named by the timestamp of the message that the upload
+    // posted.
     const p = stubIo(cwd, async () => new Response("{}", { status: 200 }));
     expect(await main(["inbox", "pending", "--as", "dev"], p.io)).toBe(0);
     const t = stubIo(cwd, async () => new Response("{}", { status: 200 }));
     expect(await main(["inbox", "trace", "9.1", "--as", "dev"], t.io)).toBe(0);
     expect(t.writes.join(" ")).toContain("answered by 77.7");
-    // And remembered, so a reply to it is recognised as owed to this agent.
+    // The system remembers the message, so it recognizes a reply to it as owed to this
+    // agent.
     expect(readFileSync(join(cwd, ".scramble", "sent", "dev.jsonl"), "utf8")).toContain("77.7");
   });
 
@@ -1232,40 +1252,41 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     const cwd = scratchDir("inbox-close");
     const a = await deliverOne(cwd);
     expect(await main(["message", "check", "--as", "dev"], a.io)).toBe(0);
-    // No reason: refused, and the refusal says why the reason exists.
+    // The request is refused without a reason, and the refusal explains why the
+    // reason exists.
     const b = stubIo(cwd, async () => new Response("{}", { status: 200 }));
     expect(await main(["inbox", "close", "m1", "--as", "dev"], b.io)).toBe(1);
     expect(b.errs.join(" ")).toContain("belongs on the record");
-    // And no ids at all is the same refusal.
+    // Providing no identifiers at all results in the same refusal.
     const b2 = stubIo(cwd, async () => new Response("{}", { status: 200 }));
     expect(await main(["inbox", "close", "--why", "x", "--as", "dev"], b2.io)).toBe(1);
     expect(b2.errs.join(" ")).toContain("at least one id");
-    // With one: settled, nothing sent, and pending goes quiet.
+    // With one, the operation settles, sends nothing, and pending goes quiet.
     const c = stubIo(cwd, async () => new Response("{}", { status: 200 }));
     expect(await main(["inbox", "close", "m1", "--why", "sender said no reply needed", "--as", "dev"], c.io)).toBe(0);
     expect(c.writes).toHaveLength(0);
     const d = stubIo(cwd, async () => new Response("{}", { status: 200 }));
     expect(await main(["inbox", "pending", "--as", "dev"], d.io)).toBe(0);
-    // Closing it twice refuses, naming what settled it.
+    // A second close attempt refuses and names what settled it.
     const e = stubIo(cwd, async () => new Response("{}", { status: 200 }));
     expect(await main(["inbox", "close", "m1", "--why", "again", "--as", "dev"], e.io)).toBe(1);
     expect(e.errs.join(" ")).toContain("already answered by closed with no reply");
-    // And an id that is not an open item points at the two commands that explain it.
+    // An id that is not an open item points to the two commands that explain it.
     const f = stubIo(cwd, async () => new Response("{}", { status: 200 }));
     expect(await main(["inbox", "close", "999.9", "--why", "x", "--as", "dev"], f.io)).toBe(1);
     expect(f.errs.join(" ")).toContain("inbox trace 999.9");
   });
 
   test("with a key set, the send rewrites and prints the sender's own words beside it", async () => {
-    // The message ALWAYS goes, and nothing changes silently.
+    // The system always sends the message, and nothing changes silently.
     const cwd = scratchDir("send-rewrite");
     const { io, errs } = stubIo(cwd, async (u) =>
       String(u).includes("generativelanguage")
         ? new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: "the professional line" }] } }] }), { status: 200 })
         : new Response(JSON.stringify({ crossings: [] }), { status: 200 }),
     );
-    // NO FIRST PERSON in the fixture: a rewrite that drops the actor is refused,
-    // and this test is about the clean path.
+    // The fixture contains no first person. The system refuses a rewrite that drops the
+    // actor, and this test evaluates the clean path.
     io.readStdin = async () => "the parser fix shipped";
     const withKey: Io = {
       ...io,
@@ -1278,10 +1299,10 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
   });
 
   test("`--verify` reports what Slack stored, and names a mention that stopped notifying", async () => {
-    // A send's exit code says Slack accepted something. Three agents wrote
-    // their own read-back wrappers today, and one asked me to own this one. It
-    // prints the STORED TEXT WHOLE at that agent's request: a line diff is
-    // useless when the rewriter rephrases throughout.
+    // The exit code from a send command indicates that Slack accepted a message.
+    // Three agents wrote their own read-back wrappers today. This wrapper prints
+    // the complete stored text because a line diff is useless when the rewriter
+    // rephrases throughout.
     const cwd = scratchDir("send-verify");
     const { io, errs } = stubIo(cwd, async (u) => {
       const url = String(u);
@@ -1309,8 +1330,8 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
   });
 
   test("`--verify` on a changed message with every mention alive names them", async () => {
-    // The rewriter rephrases and the mentions survive: the reader wants to see
-    // what the channel holds and that nobody stopped being notified.
+    // The rewriter rephrases the text and preserves mentions because the reader wants
+    // to see what the channel holds and confirm that nobody stopped being notified.
     const cwd = scratchDir("send-verify-kept");
     const { io, errs } = stubIo(cwd, async (u) => {
       const url = String(u);
@@ -1342,7 +1363,7 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     expect(await main(["rewrites"], empty.io)).toBe(0);
     expect(empty.writes.join(" ")).toContain("No sends have met the rewriter");
 
-    // A send that met the rewriter writes a row, and the verb counts it.
+    // A send that passes through the rewriter writes a row, and the verb counts it.
     mkdirSync(join(cwd, ".scramble"), { recursive: true });
     writeFileSync(
       join(cwd, ".scramble", "rewrites.jsonl"),
@@ -1351,17 +1372,18 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     const one = stubIo(cwd, async () => new Response("{}", { status: 200 }));
     expect(await main(["rewrites"], one.io)).toBe(0);
     expect(one.writes.join(" ")).toContain("1 send(s) from dev met the rewriter");
-    // `--as` names one agent's rows out of a file every agent on the host shares.
+    // The `--as` flag selects one agent's rows from a file that every agent on the
+    // host shares.
     const scoped = stubIo(cwd, async () => new Response("{}", { status: 200 }));
     expect(await main(["rewrites", "--as", "someone-else"], scoped.io)).toBe(0);
     expect(scoped.writes.join(" ")).toContain("No sends from someone-else");
   });
 
   test("`rewrites --near` reads the duplicate scores this agent's sends measured", async () => {
-    // The threshold rests on corpus runs three agents did by hand, and an agent
-    // who writes English by the operator's rule cannot produce Chinese samples on
-    // request. They said the tool can gather them, so every send records what it
-    // measured and this reads the pile back.
+    // The threshold rests on corpus runs that three agents performed manually. An
+    // agent that writes English under the operator's rule cannot produce Chinese
+    // samples on request. The tool can gather those samples, so every send records
+    // what it measured, and this process reads the collected data back.
     const cwd = scratchDir("rewrites-near");
     const bare = stubIo(cwd, async () => new Response("{}", { status: 200 }));
     expect(await main(["rewrites", "--near", "--as", "dev"], bare.io)).toBe(0);
@@ -1382,81 +1404,84 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
   });
 
   test("the drift surfaces carry what the last install brought", () => {
-    // THE INSTALLER IS THE ONE AGENT WHO DOES NOT NEED THE LIST. One launcher
-    // serves every agent on a HOME, so an install by any of them moves the rest,
-    // and their only word for it was two shas. An agent read three `git log`
-    // ranges by hand in one day to decide whether a listener was running code that
-    // mattered, and an installed copy has no checkout to read.
+    // The installer is the only agent that does not need the list. One launcher
+    // serves every agent on a HOME, so an install by any of them updates the rest,
+    // and two commit hashes were their only record of the change. An agent read
+    // three `git log` ranges by hand in one day to decide whether a listener was
+    // running code that mattered, and an installed copy has no checkout to read.
     const root = mkdtempSync(join(tmpdir(), "changes-"));
     mkdirSync(join(root, "current", "src"), { recursive: true });
     const bare = async (): Promise<Response> => new Response("{}", { status: 200 });
     const io = (): Io => ({ ...stubIo(root, bare).io, env: (n) => (n === "SCRAMBLE_HOME" ? root : undefined) });
-    // No file at all reads as nothing recorded, and a throw here would take the
-    // advisory down with it.
+    // The system treats a missing file as having nothing recorded, and throwing an
+    // error here would take the advisory down with it.
     expect(installedChanges(io())).toBeUndefined();
     writeFileSync(join(root, "current", "src", "CHANGES"), "from aaa1111\nbbb2222 first thing\nccc3333 second thing\n");
     expect(installedChanges(io())).toEqual({ from: "aaa1111", lines: ["bbb2222 first thing", "ccc3333 second thing"] });
-    // A HEAD LINE THAT DOES NOT NAME THE START is unusable, since the caller
-    // compares that sha against its own to say whether the list is complete.
+    // A header line that does not name the starting SHA is unusable, since the
+    // caller compares that SHA against its own to determine whether the list is
+    // complete.
     writeFileSync(join(root, "current", "src", "CHANGES"), "bbb2222 first thing\n");
     expect(installedChanges(io())).toBeUndefined();
-    // With no root to look in, there is nothing to read.
+    // The process finds nothing to read when it has no root directory to search.
     expect(installedChanges({ ...stubIo(root, bare).io, env: () => undefined })).toBeUndefined();
 
     const changes = { from: "aaa1111", lines: ["bbb2222 first thing", "ccc3333 second thing"] };
-    // A READER AT THE HOP'S START gets the list and no warning.
+    // A reader at the start of the hop receives the list and receives no warning.
     expect(changeBlock("aaa1111", changes)).toContain("2 commit(s) came with it, oldest first: bbb2222 first thing; ccc3333 second thing");
     expect(changeBlock("aaa1111", changes)).not.toContain("most recent install");
-    // A READER FURTHER BEHIND is told the list covers one hop.
+    // A reader that lags further behind is told that the list covers one hop.
     expect(changeBlock("zzz9999", changes)).toContain("covers the most recent install, which started at aaa1111, and you run zzz9999");
-    // Nothing recorded adds nothing to the advisory.
+    // An empty record adds nothing to the advisory.
     expect(changeBlock("aaa1111", undefined)).toBe("");
     expect(changeBlock("aaa1111", { from: "aaa1111", lines: [] })).toBe("");
     rmSync(root, { recursive: true, force: true });
   });
 
   test("the emitter keys every line of a multi-line diagnostic", () => {
-    // THREE AGENTS FILTERED THIS OUTPUT IN ONE NIGHT and each lost the lines under
-    // a `verify:` line: two greps anchored on the key, one `tail -4`. I then keyed
-    // that one block by hand and left three bare, and an agent running the commands
-    // found two of them within the hour. The emitter does it now, so a block written
-    // tomorrow arrives keyed.
+    // Three agents filtered this output in one night, and each lost the lines under
+    // a `verify:` line: two filters used greps anchored on the key, and one used
+    // `tail -4`. Manual keying then keyed that one block and left three bare, and an
+    // agent running the commands found two of them within the hour. The emitter keys
+    // the output now, so a block written tomorrow arrives keyed.
     const out = autoKey("verify: general holds text that DIFFERS.\nFirst line that differs (2):\n  sent:   a\n  stored: b");
     expect(out.split("\n").every((l) => l.startsWith("verify: "))).toBe(true);
     expect(out).toContain("verify:   sent:   a");
-    // A SINGLE LINE IS UNTOUCHED, and so is a block whose first line declares no key.
+    // A single line remains untouched, and a block remains untouched when its first
+    // line declares no key.
     expect(autoKey("verify: one line only")).toBe("verify: one line only");
     expect(autoKey("no key here\nand a second line")).toBe("no key here\nand a second line");
-    // The key comes from the first line, whatever it is.
+    // The first line supplies the key, regardless of what it contains.
     expect(autoKey("crossed: two\n  a")).toBe("crossed: two\ncrossed:   a");
     expect(autoKey("pending: one\n  a")).toBe("pending: one\npending:   a");
-    // A JSON LINE PASSES THROUGH BYTE FOR BYTE, since stdout carries records as
-    // well as diagnostics and a record is read by a program.
+    // A JSON line passes through byte for byte, since stdout carries records as well
+    // as diagnostics and a program reads a record.
     const rec = '{"id":"1.0","text":"a: b\nc"}';
     expect(autoKey(rec)).toBe(rec);
   });
 
   test("the verify names the first line that differs", () => {
-    // I READ "DIFFERS" AND THE WHOLE STORED TEXT, and found the cause with a diff
-    // I wrote by hand: Slack had auto-linked a bare `users.info`. The guard says
-    // which line now.
+    // A manual diff between the full stored text and the "DIFFERS" output showed
+    // the cause: Slack had auto-linked a bare `users.info`. The guard now reports
+    // which line.
     const out = differenceLine("one\ntwo users.info\nthree", "one\ntwo <http://users.info|users.info>\nthree");
     expect(out).toContain("First line that differs (2)");
     expect(out).toContain("sent:   two users.info");
     expect(out).toContain("stored: two <http://users.info|users.info>");
-    // A MISSING LINE SAYS SO, in place of an empty match that reads as agreement.
+    // A missing line explicitly reports that it is missing, so an empty match does not
+    // read as agreement.
     expect(differenceLine("one\ntwo", "one")).toContain("stored: (no such line)");
     expect(differenceLine("one", "one\ntwo")).toContain("sent:   (no such line)");
-    // Identical texts name nothing, so the caller prints nothing extra.
+    // Identical texts identify nothing, so the caller prints no additional output.
     expect(differenceLine("same", "same")).toBe("");
   });
 
   test("a recorded hash is compared against the read-back and never called failure", () => {
-    // THE FORMS ARE DIFFERENT AND THE TOOL SAYS SO. I wrote in a channel that a
-    // comparison of the two forms would mismatch on every row, and my own run on
-    // the live table matched three of its four readable messages. The verdict
-    // belongs to a function that reports, since a mismatch means the text was
-    // rendered differently and never that the row is wrong.
+    // The two forms differ, and the tool reports the difference. A comparison of
+    // the two forms was expected to mismatch on every row, and a run on the live
+    // table matched three of its four readable messages. The reporting function
+    // provides the verdict, since a mismatch means the text was rendered differently
+    // and never that the row is wrong.
     expect(hashVerdict(["aa", "bb"], ["aa", "bb"])).toBe("matches");
     expect(hashVerdict(["aa", "bb"], ["aa", "cc"])).toBe("differs");
     expect(hashVerdict(undefined, ["aa", "bb"])).toBeUndefined();
@@ -1465,20 +1490,21 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
   });
 
   test("`rewrites --calibrate` re-measures every measured row from Slack", async () => {
-    // An agent read the calibration table, ran the same function I run, and named
-    // the flaw: two readers calling one function on one table measure the
-    // readers. The table held my synthetic pair labelled as the founding incident
-    // for an hour, and any number of agreeing readers would have reproduced that.
+    // An agent read the calibration table, executed the reference function, and
+    // identified the flaw. Two readers that execute one function on a single table
+    // measure the readers themselves. The table held a synthetic pair labeled as the
+    // founding incident for an hour, and any number of agreeing readers would have
+    // reproduced that outcome.
     const cwd = scratchDir("calibrate");
-    // THE ROWS NAME THEIR OWN CHANNELS, so the config has to map them for the
-    // read to resolve at all.
+    // Every row specifies its own channel, so the configuration must map these
+    // channels for the read operation to resolve.
     writeSlackConfig(cwd, {
       appToken: "xapp-1",
       token: "xoxb-1",
       channels: { general: "C1", "scramble-dev": "C2", "scramble-partner-dev": "C3" },
       agents: { dev: { token: "T", handle: "dev" } },
     });
-    // Slack answers with two messages that score nothing like the recorded rows,
+    // Slack answers with two messages that produce scores unlike the recorded rows,
     // so every readable row must report as drifted.
     const { io, writes, errs } = stubIo(cwd, async (u) => {
       if (String(u).includes("conversations.history"))
@@ -1491,15 +1517,16 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     expect(await main(["rewrites", "--calibrate", "--as", "dev", "--backend", "slack"], io)).toBe(1);
     const rows = writes.map((l) => JSON.parse(l) as { calibrate: string });
     expect(rows.length).toBeGreaterThan(0);
-    // A ROW WHOSE MESSAGES ARE GONE reports as gone, and never as drift: the
-    // first message of one pair was deleted after the report that named it, and
-    // calling that drift would cry wolf on every run from here on.
+    // The system reports a row whose messages are gone as gone. It never reports that
+    // row as drift, because the first message of one pair was deleted after the
+    // report that named it, and calling that drift would raise false alarms on every
+    // run from here on.
     expect(rows.some((r) => r.calibrate === "gone")).toBe(true);
     expect(rows.every((r) => ["drifted", "unreadable", "gone"].includes(r.calibrate))).toBe(true);
     expect(errs.join(" ")).toContain("score something else now");
-    // AND THE HASHES ARE COMPARED AND PRINTED. Slack has lost four of the five
-    // source messages behind these rows, so the recorded hash is what an agent
-    // holding the delivery checks its copy against.
+    // The system compares and prints the hashes. Slack has lost four of the five
+    // source messages behind these rows, so an agent holding the delivery checks its
+    // copy against the recorded hash.
     expect(errs.join(" ")).toContain("read back to a different hash");
     const hashed = writes
       .map((l) => JSON.parse(l) as { hashes?: string; sha?: { recorded?: string[]; read?: string[] } })
@@ -1508,23 +1535,23 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     expect(hashed.every((r) => r.hashes === "differs")).toBe(true);
     expect(hashed.every((r) => r.sha?.read?.length === 2 && r.sha?.recorded?.length === 2)).toBe(true);
 
-    // EACH ROW NAMES ITS OWN CHANNEL, so the command runs without `--target` and
-    // reports which channel it searched. A ts is unique inside one conversation,
-    // and a search in the wrong channel answers "no such message" for a message
-    // that exists.
+    // Each row names its own channel, so the command runs without `--target` and
+    // reports which channel it searched. A timestamp is unique within a single
+    // conversation, and searching the wrong channel returns "no such message" for a
+    // message that exists.
     const bare = stubIo(cwd, async () => new Response(JSON.stringify({ ok: true, messages: [] }), { status: 200 }));
     await main(["rewrites", "--calibrate", "--as", "dev", "--backend", "slack"], bare.io);
     const named = bare.writes.map((l) => JSON.parse(l) as { calibrate: string; channel?: string });
     expect(named.length).toBeGreaterThan(0);
-    // The gone row carries no channel read, since nothing is fetched for it.
+    // A deleted row carries no channel read, since the system fetches nothing for it.
     const read = named.filter((r) => r.calibrate === "unreadable");
     expect(read.length).toBeGreaterThan(0);
     expect(read.every((r) => typeof r.channel === "string")).toBe(true);
     expect(named.every((r) => r.calibrate === "unreadable" || r.calibrate === "gone")).toBe(true);
 
-    // A ROW SLACK WILL NOT SHOW READS AS UNREADABLE, and never as agreement. The
-    // pairs sit in channels this agent may not be in, and a silent skip would
-    // turn an unread row into a passing one.
+    // The system treats a row that Slack will not show as unreadable, and never
+    // records it as agreement. The pairs sit in channels this agent may not be in,
+    // and a silent skip would turn an unread row into a passing one.
     const blind = stubIo(cwd, async () => new Response(JSON.stringify({ ok: true, messages: [] }), { status: 200 }));
     expect(
       await main(["rewrites", "--calibrate", "--target", "general", "--as", "dev", "--backend", "slack"], blind.io),
@@ -1536,9 +1563,9 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     expect(missing.length).toBeGreaterThan(0);
     expect(missing[0]!.why).toContain("slack has no message");
 
-    // AND WITH NO SLACK CONFIG AT ALL it says so, with no row reported. The
-    // backend is what reads Slack, so a missing config stops the run before any
-    // row is fetched.
+    // When no Slack configuration is present, the command reports the missing
+    // configuration and returns no rows. The backend reads Slack, so a missing
+    // configuration stops the run before it fetches any row.
     const noCfg = stubIo(scratchDir("calibrate-noconfig"), async () => new Response("{}", { status: 200 }));
     expect(
       await main(["rewrites", "--calibrate", "--target", "general", "--as", "dev", "--backend", "slack"], noCfg.io),
@@ -1547,7 +1574,7 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
   });
 
   test("an unwritable rewrite record REPORTS itself and the message still goes", async () => {
-    // The record is accounting; the message is the point.
+    // The record provides accounting, and the message is the point.
     const cwd = scratchDir("rewrites-locked");
     const { io, errs } = stubIo(cwd, async (u) => {
       const url = String(u);
@@ -1563,7 +1590,8 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
       channels: { general: "C1" },
       agents: { dev: { token: "T", handle: "dev" } },
     });
-    // A DIRECTORY where the record belongs: the append throws.
+    // The append operation throws when a directory occupies the path where the record
+    // belongs.
     mkdirSync(join(cwd, ".scramble", "rewrites.jsonl"), { recursive: true });
     io.readStdin = async () => "the line as drafted";
     const withKey: Io = {
@@ -1576,9 +1604,9 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
   });
 
   test("a rewritten send verifies WITHOUT the flag, and --no-verify skips it", async () => {
-    // A rewritten send posts text the author never saw, so the question applies
-    // to every one of them. Three agents wrote their own read-back wrapper for
-    // exactly that.
+    // A rewritten send posts text that the author never saw, so the question applies
+    // to every rewritten send. Three agents wrote their own read-back wrappers for
+    // this reason.
     const cwd = scratchDir("send-verify-default");
     const seen: string[] = [];
     const responder = async (u: string): Promise<Response> => {
@@ -1607,8 +1635,9 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     expect(await main(["message", "send", "--target", "general", "--as", "dev", "--backend", "slack"], withKey)).toBe(0);
     expect(errs.join(" ")).toContain("holds exactly what was sent");
 
-    // And --no-verify skips the read-back entirely. A DIFFERENT draft, because
-    // the same one into the same channel is refused as a duplicate.
+    // The `--no-verify` flag skips the read-back entirely. The operator must submit a
+    // different draft, because the same draft sent to the same channel is refused as a
+    // duplicate.
     const b = stubIo(cwd, async (u) => responder(String(u)));
     b.io.readStdin = async () => "a second line, drafted separately";
     const skipping: Io = {
@@ -1622,15 +1651,16 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
 
   test("a BROADCAST verifies clean, in either form the author typed", async () => {
     // The read-back renders `<!channel>` as `@channel`, so a draft carrying the
-    // entity compared unequal and verify printed DIFFERS over a message Slack
-    // held exactly, with the room notified. An agent then read that report as
-    // proof the broadcast was inert. Both sides compare in the reader's form.
+    // entity compared unequal, and verification printed DIFFERS for a message Slack
+    // held exactly while notifying the room. An agent then read that report as proof
+    // the broadcast was inert. The verification compares both sides in the reader's
+    // form.
     const cwd = scratchDir("send-verify-broadcast");
     const { io, errs } = stubIo(cwd, async (u) => {
       const url = String(u);
       if (url.includes("chat.postMessage")) return new Response(JSON.stringify({ ok: true, ts: "44.4", message: {} }), { status: 200 });
       if (url.includes("conversations.history"))
-        // WHAT SLACK STORES for a broadcast, which is the entity.
+        // Slack stores the data for a broadcast, which is the entity.
         return new Response(JSON.stringify({ ok: true, messages: [{ ts: "44.4", text: "<!channel> install it" }] }), { status: 200 });
       return new Response(JSON.stringify({ ok: true, messages: [] }), { status: 200 });
     });
@@ -1644,21 +1674,21 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     expect(await main(["message", "send", "--target", "general", "--as", "dev", "--verify", "--backend", "slack"], io)).toBe(0);
     expect(errs.join(" ")).toContain("holds exactly what was sent");
     expect(errs.join(" ")).not.toContain("DIFFERS");
-    // The broadcast counts as a live mention, so nothing reports it as silent.
+    // The broadcast registers as a live mention, so no component reports it as silent.
     expect(errs.join(" ")).not.toContain("notified NOBODY");
   });
 
   test("a QUOTED entity verifies clean, with Slack's escape undone on both sides", async () => {
-    // A draft quoting the token in a fence goes to Slack escaped, on purpose, so
-    // it notifies nobody. The read-back undoes the escape, and this line then
-    // reported DIFFERS over a message Slack held exactly as intended, which is
-    // the second false alarm this comparison produced in one hour.
+    // The system intentionally escapes a draft quoting the token in a fence before
+    // sending it to Slack, so it notifies nobody. The read-back undoes the escape, and
+    // this line then reported DIFFERS for a message Slack held exactly as intended,
+    // which is the second false alarm this comparison produced in one hour.
     const cwd = scratchDir("send-verify-quoted-entity");
     const { io, errs } = stubIo(cwd, async (u) => {
       const url = String(u);
       if (url.includes("chat.postMessage")) return new Response(JSON.stringify({ ok: true, ts: "55.5", message: {} }), { status: 200 });
       if (url.includes("conversations.history"))
-        // WHAT SLACK STORES for a defused entity: both brackets escaped.
+        // Slack stores both brackets escaped for a defused entity.
         return new Response(
           JSON.stringify({ ok: true, messages: [{ ts: "55.5", text: "```\n&lt;!channel&gt; quoted\n```" }] }),
           { status: 200 },
@@ -1678,31 +1708,31 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
   });
 
   test("a MISTYPED CITATION is reported, and a correct one says nothing", async () => {
-    // An agent cited 1787656658.009669 for a line Slack holds at
-    // 1787656658.009699, hand-copied from a notification preview, and the reader
-    // spent a search finding what was meant. Four investigations in one day
-    // turned on an exact ts. The detector is the whole second: a correct
-    // citation, and a ts belonging to another channel, trip nothing.
+    // An agent hand-copied a value from a notification preview and cited
+    // 1787656658.009669 for a line that Slack holds at 1787656658.009699, so the
+    // reader spent a search finding the referenced message. Four investigations in
+    // one day turned on an exact timestamp. The detector evaluates the whole second:
+    // a correct citation, and a timestamp belonging to another channel, trip nothing.
     const cwd = scratchDir("send-cite-check");
     const asked: string[] = [];
     const responder = async (u: string | URL): Promise<Response> => {
       const url = String(u);
       asked.push(url);
       if (url.includes("chat.postMessage")) return new Response(JSON.stringify({ ok: true, ts: "99.9", message: {} }), { status: 200 });
-      // The window around 1787656658: Slack holds the ...699 line, written by a
-      // named user, which the note reports.
+      // Slack preserves the line ending in 699 within the window around 1787656658. A
+      // named user wrote this entry, which the note reports.
       if (url.includes("oldest=1787656658.000000"))
         return new Response(
           JSON.stringify({ ok: true, messages: [{ ts: "1787656658.009699", username: "andrew" }] }),
           { status: 200 },
         );
-      // And the exact citation in the second window, also with an author.
+      // The second window displays the exact citation and includes the author.
       if (url.includes("oldest=1787656659.000000"))
         return new Response(
           JSON.stringify({ ok: true, messages: [{ ts: "1787656659.000001", username: "andrew" }] }),
           { status: 200 },
         );
-      // The window around a ts from some other channel: nothing here.
+      // The time window around a timestamp from another channel contains no data.
       if (url.includes("oldest=1700000000.000000")) return new Response(JSON.stringify({ ok: true, messages: [] }), { status: 200 });
       if (url.includes("conversations.history"))
         return new Response(
@@ -1725,18 +1755,19 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     expect(await main(["message", "send", "--target", "general", "--as", "dev", "--verify", "--backend", "slack"], io)).toBe(0);
     const said = errs.join("\n");
     expect(said).toContain("cite: general holds no message at 1787656658.009669, and it holds 1787656658.009699");
-    // A CORRECT CITATION NAMES ITS AUTHOR. I attributed an incident to the wrong
-    // agent while pointing at its ts, and the agent I named corrected me.
+    // A correct citation names its author. An operator attributed an incident to the
+    // wrong agent while citing its timestamp, and the named agent corrected the
+    // attribution.
     expect(said).toContain("cite: 1787656658.009699 in general was written by");
-    // The ts with nothing in its second is a citation from elsewhere, and it is
-    // left alone. A check that fires on a correct citation is one agents skip.
+    // A timestamp with nothing in its second field is an external citation, and the
+    // system leaves it alone. Agents skip a check that fires on a correct citation.
     expect(said).not.toContain("1700000000.000001, and it holds");
-    // The message still went out, and the note never changes that.
+    // The message was still sent, and the note never alters that fact.
     expect(said).toContain("posted: general at ts 99.9");
 
-    // THE CAP SAYS WHAT IT DROPPED. Seven citations, six checked, and the note
-    // names the one it never looked at. A bound nobody prints reads as full
-    // coverage.
+    // The cap states what it dropped. The process checked six of seven citations,
+    // and the note names the one it never looked at. A bound that nobody prints
+    // reads as full coverage.
     const many = stubIo(cwd, async (u) => responder(u));
     const seven = [
       "1700000001.000001",
@@ -1755,9 +1786,9 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
   });
 
   test("`--verify` reads a THREAD REPLY, which history never returns", async () => {
-    // Measured by the agent it happened to: verify answered "slack has no
-    // message at <ts>" for its own threaded reply, while `message read` found
-    // that ts with its text intact. A reply is absent from
+    // The agent that experienced the issue measured it directly. The verify check
+    // answered "slack has no message at <ts>" for its own threaded reply, while
+    // `message read` found that ts with its text intact. A reply is absent from
     // conversations.history and present in conversations.replies on its root.
     const cwd = scratchDir("send-verify-thread");
     const asked: string[] = [];
@@ -1771,7 +1802,7 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
           JSON.stringify({ ok: true, messages: [{ ts: "44.4", text: "the root" }, { ts: "55.5", text: "the reply as stored" }] }),
           { status: 200 },
         );
-      // history answers with nothing, as Slack does for a reply.
+      // The history request returns nothing, as Slack does for a reply.
       return new Response(JSON.stringify({ ok: true, messages: [] }), { status: 200 });
     });
     writeSlackConfig(cwd, {
@@ -1792,8 +1823,8 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
   });
 
   test("`message edit` rewrites a message already in the channel, and `delete` removes one", async () => {
-    // The operator: "Agents should be able to edit and delete messages. And you
-    // should already have the capability to delete your own message."
+    // Agents should be able to edit and delete messages, and an agent should already
+    // have the capability to delete its own message.
     const cwd = scratchDir("edit-delete");
     const calls: Array<{ url: string; body: string }> = [];
     const { io, errs } = stubIo(cwd, async (u, init) => {
@@ -1841,7 +1872,7 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
       channels: { general: "C1" },
       agents: { dev: { token: "T", handle: "dev" } },
     });
-    // No --to.
+    // The command accepts no `--to` flag.
     io.readStdin = async () => "text";
     expect(await main(["message", "edit", "--target", "general", "--as", "dev", "--backend", "slack"], io)).toBe(1);
     expect(errs.join(" ")).toContain("requires --to");
@@ -1851,26 +1882,28 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
       await main(["message", "edit", "--target", "general", "--to", "1.1", "--as", "dev", "--backend", "slack"], io),
     ).toBe(1);
     expect(errs.join(" ")).toContain("stdin was empty");
-    // A banned form: an edit is a send and answers to the same rules.
+    // An edit is a banned operation. It functions as a send and follows the same
+    // rules.
     io.readStdin = async () => "Honestly I fixed it.";
     expect(
       await main(["message", "edit", "--target", "general", "--to", "1.1", "--as", "dev", "--backend", "slack"], io),
     ).toBe(1);
     expect(errs.join(" ")).toContain("language rule(s) broken");
-    // Slack's own refusal, with the credential that acted.
+    // Slack returns its own refusal along with the credential that acted.
     io.readStdin = async () => "I fixed the parser and shipped it.";
     expect(
       await main(["message", "edit", "--target", "general", "--to", "1.1", "--as", "dev", "--backend", "slack"], io),
     ).toBe(1);
     expect(errs.join(" ")).toContain("message_not_found");
     expect(errs.join(" ")).toContain("dev's own token");
-    // The local backend has no such call.
+    // The local backend does not implement this call.
     expect(
       await main(["message", "delete", "--target", "general", "--to", "1.1", "--as", "dev", "--backend", "local"], io),
     ).toBe(1);
     expect(errs.join(" ")).toContain("needs the slack backend");
 
-    // Slack refusing the delete is reported. Nothing swallows it.
+    // When Slack refuses the delete, the system reports the refusal, and nothing
+    // swallows it.
     const nope = stubIo(cwd, async (u) =>
       String(u).includes("chat.delete")
         ? new Response(JSON.stringify({ ok: false, error: "cant_delete_message" }), { status: 200 })
@@ -1884,7 +1917,7 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     ).toBe(1);
     expect(nope.errs.join(" ")).toContain("delete failed: cant_delete_message");
 
-    // A rewrite the guards refuse stops the edit, exactly as it stops a send.
+    // The guards stop the edit if they refuse a rewrite, exactly as they stop a send.
     const bad = stubIo(cwd, async (u) =>
       String(u).includes("generativelanguage")
         ? new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: "it got fixed" }] } }] }), {
@@ -1902,7 +1935,7 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     ).toBe(1);
     expect(bad.errs.join(" ")).toContain("REFUSED");
 
-    // No slack config at all: the verb says so and edits nothing.
+    // The command reports that no Slack configuration exists and edits nothing.
     const bare = stubIo(scratchDir("edit-no-config"), async () => new Response("{}", { status: 200 }));
     expect(
       await main(["message", "edit", "--target", "general", "--to", "1.1", "--as", "dev", "--backend", "slack"], bare.io),
@@ -1910,10 +1943,10 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
   });
 
   test("the same draft into the same channel is REFUSED, and `--again` sends it", async () => {
-    // MEASURED after the `posted:` line shipped: two byte-identical copies 27
-    // seconds apart reached a third agent's inbox. An agent asked for this
-    // shape in these words: "A retry after a genuine post must be a no-op, for
-    // example by setting an idempotency key on the draft hash".
+    // Measurements recorded after the `posted:` line shipped show that two
+    // byte-identical copies reached a third agent's inbox 27 seconds apart. A retry
+    // after a genuine post must be a no-op, for example by setting an idempotency key
+    // on the draft hash.
     const cwd = scratchDir("send-duplicate");
     let posts = 0;
     const { io, errs } = stubIo(cwd, async (u) => {
@@ -1934,26 +1967,28 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
       main(["message", "send", "--target", "general", "--as", "dev", "--no-verify", "--backend", "slack", ...extra], io);
     expect(await send()).toBe(0);
     expect(posts).toBe(1);
-    // The second attempt names the ts Slack already holds and posts nothing.
+    // The second attempt specifies the timestamp Slack already holds and posts
+    // nothing.
     expect(await send()).toBe(1);
     expect(posts).toBe(1);
     expect(errs.join(" ")).toContain("you already sent this exact draft to general at ts 9.1");
-    // The check runs BEFORE the rewriter, so a duplicate costs no model call.
+    // The system runs the check before the rewriter, so a duplicate costs no model
+    // call.
     expect(errs.join(" ")).not.toContain("rewrite:");
-    // Saying it twice on purpose stays possible.
+    // The operator can state an entry twice on purpose.
     expect(await send(["--again"])).toBe(0);
     expect(posts).toBe(2);
-    // A different draft is unaffected.
+    // A separate draft is unaffected.
     io.readStdin = async () => "something else entirely, and I sent that too";
     expect(await send()).toBe(0);
     expect(posts).toBe(3);
   });
 
   test("ONE REPORT SENT TWICE UNDER DIFFERENT WORDING is refused, and --again sends it", async () => {
-    // An agent reported one end-to-end run twice, 127 seconds apart, naming the
-    // same ports and the same three images in different sentences. The digest
-    // guard passed it, since no two bytes lined up, and the channel read two
-    // reports of one run.
+    // An agent reported one end-to-end run twice, 127 seconds apart, and described
+    // the same ports and the same three images in different sentences. The digest
+    // guard passed the duplicate report, since no two bytes lined up, and the channel
+    // read two reports of one run.
     const cwd = scratchDir("send-reworded");
     let posts = 0;
     const { io, errs } = stubIo(cwd, async (u) => {
@@ -1983,11 +2018,11 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     expect(posts).toBe(1);
     expect(errs.join(" ")).toContain("this says what you already sent to general at ts 7.1");
     expect(errs.join(" ")).toContain("of its content words");
-    // Saying it again on purpose stays possible.
+    // You can still repeat it deliberately.
     expect(await send(["--again"])).toBe(0);
     expect(posts).toBe(2);
-    // A DIFFERENT REPORT GOES OUT. Refusing these would teach agents to pass
-    // --again by reflex, which retires the guard.
+    // The system emits a different report. Refusing these requests would teach agents
+    // to pass again by reflex, which retires the guard.
     io.readStdin = async () =>
       "The coverage stage is red: src/status.ts sits at 92% lines after the ledger " +
       "change, and the uncovered branch is the write failure path.";
@@ -1996,20 +2031,19 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
   });
 
   test("`message check` says when a LISTENER runs older code than the install", async () => {
-    // An agent whose listener fell six hours behind found out by running
-    // `doctor` for an unrelated reason: the surface that knew was the one
-    // nobody had a reason to call. The sweep runs on a timer in every harness,
-    // so it says it too.
+    // An agent discovered that its listener fell six hours behind by running `doctor`
+    // for an unrelated reason, because the only surface that detected the lag was one
+    // nobody had a reason to call. The sweep runs on a timer in every harness, so it
+    // reports the lag as well.
     const cwd = scratchDir("check-drift");
     const share = scratchDir("check-drift-share");
     mkdirSync(join(share, "current", "src"), { recursive: true });
     writeFileSync(join(share, "current", "src", "COMMIT"), "abc1234\n");
     const mine = scratchDir("check-drift-mine");
     writeFileSync(join(mine, "COMMIT"), "abc1234\n");
-    // A PROCESS TABLE WITH A LISTENER ON AN OLDER COMMIT. My first version
-    // compared the sweep's OWN process against the install, and a sweep
-    // launched from the shared launcher IS the install, so the line never
-    // fired.
+    // The process table contains a listener on an older commit. An earlier version
+    // compared the sweep process against the install. Because a sweep launched from
+    // the shared launcher is the install, the line never fired.
     const emptyProc = scratchDir("check-drift-proc");
     mkdirSync(join(emptyProc, "77"), { recursive: true });
     writeFileSync(join(emptyProc, "77", "cmdline"), "bun /s/share/scramble/def5678/src/bin.ts listen --as dev\0");
@@ -2038,10 +2072,10 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     await main(["message", "check", "--as", "dev", "--backend", "slack"], io);
     expect(errs.join(" ")).toContain("1 listener(s) for dev run a different commit than the installed abc1234");
     expect(errs.join(" ")).toContain("pid 77 on def5678");
-    // A listener is running, so the dead-listener line stays quiet.
+    // The listener is running, so the dead-listener line stays silent.
     expect(errs.join(" ")).not.toContain("NO listener is running");
 
-    // WITH NOTHING ARMED, the other line fires and the drift line does not.
+    // When nothing is armed, the other line fires and the drift line does not fire.
     const bare = scratchDir("check-drift-proc-empty");
     const quiet: string[] = [];
     await main(["message", "check", "--as", "dev", "--backend", "slack"], {
@@ -2055,9 +2089,8 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
   });
 
   test("`channel tier` writes the operator's classification and reads it back", async () => {
-    // "Channel classification should be manually done by the operator".
-    // Hand-editing a shared JSON is how a config gets a stray comma at
-    // midnight.
+    // The operator should classify channels manually. Hand-editing a shared JSON
+    // introduces a stray comma into a configuration at midnight.
     const cwd = scratchDir("channel-tier");
     writeSlackConfig(cwd, {
       appToken: "xapp-1",
@@ -2070,23 +2103,26 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     expect(await main(["channel", "tier", "general", "internal"], io)).toBe(0);
     expect(writes.join("")).toContain('"tier":"internal"');
     expect(errs.join(" ")).toContain("general is internal");
-    // A second call keeps the first, and every other config key survives.
+    // A second call retains the first, and every other configuration key survives.
     expect(await main(["channel", "tier", "team", "external"], io)).toBe(0);
     const after = JSON.parse(readFileSync(join(cwd, ".scramble", "slack.json"), "utf8"));
     expect(after.tiers).toEqual({ general: "internal", team: "external" });
     expect(after.humanUserId).toBe("U9");
 
-    // A tier nobody defined, and a missing channel, are refused with the usage.
+    // The command refuses an undefined tier and a missing channel, and prints the
+    // usage message.
     expect(await main(["channel", "tier", "general", "loud"], io)).toBe(1);
     expect(await main(["channel", "tier"], io)).toBe(1);
     expect(errs.join(" ")).toContain("scramble channel tier <channel> internal|external");
-    // An unreadable config is REPORTED. A silent pass would hide it.
+    // The system reports an unreadable configuration. Passing silently would hide the
+    // failure.
     const bare = stubIo(scratchDir("channel-tier-noconfig"), async () => new Response("{}", { status: 200 }));
     expect(await main(["channel", "tier", "general", "internal"], bare.io)).toBe(1);
     expect(bare.errs.join(" ")).toContain("cannot read");
 
-    // A config that cannot be WRITTEN is reported too. The classification is
-    // the operator's, and a call that changed nothing must never look done.
+    // The system also reports any configuration that cannot be written. The operator
+    // determines the classification, and a call that changed nothing must never appear
+    // complete.
     const ro = scratchDir("channel-tier-readonly");
     writeSlackConfig(ro, {
       appToken: "xapp-1",
@@ -2102,9 +2138,9 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
   });
 
   test("the send picks the register the operator set, and tells the model", async () => {
-    // The operator: agents speak differently in a channel full of people from
-    // the way they speak where agents work, and neither follows from the
-    // channel being public or private.
+    // The operator sees that agents speak differently in a channel full of people than
+    // in a channel where agents work. Neither behavior depends on whether the channel
+    // is public or private.
     const cwd = scratchDir("send-register");
     let prompt = "";
     const { io, errs } = stubIo(cwd, async (u, init) => {
@@ -2149,11 +2185,12 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     expect(
       await main(["message", "send", "--target", "general", "--as", "dev", "--no-verify", "--backend", "slack"], withKey),
     ).toBe(0);
-    // No tier set for this channel: the careful register, and the model is told.
+    // When no tier is set for this channel, the system uses the careful register and
+    // informs the model.
     expect(errs.join(" ")).toContain("register: external for general (no tier set for general");
-    // DERIVED FROM THE SHIPPED FILE. A copy of its wording would rot. This assertion
-    // held a sentence from the register block, the operator rewrote both blocks
-    // (9211482, 27be931), and the copy failed while the mechanism worked.
+    // This assertion is derived from the shipped file. A copy of its wording would
+    // rot. The assertion held a sentence from the register block. The operator rewrote
+    // both blocks (9211482, 27be931), and the copy failed while the mechanism worked.
     expect(promptText(prompt)).toContain(shippedRegister("external"));
   });
 
@@ -2209,7 +2246,8 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     expect(errs.join(" ")).toContain("register: internal for general (set to internal by the operator)");
     expect(promptText(prompt)).toContain(shippedRegister("internal"));
 
-    // THE CONFIG WINS. A room of agents can still be where a customer reads.
+    // The configuration takes precedence. A room of agents can still serve as the
+    // location where a customer reads.
     writeSlackConfig(cwd, {
       appToken: "xapp-1",
       token: "xoxb-1",
@@ -2240,9 +2278,9 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
   });
 
   test("the send says POSTED with the ts before it says anything else", async () => {
-    // Two agents duplicated messages in one hour because the CLI's output after
-    // a successful post was a warning, and a warning read as a failure (ts
-    // 1787715115 / 1787715130 and 1787715280 onward).
+    // Two agents duplicated messages in one hour because the CLI emitted a
+    // warning after a successful post, and the agents interpreted the warning as a
+    // failure (timestamps 1787715115, 1787715130, and 1787715280 onward).
     const cwd = scratchDir("send-posted-line");
     const { io, errs } = stubIo(cwd, async (u) =>
       String(u).includes("chat.postMessage")
@@ -2260,20 +2298,21 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     const posted = errs.findIndex((l) => l.includes("posted: general at ts 77.7"));
     expect(posted).toBeGreaterThanOrEqual(0);
     expect(errs[posted]).toContain("NONE of it means resend");
-    // Said FIRST: every later line is a note about a message Slack already has.
+    // The initial statement comes first, because every subsequent line provides notes
+    // about a message that Slack already contains.
     expect(errs.slice(0, posted).join(" ")).not.toContain("verify");
-    // AND LAST, because a pipe cuts from the end. Three agents ran this output
-    // through `tail -4`, `tail -3` and `tail -2`, each losing the first line,
+    // This item comes last because a pipe cuts from the end. Three agents ran this
+    // output through `tail -4`, `tail -3` and `tail -2`, each losing the first line,
     // and two of them sent the message again.
     expect(errs[errs.length - 1]).toContain("sent: general at ts 77.7");
     expect(errs[errs.length - 1]).toContain("Nothing above asks you to send it again");
   });
 
   test("`--verify` reads back from the ROOT Slack picked when a reply was threaded under", async () => {
-    // An agent passed --thread pointing at a reply. Slack hoisted the message
-    // into that reply's root and answered with the root's ts, and the read-back
-    // asked about the ts that was passed, so it reported "slack has no message
-    // at <ts>" for a message that was in the channel.
+    // An agent passed `--thread` pointing to a reply. Slack hoisted the message into
+    // that reply's root and responded with the root's `ts`. The read-back queried the
+    // `ts` that was passed, so it reported "slack has no message at <ts>" for a
+    // message that was in the channel.
     const cwd = scratchDir("verify-hoisted");
     const asked = "111.1";
     const root = "100.1";
@@ -2310,9 +2349,9 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
   });
 
   test("`rewrite` prints the model's answer, reads a file, and sends nothing", async () => {
-    // The operator asked for the instruction file itself to go through the
-    // rewriter, and nothing here could do that without sending a message
-    // somewhere.
+    // The operator requested that the instruction file itself pass through the
+    // rewriter, and the local system could not complete that task without sending
+    // a message elsewhere.
     const cwd = scratchDir("rewrite-preview");
     const { io, writes, errs, urls } = stubIo(cwd, async () =>
       new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: "I shipped the parser fix." }] } }] }), {
@@ -2329,15 +2368,15 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     expect(await main(["rewrite", draft], withKey)).toBe(0);
     expect(writes.join("")).toContain("I shipped the parser fix.");
     expect(errs.join(" ")).toContain("rewrite:");
-    // One call, to the model. Nothing went to a channel.
+    // The process made one call to the model and sent nothing to a channel.
     expect(urls.length).toBe(1);
     expect(urls.join(" ")).not.toContain("chat.postMessage");
   });
 
   test("a rewrite call that times out is asked once more, and the send goes", async () => {
-    // MEASURED on my own send: the model timed out at 20s, the send refused,
-    // and the identical text went through seconds later. A timeout says nothing
-    // about the message.
+    // In a measured send, the model timed out at 20s, the send refused, and the
+    // identical text went through seconds later. A timeout says nothing about the
+    // message.
     const cwd = scratchDir("rewrite-timeout");
     let calls = 0;
     const { io, errs } = stubIo(cwd, async (u) => {
@@ -2372,9 +2411,9 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
   });
 
   test("`lint --comments` reads a source file's comments and skips its code", async () => {
-    // The operator, having read a banned form in a comment I shipped an hour
-    // earlier: "Clean the comments first." The rule table's own patterns
-    // contain the words it bans, so the code has to stay out of scope.
+    // The operator cleans comments first because a shipped comment contained a
+    // banned form. The rule table's own patterns contain the words it bans, so the
+    // code has to stay out of scope.
     const cwd = scratchDir("lint-comments");
     const f = join(cwd, "sample.ts");
     writeFileSync(
@@ -2385,7 +2424,7 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     expect(await main(["lint", "--comments", f], io)).toBe(1);
     expect(errs.join(" ")).toContain("sample.ts:1");
     expect(errs.filter((l) => l.includes("sample.ts:2"))).toHaveLength(0);
-    // Without the flag the same file reports the code line too.
+    // Without the flag, the same file also reports the line of code.
     const plain = stubIo(cwd, async () => new Response("{}", { status: 200 }));
     expect(await main(["lint", f], plain.io)).toBe(1);
     expect(plain.errs.filter((l) => l.includes("sample.ts:2"))).toHaveLength(1);
@@ -2393,9 +2432,9 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
   });
 
   test("`rewrite --why` asks for the diagnosis, and never rewrites", async () => {
-    // The operator, about a refusal this tool prints: "Use gemini 3.7 to find
-    // why the communication is wrong." A rewrite hands back a better version
-    // and leaves the author guessing which habit produced the worse one.
+    // When this tool prints a refusal, use gemini 3.7 to find why the communication
+    // is wrong. A rewrite returns a better version and leaves the author guessing
+    // which habit produced the worse one.
     const cwd = scratchDir("rewrite-why");
     let asked = "";
     const { io, writes, errs } = stubIo(cwd, async (_u, init) => {
@@ -2416,7 +2455,8 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     expect(asked).toContain("Name what is wrong with it");
     expect(asked).toContain("Do not rewrite it");
 
-    // No key, and a model that fails, each say so and change nothing.
+    // When a key is missing or a model fails, the system reports the error and
+    // changes nothing.
     expect(await main(["rewrite", "--why"], io)).toBe(1);
     expect(errs.join(" ")).toContain("SCRAMBLE_REWRITE_KEY");
     const dead = stubIo(cwd, async () => new Response("nope", { status: 500 }));
@@ -2469,15 +2509,15 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     expect(await main(["rewrite", empty], withKey)).toBe(1);
     expect(errs.join(" ")).toContain("is empty");
 
-    // No key: the send path leaves the text alone, and a preview has nothing to
-    // show, so it says which variable turns the model on.
+    // Without a key, the send path leaves the text alone. A preview has nothing to
+    // show, so it indicates which variable turns the model on.
     io.readStdin = async () => "I shipped the parser fix.";
     expect(await main(["rewrite"], io)).toBe(1);
     expect(errs.join(" ")).toContain("SCRAMBLE_REWRITE_KEY");
 
-    // A refused preview prints the model's answer and names the guard, with no
-    // sentence about sending: this verb never sends, and the send's refusal ends
-    // "Rewrite your message and send again."
+    // When a preview is refused, the command prints the model's answer and names the
+    // guard. The output contains no sentence about sending, because this verb never
+    // sends. A send refusal ends with "Rewrite your message and send again."
     const drops = join(cwd, "drops.md");
     writeFileSync(drops, "I shipped the parser fix.");
     const before = writes.length;
@@ -2489,17 +2529,17 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
   });
 
   test("`--verify` counts ENTITIES, and names a mention that notified nobody", async () => {
-    // Slack notifies on `<@U…>` and never on a name in text, so a count taken
-    // from the text calls a failed conversion live. That is the defect that
-    // shipped this evening: a mention at a sentence end went out as plain text
-    // and this check would have reported it as live.
+    // Slack triggers notifications on `<@U…>` identifiers and never on a name in text,
+    // so counting occurrences in the text reports a failed conversion as live. That is
+    // the defect that shipped this evening: a mention at the end of a sentence went
+    // out as plain text, and this check would have reported it as live.
     const cwd = scratchDir("verify-entities");
     const { io, errs } = stubIo(cwd, async (u) => {
       const url = String(u);
       if (url.includes("chat.postMessage"))
         return new Response(JSON.stringify({ ok: true, ts: "11.1", message: {} }), { status: 200 });
       if (url.includes("conversations.history"))
-        // One converted, one left as plain text.
+        // One was converted, and one was left as plain text.
         return new Response(
           JSON.stringify({ ok: true, messages: [{ ts: "11.1", text: "ping <@U1> and @ana." }] }),
           { status: 200 },
@@ -2544,8 +2584,9 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
   });
 
   test("`--verify` with no ts from Slack says nothing can be read back", async () => {
-    // Slack answered ok without a ts, so there is no message to look up. Saying
-    // "verified" here would be the shape this whole verb exists to kill.
+    // Slack returned an ok response without a ts value, so there is no message to look
+    // up. Marking this outcome as "verified" would be the exact failure that this verb
+    // exists to eliminate.
     const cwd = scratchDir("send-verify-nots");
     const { io, errs } = stubIo(cwd, async (u) =>
       String(u).includes("chat.postMessage")
@@ -2583,9 +2624,10 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
   });
 
   test("a rewrite that breaks a rule is retried ONCE with what it broke", async () => {
-    // Every guard fires on something the MODEL did, so the model is the party
-    // that can fix it. Two agents wrote prose that avoided a banned form on
-    // purpose, watched the rewriter put it back, and sent nothing.
+    // Every guard triggers on an action taken by the model, so the model is the
+    // component that can resolve it. Two agents intentionally composed prose that
+    // avoided a prohibited form, observed the rewriter restore it, and transmitted
+    // nothing.
     const cwd = scratchDir("send-retry");
     const prompts: string[] = [];
     let call = 0;
@@ -2606,7 +2648,7 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     };
     expect(await main(["message", "send", "--target", "general", "--as", "dev"], withKey)).toBe(0);
     expect(call).toBe(2);
-    // The second prompt carries what the first attempt broke.
+    // The second prompt carries the items that broke in the first attempt.
     expect(prompts[1]).toContain("Your previous attempt was rejected");
     expect(prompts[1]).toContain("language rule");
     expect(errs.join(" ")).toContain("Asking once more");
@@ -2638,9 +2680,9 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
   });
 
   test("an unreadable instruction STOPS the send", async () => {
-    // A rewrite driven by no instruction is worse than no rewrite, and the
-    // author's own words no longer go out where the rewrite is on: "we should
-    // not allow claude original message go out".
+    // A rewrite executed without instructions produces a worse result than no
+    // rewrite. When rewriting is active, the system suppresses Claude's original
+    // message.
     const cwd = scratchDir("send-noprompt");
     const { io, errs } = stubIo(cwd, async () => new Response(JSON.stringify({ crossings: [] }), { status: 200 }));
     io.readStdin = async () => "my own line";
@@ -2655,13 +2697,13 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
   });
 
   test("a message over the word limit is REFUSED at the send", async () => {
-    // Operator: "We need to impose a message length limit in words. Maybe 200."
-    // A refusal and not a warning: the long version is meant to become several
-    // short turns, and a warning leaves that to the sender who just wrote 900
-    // words. Raised to 300 by the operator.
+    // The system enforces a message length limit in words. The system returns a
+    // refusal when a message exceeds the limit, because a long message must break into
+    // several short turns, and a warning leaves that task to the sender who just wrote
+    // 900 words. The limit is 300 words, raised from 200 words.
     //
-    // COUNTED FROM THE SHIPPED LIMIT, so this test moves with it and never
-    // hardcodes a number the code no longer uses.
+    // This test derives its counts from the shipped limit, so the test moves with
+    // the limit and never hardcodes a number the code no longer uses.
     const cwd = scratchDir("send-toolong");
     const { io, errs } = stubIo(cwd, async () => new Response(JSON.stringify({ crossings: [] }), { status: 200 }));
     const over = WORD_LIMIT + 60;
@@ -2671,10 +2713,10 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
   });
 
   test("`inbox close` takes SEVERAL ids, and one bad id never hides the rest", async () => {
-    // A thread of other people's work hands you a batch: I closed eight items one
-    // command at a time in ten minutes, which is the shape that teaches an agent
-    // to stop reading its own list. A batch that stopped at the first bad id
-    // would leave the others silently untouched, which is the same defect.
+    // A thread of external work delivers a batch of items. An operator closed eight
+    // items one command at a time in ten minutes, which teaches an agent to stop
+    // reading its own list. A batch that stops at the first bad id leaves the other
+    // items silently untouched, which produces the same defect.
     const cwd = scratchDir("inbox-close-many");
     mkdirSync(join(cwd, ".scramble", "inbox"), { recursive: true });
     const row = (id: string): string =>
@@ -2686,7 +2728,7 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     expect(said).toContain("closed 1.1 with no reply: not mine");
     expect(said).toContain("closed 3.3 with no reply: not mine");
     expect(said).toContain("999.9 is not an open item");
-    // The two good ones ARE closed, and the untouched one is still open.
+    // The two working items are closed, and the untouched item is still open.
     const p = stubIo(cwd, async () => new Response("{}", { status: 200 }));
     expect(await main(["inbox", "pending", "--as", "dev"], p.io)).toBe(1);
     expect(p.writes).toHaveLength(1);
@@ -2712,9 +2754,9 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
   });
 
   test("a reply DEFAULTS into the thread the question was asked in", async () => {
-    // Operator: "shall we make inbox reply default to within the thread?
-    // Posting to the channel directly can be made a separate flag." The ledger
-    // knows which item is open, so the thread is read and never guessed.
+    // An inbox reply can default to posting within the thread, and a separate flag
+    // can handle posting directly to the channel. The ledger knows which item is open,
+    // so the system reads the thread and never guesses it.
     const cwd = scratchDir("inbox-threaddefault");
     const p = join(cwd, ".scramble", "inbox", "dev.jsonl");
     mkdirSync(join(cwd, ".scramble", "inbox"), { recursive: true });
@@ -2743,10 +2785,10 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
   });
 
   test("with SEVERAL questions open it refuses to guess a thread, and lists them", async () => {
-    // The operator asked a question; another agent posted 13 seconds later; the
-    // default took the newest and put my answer to the operator inside that
-    // agent's thread. With more than one open, which thread this answers is the
-    // sender's to name.
+    // The operator asked a question, and another agent posted 13 seconds later. The
+    // default behavior selected the newest message and routed the reply to the
+    // operator into the other agent's thread. When more than one thread is open, the
+    // sender specifies which thread this answers.
     const cwd = scratchDir("inbox-ambiguous");
     mkdirSync(join(cwd, ".scramble", "inbox"), { recursive: true });
     writeFileSync(
@@ -2760,7 +2802,7 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     const said = errs.join("\n");
     expect(said).toContain("2 questions are open");
     expect(said).not.toContain("replying in thread");
-    // Both are named with enough to pick one.
+    // Both names provide enough detail to choose one.
     expect(said).toContain("9.1");
     expect(said).toContain("where are credentials stored");
     expect(said).toContain("9.2");
@@ -2777,7 +2819,7 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     a.io.readStdin = async () => "an announcement";
     expect(await main(["message", "send", "--target", "general", "--as", "dev", "--top-level"], a.io)).toBe(0);
     expect(a.errs.join(" ")).not.toContain("replying in thread");
-    // A channel with nothing open has nothing to reply to.
+    // A channel receives nothing to reply to when it has nothing open.
     const b = stubIo(cwd, async () => new Response(JSON.stringify({ crossings: [] }), { status: 200 }));
     b.io.readStdin = async () => "hello elsewhere";
     expect(await main(["message", "send", "--target", "other", "--as", "dev"], b.io)).toBe(0);
@@ -2799,14 +2841,14 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
   });
 
   test("an unwritable ledger REPORTS itself and still delivers the message", async () => {
-    // The message is the point and the ledger is the accounting, so a ledger
-    // that cannot be written must not swallow a delivery. It must also not go
-    // quiet: an inbox counting nothing would read as an inbox with nothing in
-    // it, which is the silent-success shape this whole day was about.
+    // A message is the primary payload and the ledger provides accounting, so a ledger
+    // that cannot be written must not swallow a delivery. The system must also not
+    // fail silently, because an inbox that counts zero items appears empty, which
+    // creates the false success state this incident resolved.
     const cwd = scratchDir("inbox-locked");
     const a = await deliverOne(cwd);
-    // Only the ledger's own directory: locking all of .scramble would break the
-    // cursor write too, and then the test would prove something else.
+    // The lock applies only to the ledger's own directory. Locking all of .scramble
+    // would also break the cursor write, and then the test would prove something else.
     mkdirSync(join(cwd, ".scramble", "inbox"), { recursive: true });
     chmodSync(join(cwd, ".scramble", "inbox"), 0o500);
     try {
@@ -2967,8 +3009,10 @@ describe("channel join (mirror of join)", () => {
 });
 
 describe("message check under the slack backend", () => {
-  /** Build the slack check io with a config that maps one channel and an empty
-   *  history. `over` can swap the fetch to answer the drain. */
+  /**
+   *  Build the Slack check I/O with a configuration that maps one channel and an
+   *  empty history. `over` can swap the fetch operation to answer the drain.
+   */
   function slackCheckIo(cwd: string, over?: Partial<Io>): Io {
     writeSlackConfig(cwd, { appToken: "xapp-1", token: "xoxb-1", channels: { general: "C1" }, agents: {} });
     const base: Io = {
@@ -2994,11 +3038,11 @@ describe("message check under the slack backend", () => {
   }
 
   test("a send REPORTS what arrived before it that this agent has not read", async () => {
-    // The operator, on two agents posting near-identical plans one second
-    // apart: "one task/topic is owned by one agent." Neither could see the
-    // other coming. The local backend answers a send with its crossings and the
-    // skill tells every agent to read them; on Slack the send returned nothing,
-    // so the promise held only on the backend nobody uses.
+    // One agent owns each task or topic. Two agents posted near-identical plans one
+    // second apart because neither could see the other coming. The local backend
+    // answers a send with its crossings, and the skill tells every agent to read
+    // them. On Slack, the send returned nothing, so the promise held only on the
+    // backend nobody uses.
     const cwd = scratchDir("send-crossings");
     const io = slackCheckIo(cwd, {
       fetch: async (url) => {
@@ -3024,8 +3068,8 @@ describe("message check under the slack backend", () => {
       appToken: "xapp-1",
       token: "xoxb-1",
       channels: { general: "C1" },
-      // The handle DIFFERS from the scramble name, which is the case that broke
-      // it: history carries the handle.
+      // The handle differs from the scramble name. This difference broke the system
+      // because history carries the handle.
       agents: { dev: { token: "T", handle: "dev_bot" } },
       roster: { U9: "peer", UME: "dev_bot" },
     });
@@ -3034,27 +3078,27 @@ describe("message check under the slack backend", () => {
     expect(await main(["message", "send", "--target", "general", "--as", "dev"], watched)).toBe(0);
     const said = errs.join("\n");
     expect(said).toContain("1 message(s) arrived in general before yours");
-    // This agent's OWN line is never a crossing, and history carries the HANDLE:
-    // matching on the scramble name alone listed one of mine back to me on the
-    // first live run.
+    // An agent never counts its own line as a crossing. The history stores the
+    // handle because matching on the scramble name alone listed the agent's own
+    // line on the first live run.
     expect(said).not.toContain("my own earlier line");
     expect(said).toContain("I am taking the generation run");
     expect(said).toContain("already claimed the work");
-    // EVERY LINE CARRIES THE KEY. An agent filtering on the first line's prefix saw
-    // the count and none of the messages the block exists to list.
+    // Every line includes the key. An agent filtering by the prefix of the first line
+    // received the count and none of the messages that the block exists to list.
     expect(said.split("\n").filter((l) => l.includes("message(s) arrived") || l.includes("I am taking the generation run")).every((l) => l.startsWith("crossed: "))).toBe(true);
-    // A CAP THAT SAYS WHAT IT DROPPED. The cursor here advances on a `message
-    // check` sweep, and an agent reading through a listener never runs one, so this
-    // block printed 165 lines on every send and taught two agents to filter it.
-    // A message AFTER this one is no crossing.
+    // The cap states what it dropped. The cursor advances on a `message check` sweep,
+    // and an agent reading through a listener never runs one, so this block printed
+    // 165 lines on every send and taught two agents to filter it. A message after
+    // this one creates no crossing.
     expect(said).not.toContain("not a crossing");
   });
 
   test("the sweep states how many lines it delivered and from how many channels", async () => {
-    // I READ THE HIGHEST `seq` IN A SWEEP'S OUTPUT AS A LINE COUNT and published
-    // 211 for a tick whose own log holds 165 records: seq is per-drain and skips
-    // what the drain passes over, this agent's own sends included. The drain held
-    // the number and said nothing.
+    // The operator read the highest `seq` in a sweep's output as a line count and
+    // published 211 for a tick whose own log holds 165 records. The `seq` is per-drain
+    // and skips records that the drain passes over, which includes this agent's own
+    // sends. The drain held the number and reported nothing.
     const cwd = scratchDir("check-count");
     const errs: string[] = [];
     const io = slackCheckIo(cwd, {
@@ -3076,9 +3120,9 @@ describe("message check under the slack backend", () => {
     const watched: Io = { ...io, writeErr: (l) => errs.push(l) };
     expect(await main(["message", "check", "--as", "dev", "--backend", "slack"], watched)).toBe(0);
     expect(errs.join("\n")).toContain("check: 2 line(s) delivered, 1 channel(s) read.");
-    // AND ZERO IS SAID TOO, since a tick that carried nothing is the state an agent
-    // wants confirmed. A channel with nothing new was still READ, which is what the
-    // second number counts.
+    // The system reports zero as well, since an agent wants confirmation of a tick
+    // that carried nothing. The system still reads a channel with nothing new, which is
+    // what the second number counts.
     const quiet: string[] = [];
     const empty: Io = { ...slackCheckIo(scratchDir("check-count-zero")), writeErr: (l) => quiet.push(l) };
     expect(await main(["message", "check", "--as", "dev", "--backend", "slack"], empty)).toBe(0);
@@ -3086,10 +3130,10 @@ describe("message check under the slack backend", () => {
   });
 
   test("the crossings block keeps the newest and counts what it left out", async () => {
-    // 165 LINES ON EVERY SEND from this agent, because the cursor this block reads
-    // advances on a `message check` sweep and an agent reading through a listener
-    // runs none. A wall that size teaches agents to filter the send output, which
-    // two of them reported doing tonight after losing other blocks to the filter.
+    // This agent emits 165 lines on every send, because the cursor this block reads
+    // advances during a `message check` sweep and an agent that reads through a
+    // listener runs no sweeps. Output of that size leads agents to filter the send
+    // output, which two agents reported doing after losing other blocks to the filter.
     const cwd = scratchDir("send-crossings-cap");
     const older = Array.from({ length: 40 }, (_, i) => ({ ts: `${10 + i}.0`, user: "U9", text: `line ${i}` }));
     const io = slackCheckIo(cwd, {
@@ -3112,20 +3156,20 @@ describe("message check under the slack backend", () => {
     expect(await main(["message", "send", "--target", "general", "--as", "dev"], watched)).toBe(0);
     const said = errs.join("\n");
     expect(said).toContain("40 message(s) arrived in general");
-    // THE NEWEST ARE THE ONES THAT ANSWER "did somebody just make my point".
+    // The most recent entries answer whether someone just made your point.
     expect(said).toContain("line 39");
     expect(said).toContain("line 25");
     expect(said).not.toContain("line 24");
-    // AND THE CAP NAMES WHAT IT DROPPED, back to the oldest ts, with the command
-    // that reads them.
+    // The cap lists every entry it dropped back to the oldest timestamp, along with
+    // the command that reads them.
     expect(said).toContain("25 older message(s) not listed, back to 10.0");
     expect(said).toContain("scramble history general");
     expect(said.split("\n").filter((l) => l.includes("line 39") || l.includes("older message(s) not listed")).every((l) => l.startsWith("crossed: "))).toBe(true);
   });
 
   test("a crossings lookup that FAILS says so, and the message still went", async () => {
-    // Reported and never fatal: a failed lookup here must not turn a delivered
-    // message into an error.
+    // A failed lookup is reported and is never fatal. A failed lookup here must not
+    // turn a delivered message into an error.
     const cwd = scratchDir("send-crossings-fail");
     const io = slackCheckIo(cwd, {
       fetch: async (url) =>
@@ -3146,11 +3190,11 @@ describe("message check under the slack backend", () => {
   });
 
   test("a peer's ORIGIN is learned from its message metadata, and `peers` names it", async () => {
-    // The operator: "Does each agent record its hostname and working directory
-    // on scramble and an agent may know its same directory peers?" It rides on
-    // Slack message metadata, the channel a status line already uses, so it
-    // needs no app change and works for an app owned by another login. Learned
-    // from ANY message, addressed or not.
+    // Each agent records its hostname and working directory on scramble, and an
+    // agent may know peers in the same directory. This data travels in Slack message
+    // metadata across the channel that a status line already uses, so it requires no
+    // application changes and works for an application owned by another login. An
+    // agent learns this metadata from any message, whether addressed or unaddressed.
     const cwd = scratchDir("peers-origin");
     const io = slackCheckIo(cwd, {
       hostname: () => "my-host",
@@ -3179,18 +3223,20 @@ describe("message check under the slack backend", () => {
     const p = stubIo(cwd, async () => new Response("{}", { status: 200 }));
     expect(await main(["peers"], { ...p.io, hostname: () => "my-host" })).toBe(0);
     expect(p.writes.join(" ")).toContain("peer-host  /srv/peer-work  (abc1234)");
-    // --same-dir compares HOST and directory together, so a peer elsewhere drops.
+    // The `--same-dir` flag compares the `HOST` and directory together, so it drops a
+    // peer located elsewhere.
     const q = stubIo(cwd, async () => new Response("{}", { status: 200 }));
     expect(await main(["peers", "--same-dir"], { ...q.io, hostname: () => "my-host" })).toBe(0);
     expect(q.writes.join(" ")).toContain("No peers running in");
   });
 
   test("`peers --json` answers a WATCHER with no token and no network", async () => {
-    // The damage count went on `doctor` first, and the agent watching for a torn
-    // line refused it with the right reason: doctor reads the app manifest, the
-    // stored token on their host expired, so a watcher shelling out to doctor
-    // every ten minutes leans on a command that already fails there. A question
-    // about a local file is answerable from the local file.
+    // The damage count was initially assigned to `doctor`. The agent monitoring for
+    // a torn line rejected that design with valid reason: `doctor` reads the app
+    // manifest, and the stored token on the host expired, so a watcher process
+    // executing `doctor` every ten minutes relies on a command that already fails on
+    // that host. A question about a local file is answerable directly from the local
+    // file.
     const cwd = scratchDir("peers-json");
     writeSlackConfig(cwd, { token: "xoxb-1", channels: {}, agents: { dev: { token: "T", handle: "dev_bot" } } });
     writeFileSync(
@@ -3199,7 +3245,7 @@ describe("message check under the slack backend", () => {
         `{"agent":"bo","ho\n` +
         `${JSON.stringify({ agent: "ana", host: "h", dir: "/w2", commit: "abc1234", at: "t2" })}\n`,
     );
-    // NO FETCH SEAM IS TOUCHED: the responder throws if anything calls out.
+    // The responder touches no fetch seam and throws if anything calls out.
     const { io, writes } = stubIo(cwd, async () => {
       throw new Error("peers --json must not reach the network");
     });
@@ -3209,7 +3255,8 @@ describe("message check under the slack backend", () => {
       damaged: number;
       self: { host: string };
     };
-    // The newest row per agent, the damage count, and this process's own origin.
+    // The process records its own origin, the newest row for each agent, and the
+    // damage count.
     expect(said.peers).toHaveLength(1);
     expect(said.peers[0]).toMatchObject({ agent: "ana", dir: "/w2" });
     expect(said.damaged).toBe(1);
@@ -3217,11 +3264,10 @@ describe("message check under the slack backend", () => {
   });
 
   test("THIS AGENT'S OWN ROW is written too, so a crash leaves it on disk", async () => {
-    // The operator: "Scramble should store the agent runtime, work dir and
-    // session ids for each agent in case of a system restart or crash." Every
-    // row came from a message a PEER sent, so the one agent whose runtime and
-    // session this process knows for certain was the one missing from the file:
-    // a host that crashed took its own record with it.
+    // Scramble should store the agent runtime, working directory, and session IDs for
+    // each agent in case of a system restart or crash. Every row came from a message a
+    // peer sent, so the file omitted the one agent whose runtime and session this
+    // process knew for certain: a host that crashed took its own record with it.
     const cwd = scratchDir("peers-self");
     const runtimeEnv = (base: (n: string) => string | undefined) => (n: string) =>
       n === "CLAUDECODE"
@@ -3242,7 +3288,7 @@ describe("message check under the slack backend", () => {
       appToken: "xapp-1",
       token: "xoxb-1",
       channels: { general: "C1" },
-      // THE HANDLE DIFFERS FROM THE NAME, which is the live shape:
+      // The handle differs from the name in the live environment:
       // `model-failure-research` is `model_failure_researc` on Slack.
       agents: { dev: { token: "T", handle: "dev_bot" } },
     });
@@ -3259,18 +3305,19 @@ describe("message check under the slack backend", () => {
     const said = p.writes.join(" ");
     expect(said).toContain("dev  host-one");
     expect(said).toContain("claude-code 2.1.234 session 6a41d6cd-13fa-430a-954b-69132f9d5a5c pid 14027");
-    // THE OWN ROW CLAIMS THIS AGENT'S SLACK HANDLE, so a row somebody wrote under
-    // that handle retires without waiting for this agent to send again. The
-    // config already holds the mapping, and an agent that upgrades and stays
-    // quiet would otherwise keep two identities on one host in one session.
-    // THE AGENT'S OWN FILE, since no two writers share one file any more.
+    // The agent's own row claims its Slack handle, so a row written under that
+    // handle retires without waiting for this agent to send again. The configuration
+    // already holds the mapping, and an agent that upgrades and stays quiet would
+    // otherwise keep two identities on one host in one session. The agent uses its
+    // own file, since no two writers share one file any more.
     const rows = readFileSync(join(cwd, ".scramble", "peers.d", "dev.jsonl"), "utf8").trim().split("\n");
     expect(JSON.parse(rows[rows.length - 1]!)).toMatchObject({ agent: "dev", handle: "dev_bot" });
   });
 
   test("an unwritable own record REPORTS itself and still sends", async () => {
-    // The record is accounting; the message is the point. A directory that
-    // cannot be written must not swallow the send, and must not go quiet either.
+    // The record serves accounting purposes, while the message is the primary focus.
+    // A directory that cannot be written must neither drop the send nor remain
+    // silent.
     const cwd = scratchDir("peers-self-locked");
     writeSlackConfig(cwd, {
       appToken: "xapp-1",
@@ -3284,7 +3331,8 @@ describe("message check under the slack backend", () => {
         : new Response(JSON.stringify({ ok: true, messages: [] }), { status: 200 }),
     );
     s.io.readStdin = async () => "a line sent while the record cannot be written";
-    // The directory holding the record is read-only, so appending the row throws.
+    // The directory containing the record is read-only, so appending the row throws
+    // an error.
     chmodSync(join(cwd, ".scramble"), 0o500);
     try {
       expect(
@@ -3301,9 +3349,9 @@ describe("message check under the slack backend", () => {
   });
 
   test("an unwritable peers record REPORTS itself and still delivers", async () => {
-    // Knowing where a peer runs is accounting; the message is the point. A
-    // record that cannot be written must not swallow the delivery, and must not
-    // go quiet about it either.
+    // Tracking a peer's location serves accounting, while message delivery is the
+    // primary objective. A record that cannot be written must not suppress the
+    // delivery, and it must not fail silently.
     const cwd = scratchDir("peers-locked");
     const io = slackCheckIo(cwd, {
       hostname: () => "my-host",
@@ -3328,10 +3376,10 @@ describe("message check under the slack backend", () => {
     const errs: string[] = [];
     const writes: string[] = [];
     const watched: Io = { ...io, writeErr: (l) => errs.push(l), write: (l) => writes.push(l) };
-    // A READ-ONLY RECORD DIRECTORY: each writer owns a file inside it now, so the
-    // write fails wherever the peer's name goes, while everything else under
-    // .scramble stays writable. The test then proves the delivery survives THIS
-    // failure and no other one.
+    // Each writer now owns a file inside a read-only record directory, so the write
+    // fails wherever the peer's name goes, while everything else under .scramble stays
+    // writable. The test then proves the delivery survives this failure and no other
+    // failure.
     const recordDir = join(cwd, ".scramble", "peers.d");
     mkdirSync(recordDir, { recursive: true });
     chmodSync(recordDir, 0o500);
@@ -3352,10 +3400,10 @@ describe("message check under the slack backend", () => {
   });
 
   test("a channel this agent is not in is skipped ONCE, and named as not a fault", async () => {
-    // The config is shared by every agent on a host, so each sweep walked the
-    // others' channels and printed `slack: <name>: channel_not_found` for every
-    // one, every time. An agent reported two such lines on every check, for
-    // channels it had never been in: "It reads like a fault every time."
+    // Every agent on a host shares the configuration, so each sweep checked the other
+    // agents' channels and printed `slack: <name>: channel_not_found` for every one
+    // every time. An agent logged two such lines on every check for channels it had
+    // never joined, which appeared as a fault on every run.
     const cwd = scratchDir("check-notmine");
     const io = slackCheckIo(cwd, {
       fetch: async (url) => {
@@ -3371,7 +3419,8 @@ describe("message check under the slack backend", () => {
         return new Response(JSON.stringify({ ok: false, error: "channel_not_found" }), { status: 200 });
       },
     });
-    // AFTER the helper, which writes its own config over anything earlier.
+    // Position this after the helper, which writes its own configuration over
+    // anything defined earlier.
     writeSlackConfig(cwd, {
       appToken: "xapp-1",
       token: "xoxb-1",
@@ -3383,23 +3432,24 @@ describe("message check under the slack backend", () => {
     const said = errs.join("\n");
     expect(said).toContain("skipped 2 channel(s) dev is not a member of: alsotheirs, theirs");
     expect(said).toContain("shared by the agents on this host");
-    // THE LINE A HUMAN PASTES, already filled in with this agent's HANDLE. An
-    // agent read this list, wanted one of the channels, and had to ask which
-    // command to ask for.
+    // The human operator pastes this line, which is already populated with this
+    // agent's handle. An agent read this list, wanted one of the channels, and had to
+    // ask which command to request.
     expect(said).toContain("/invite @dev");
-    // And NOT one line per channel, which is what read as a fault.
+    // The output avoids one line per channel, which read as a fault.
     expect(said).not.toContain("slack: theirs: channel_not_found");
 
-    // A SECOND SWEEP WITH THE SAME SET IS SILENT. This line printed every tick,
-    // so a monitor guarding on `if [ -n "$out" ]` fired every time: 123 of 187
-    // ticks carried it and nothing else.
+    // The line "A SECOND SWEEP WITH THE SAME SET IS SILENT" printed on every tick,
+    // so a monitor guarding on `if [ -n "$out" ]` fired every time: 123 of 187 ticks
+    // carried this message and nothing else.
     const again: string[] = [];
     expect(
       await main(["message", "check", "--as", "dev", "--backend", "slack"], { ...io, writeErr: (l) => again.push(l) }),
     ).toBe(0);
     expect(again.join("\n")).not.toContain("is not a member of");
 
-    // A CHANGE SPEAKS. Losing one of them is news, and so is gaining one.
+    // Each change communicates information. Losing a change is news, and gaining a
+    // change is news as well.
     writeSlackConfig(cwd, {
       appToken: "xapp-1",
       token: "xoxb-1",
@@ -3412,9 +3462,9 @@ describe("message check under the slack backend", () => {
     ).toBe(0);
     expect(moved.join("\n")).toContain("skipped 1 channel(s) dev is not a member of: theirs");
 
-    // A CURSOR FILE THAT WILL NOT PARSE reads as no remembered set, so the
-    // advisory speaks. Silence there would hide a real change behind a corrupt
-    // file.
+    // When a cursor file fails to parse, the system treats it as having no remembered
+    // set, so the advisory emits a warning. Silence would hide a real change behind a
+    // corrupt file.
     writeFileSync(join(cwd, ".scramble", "cursors", "dev.json"), "{ broken");
     const broken: string[] = [];
     expect(
@@ -3424,7 +3474,8 @@ describe("message check under the slack backend", () => {
   });
 
   test("with the membership listing broken, every channel stays loud", async () => {
-    // A filter that cannot tell the two apart must not choose the quiet answer.
+    // A filter that cannot distinguish between the two must not select the quiet
+    // answer.
     const cwd = scratchDir("check-noclassify");
     const io = slackCheckIo(cwd, {
       fetch: async (url) =>
@@ -3447,10 +3498,11 @@ describe("message check under the slack backend", () => {
   });
 
   test("a status in an UNMAPPED channel resolves live, the way sending does", async () => {
-    // Measured live: an agent invited into a channel could send to it, because
-    // the post path asks Slack, while the status path read the hand-kept map,
-    // found nothing, and the feature was dead in that channel. A stale map
-    // entry ended the same way, as a bare `status: channel_not_found`.
+    // Live testing showed that an agent invited into a channel could send messages to
+    // it, because the post path queries Slack, while the status path read the
+    // manually maintained map, found nothing, and left the feature dead in that
+    // channel. A stale map entry ended the same way, returning a bare
+    // `status: channel_not_found`.
     const cwd = scratchDir("status-unmapped");
     const asked: string[] = [];
     const io = slackCheckIo(cwd, {
@@ -3481,8 +3533,8 @@ describe("message check under the slack backend", () => {
       agents: { dev: { token: "T", handle: "dev" } },
     });
     expect(await main(["message", "check", "invited-channel", "--as", "dev", "--backend", "slack"], io)).toBe(0);
-    // The lookup the map could not answer went to Slack, under the agent's own
-    // credential, exactly as the post path does.
+    // When the map could not answer the lookup, the request went to Slack under the
+    // agent's own credential, exactly as the post path does.
     expect(asked.some((u) => u.includes("users.conversations"))).toBe(true);
   });
 
@@ -3493,9 +3545,9 @@ describe("message check under the slack backend", () => {
   });
 
   test("an existing cwd cursor MIGRATES on the first write, keeping its values", async () => {
-    // Reading the old file while writing the new one is what ends the coupling.
-    // Reading the new (absent) one instead would drop every channel cursor this
-    // agent already had and re-drain everything exactly once.
+    // The agent ends the coupling by reading the old file while writing the new one.
+    // Reading the absent new file would drop every channel cursor this agent already
+    // had and re-drain everything exactly once.
     const cwd = scratchDir("cursor-migrate");
     const io = slackCheckIo(cwd, {
       fetch: async (url) =>
@@ -3503,7 +3555,7 @@ describe("message check under the slack backend", () => {
           ? new Response(JSON.stringify({ ok: true, messages: [{ ts: "9.9", user: "U9", text: "hi" }] }), { status: 200 })
           : new Response(JSON.stringify({ ok: true, messages: [] }), { status: 200 }),
     });
-    // The old location, holding a cursor for a channel this sweep will not visit.
+    // The old location holds a cursor for a channel this sweep will not visit.
     mkdirSync(join(cwd, ".scramble"), { recursive: true });
     writeFileSync(
       join(cwd, ".scramble", "cursor.json"),
@@ -3513,17 +3565,16 @@ describe("message check under the slack backend", () => {
     const moved = JSON.parse(
       readFileSync(join(cwd, ".scramble", "cursors", "dev.json"), "utf8"),
     ) as Record<string, Record<string, string>>;
-    // The old value survived the move, and the new one joined it.
+    // The move retained the old value, and the new value joined it.
     expect(moved["slack:dev"]!["already-seen"]).toBe("5.5");
     expect(moved["slack:dev"]!.general).toBe("9.9");
   });
 
   test("ONE AGENT'S CURSOR NEVER BLINDS ANOTHER on a shared host", async () => {
-    // The peer agent read the previous version and found the step I missed: a
-    // single shared file beside the config looks fine because its keys are per
-    // agent, and the FIRST agent to sweep creates it, after which every other
-    // agent resolves to that file, finds no key of its own, reads 0, and
-    // re-drains full history. The same flood, one step later, once per agent.
+    // A single shared file beside the configuration appears correct because its keys
+    // are per agent. The first agent that sweeps creates the file. Every other agent
+    // then resolves to that file, finds no key for itself, reads 0, and re-drains the
+    // full history. This produces the same flood one step later, once per agent.
     const cwd = scratchDir("cursor-shared");
     const io = slackCheckIo(cwd, {
       fetch: async (url) =>
@@ -3534,26 +3585,26 @@ describe("message check under the slack backend", () => {
     expect(await main(["message", "check", "--as", "alpha", "--backend", "slack"], io)).toBe(0);
     const alpha = join(cwd, ".scramble", "cursors", "alpha.json");
     expect(existsSync(alpha)).toBe(true);
-    // beta has swept nothing, so it has no cursor of its own and alpha's file is
-    // NOT what it reads. One file per agent is what makes that true.
+    // beta has swept nothing, so it has no cursor of its own, and it does not read
+    // alpha's file. Each agent uses one file, which makes that true.
     const beta = join(cwd, ".scramble", "cursors", "beta.json");
     expect(existsSync(beta)).toBe(false);
     expect(await main(["message", "check", "--as", "beta", "--backend", "slack"], io)).toBe(0);
     expect(existsSync(beta)).toBe(true);
-    // And alpha's cursor is untouched by beta's sweep: no read-modify-write race
+    // Beta's sweep does not touch alpha's cursor, so no read-modify-write race occurs
     // over one file.
     const after = JSON.parse(readFileSync(alpha, "utf8")) as Record<string, unknown>;
-    // Each agent's own file carries its own cursor and its own skipped set, and
-    // nothing belonging to the other agent.
+    // Each agent's file stores only its own cursor and skipped set, keeping it
+    // isolated from the other agent.
     expect(Object.keys(after).sort()).toEqual(["slack-skipped:alpha", "slack:alpha"]);
   });
 
   test("the sweep covers channels this agent is IN, beyond what the config maps", async () => {
-    // : a peer removed two entries from the SHARED config while testing name
-    // resolution, and this sweep stopped covering the channel the operator
-    // talks to me in. It reported "none of the 3 configured channels are
-    // readable" and swept nothing that mattered, while the listener kept
-    // delivering, so nothing looked broken.
+    // A peer removed two entries from the SHARED configuration while testing name
+    // resolution, and this sweep stopped covering the channel the operator uses to
+    // communicate. The sweep reported "none of the 3 configured channels are readable"
+    // and swept nothing that mattered, while the listener kept delivering, so nothing
+    // looked broken.
     const asked: string[] = [];
     const io = slackCheckIo(scratchDir("mslack-membership"), {
       fetch: async (url) => {
@@ -3572,14 +3623,14 @@ describe("message check under the slack backend", () => {
       },
     });
     expect(await main(["message", "check", "--as", "dev", "--backend", "slack"], io)).toBe(0);
-    // C1 is the configured `general`; C9 is the channel only membership knows.
+    // Channel C1 is the configured `general`, and only membership knows channel C9.
     expect(asked).toContain("C1");
     expect(asked).toContain("C9");
   });
 
   test("a refused membership listing is REPORTED, never read as being in nothing", async () => {
-    // An agent in no channels and an agent whose listing was refused look the
-    // same from the outside, and one of them is a broken credential.
+    // An agent with no channels and an agent whose listing was refused appear
+    // identical from the outside, and one of these cases is a broken credential.
     const errs: string[] = [];
     const io = slackCheckIo(scratchDir("mslack-memberfail"), {
       writeErr: (l) => errs.push(l),
@@ -3594,9 +3645,9 @@ describe("message check under the slack backend", () => {
   });
 
   test("a ledger it cannot update while closing answered items REPORTS itself", async () => {
-    // The close runs from the sweep, where the agent is not watching. A silent
-    // failure there leaves answered questions in `pending` and teaches the agent
-    // to scroll past the list.
+    // The sweep process executes the close operation while the agent is not
+    // watching. A silent failure at this step leaves answered questions in `pending`
+    // and trains the agent to scroll past the list.
     const cwd = scratchDir("mslack-closefail");
     const errs: string[] = [];
     const io = slackCheckIo(cwd, {
@@ -3613,8 +3664,9 @@ describe("message check under the slack backend", () => {
       agents: { dev: { token: "T", handle: "dev" } },
       roster: { U1: "dev" },
     });
-    // An open row must EXIST for the close to attempt a write, and the FILE is
-    // what gets locked: a directory's write bit governs create and unlink only.
+    // An open row must exist for the close operation to attempt a write, and the
+    // system locks the file. A directory's write bit governs create and unlink
+    // operations only.
     mkdirSync(join(cwd, ".scramble", "inbox"), { recursive: true });
     const ledger = join(cwd, ".scramble", "inbox", "dev.jsonl");
     writeFileSync(
@@ -3631,11 +3683,11 @@ describe("message check under the slack backend", () => {
   });
 
   test("the sweep reads MY OWN sent lines back against today's rules", async () => {
-    // Operator, after catching three style defects in a row: "You need to
-    // understand this general pattern and use the message check to guard it."
-    // Every rule was added AFTER a message went out carrying what it bans, so a
-    // rule guarding only the NEXT message leaves every earlier one standing in
-    // the channel, unmarked, as though it were fine.
+    // The operator must understand this general pattern and use the message check to
+    // guard it after catching three style defects in a row. The system added every
+    // rule after a message went out carrying what the rule bans, so a rule guarding
+    // only the next message leaves every earlier message standing in the channel,
+    // unmarked, as though it were fine.
     const errs: string[] = [];
     const cwd = scratchDir("mslack-selflint");
     const io = slackCheckIo(cwd, {
@@ -3654,8 +3706,8 @@ describe("message check under the slack backend", () => {
             )
           : new Response(JSON.stringify({ ok: true, user: "dev", messages: [] }), { status: 200 }),
     });
-    // AFTER the helper, which writes its own config: the roster resolves U1 to
-    // this agent, so the drain recognises the line as its OWN and self-lints it.
+    // After the helper writes its own configuration, the roster resolves user ID
+    // U1 to this agent, so the drain recognises the line as its own and lints it.
     writeSlackConfig(cwd, {
       appToken: "xapp-1",
       token: "xoxb-1",
@@ -3669,7 +3721,7 @@ describe("message check under the slack backend", () => {
     expect(said).toContain("would be refused by today's rules");
     expect(said).toContain("9.1");
     expect(said).toContain("internal shorthand");
-    // The clean line is not named: a report that lists everything names nothing.
+    // The clean line has no name. A report that lists everything names nothing.
     expect(said).not.toContain("9.2");
   });
 
@@ -3713,21 +3765,24 @@ describe("message check under the slack backend", () => {
             { status: 200 },
           );
         }
-        // the status postMessage answered (this line addressed "dev")
+        // The status postMessage answered, addressing "dev".
         return new Response(JSON.stringify({ ok: true, ts: "9.9" }), { status: 200 });
       },
     });
     const code = await main(["message", "check", "--as", "dev", "--backend", "slack"], io);
     expect(code).toBe(0);
-    // no prior cursor: history asked without an `oldest`
+    // The request asks for history without an `oldest` value, so it has no prior
+    // cursor.
     expect(historySeen).toEqual(["(none)"]);
-    // one JSON line, the waiting mention, in the listen shape (mentioned stamped)
+    // The output contains one JSON line for the waiting mention, formatted in the
+    // listen schema with a mention timestamp.
     expect(writes).toHaveLength(1);
     const line = JSON.parse(writes[0]!) as { text: string; channel: string; mentioned: boolean };
     expect(line.text).toBe("@dev check me");
     expect(line.channel).toBe("general");
     expect(line.mentioned).toBe(true);
-    // the per-channel cursor moved: the stored slack cursor is a map of channel to ts
+    // The per-channel cursor moved. The stored Slack cursor is a map of channel to
+    // ts.
     const cursor = JSON.parse(readFileSync(join(cwd, ".scramble", "cursors", "dev.json"), "utf8"));
     expect(cursor["slack:dev"]).toEqual({ general: "5.5" });
   });
@@ -3747,7 +3802,8 @@ describe("message check under the slack backend", () => {
     const first = slackCheckIo(cwd, { fetch, write: () => {} });
     const code1 = await main(["message", "check", "--as", "dev", "--backend", "slack"], first);
     expect(code1).toBe(0);
-    // second check: same history, but the cursor ("6.6") excludes the line
+    // The second check uses the same history, but the cursor ("6.6") excludes the
+    // line.
     const writes: string[] = [];
     const second = slackCheckIo(cwd, { fetch, write: (l) => writes.push(l) });
     const code2 = await main(["message", "check", "--as", "dev", "--backend", "slack"], second);
@@ -3756,18 +3812,19 @@ describe("message check under the slack backend", () => {
   });
 
   test("message check drains a peer's line and does NOT drain a line from the draining agent", async () => {
-    // The drain is a DELIVERY verb: it hands the agent what ARRIVED for it.
-    // Its own line (resolved sender name == the draining agent) is left out,
-    // by the same name comparison listen and next use. The cursor still advances
-    // over the skipped own-line, since the peer line is newest.
+    // The drain operation delivers incoming messages to the agent. It omits the
+    // agent's own lines where the resolved sender name matches the draining agent,
+    // using the same name comparison that listen and next use. The cursor still
+    // advances over the skipped line, since the peer line is newest.
     const cwd = scratchDir("mslack-drain-noself");
     const writes: string[] = [];
     const io = slackCheckIo(cwd, {
       write: (l) => writes.push(l),
       fetch: async (u) => {
         if (String(u).includes("conversations.history")) {
-          // newest-first: the agent's own line (ts 9.9) is the newest; the
-          // peer's line (ts 9.5) is older.
+          // Under newest-first ordering, the agent's own line (ts 9.9) is the newest,
+          // and
+          // the peer's line (ts 9.5) is older.
           return new Response(
             JSON.stringify({
               ok: true,
@@ -3784,33 +3841,36 @@ describe("message check under the slack backend", () => {
     });
     const code = await main(["message", "check", "--as", "dev", "--backend", "slack"], io);
     expect(code).toBe(0);
-    // ONLY the peer's line drains; the agent's own is withheld.
+    // Only the peer's line drains, and the agent withholds its own line.
     expect(writes).toHaveLength(1);
     const line = JSON.parse(writes[0]!) as { text: string; from: string };
     expect(line.from).toBe("bob");
     expect(line.text).toBe("@dev a peer asks");
-    // the cursor is the NEWEST line, which is the skipped OWN line (9.9), so the
-    // very next sweep does not re-read it.
+    // The cursor points to the newest line, which is the skipped own line (9.9), so
+    // the very next sweep does not re-read it.
     const cursor = JSON.parse(readFileSync(join(cwd, ".scramble", "cursors", "dev.json"), "utf8"));
     expect(cursor["slack:dev"]).toEqual({ general: "9.9" });
   });
 
   test("the cursor advances past a skipped own-line: second check empty, third returns only the new peer line", async () => {
     const cwd = scratchDir("mslack-cursor-own");
-    // History rotates per sweep: sweep 1 returns only OWN lines, sweep 2 the
-    // same own lines again, sweep 3 a fresh peer line.
+    // Each sweep rotates the history. Sweep 1 returns only its own lines, sweep 2
+    // returns the same own lines again, and sweep 3 returns a fresh peer line.
     const batches: Array<Record<string, string | number>[]> = [
-      // sweep 1: two own-line posts, neither delivered but both before the cursor
+      // In sweep 1, two own-line posts appear before the cursor, and neither post is
+      // delivered.
       [
         { ts: "5.1", user: "dev", username: "dev", text: "own reply 2" },
         { ts: "5.0", user: "dev", username: "dev", text: "own first" },
       ],
-      // sweep 2: the same own lines (cursor already past them -> nothing)
+      // Sweep 2 encounters the same owned lines and yields nothing because the cursor
+      // is
+      // already past them.
       [
         { ts: "5.1", user: "dev", username: "dev", text: "own reply 2" },
         { ts: "5.0", user: "dev", username: "dev", text: "own first" },
       ],
-      // sweep 3: a fresh peer line after the own ones
+      // Sweep 3 processes a fresh peer line after its own lines.
       [{ ts: "6.0", user: "bob", username: "bob", text: "@dev hi now" }],
     ];
     const writes1: string[] = [];
@@ -3824,12 +3884,13 @@ describe("message check under the slack backend", () => {
         return new Response(JSON.stringify({ ok: true, ts: "1.1" }), { status: 200 });
       },
     });
-    // sweep 1: own lines are held back from the drain while the cursor passes them.
+    // In sweep 1, the process holds its own lines back from the drain while the cursor
+    // passes them.
     const c1 = await main(["message", "check", "--as", "dev", "--backend", "slack"], first);
     expect(c1).toBe(0);
     expect(writes1).toHaveLength(0);
 
-    // sweep 2: the same own lines are already behind the cursor => nothing.
+    // Sweep 2 does nothing if its own lines are already behind the cursor.
     const writes2: string[] = [];
     const second2 = slackCheckIo(cwd, {
       write: (l) => writes2.push(l),
@@ -3845,7 +3906,7 @@ describe("message check under the slack backend", () => {
     expect(c2).toBe(0);
     expect(writes2).toHaveLength(0);
 
-    // sweep 3: a new peer line after the cursor drains, and ONLY it.
+    // Sweep 3 produces only a new peer line after the cursor drains.
     const writes3: string[] = [];
     const third3 = slackCheckIo(cwd, {
       write: (l) => writes3.push(l),
@@ -3867,8 +3928,9 @@ describe("message check under the slack backend", () => {
     const addressed = scratchDir("mslack-status-on");
     const writes: string[] = [];
     const postCount: string[] = [];
-    // history in channel general returns ONE message mentioning "dev"; the
-    // status post is chat.postMessage -> ok:true so setOn writes the ledger.
+    // History in channel `general` returns one message mentioning "dev". The status
+    // post calls `chat.postMessage` and receives `ok:true`, so `setOn` writes the
+    // ledger.
     const ioA = slackCheckIo(addressed, {
       write: (l) => writes.push(l),
       fetch: async (input) => {
@@ -3889,13 +3951,13 @@ describe("message check under the slack backend", () => {
     });
     const c1 = await main(["message", "check", "--as", "dev", "--backend", "slack"], ioA);
     expect(c1).toBe(0);
-    // the reading agent was addressed: a status was set in the ledger
+    // Addressing the reading agent set a status in the ledger.
     expect(existsSync(join(addressed, ".scramble", "status.json"))).toBe(true);
     const ledger = JSON.parse(readFileSync(join(addressed, ".scramble", "status.json"), "utf8"));
     const entry = (ledger.entries as Array<{ channel: string; agent: string }>).find((e) => e.channel === "general");
     expect(entry).toMatchObject({ channel: "general", agent: "dev" });
 
-    // now a message NOT addressed: nothing to set, no new status entry
+    // A message that is not addressed sets nothing and creates no new status entry.
     const unaddressed = scratchDir("mslack-status-off");
     const writes2: string[] = [];
     const ioB = slackCheckIo(unaddressed, {
@@ -3917,7 +3979,8 @@ describe("message check under the slack backend", () => {
     });
     const c2 = await main(["message", "check", "--as", "dev", "--backend", "slack"], ioB);
     expect(c2).toBe(0);
-    // message 8.8 is printed but not addressed: it must not have set a status
+    // The system prints message 8.8 but does not address it, which means it must not
+    // have set a status.
     expect(writes2).toHaveLength(1);
     expect(existsSync(join(unaddressed, ".scramble", "status.json"))).toBe(false);
   });
@@ -3933,7 +3996,8 @@ describe("message check under the slack backend", () => {
             JSON.stringify({
               ok: true,
               messages: [
-                // Slack returns newest-first; the drain cursor must keep the newest.
+                // Slack returns results newest-first. The drain cursor must keep the
+                // newest.
                 { type: "message", channel: "C1", user: "bob", username: "bob", text: "no mention", ts: "9.5" },
                 { type: "message", channel: "C1", user: "bob", username: "bob", text: "older still fresh", ts: "9.4" },
               ],
@@ -3946,7 +4010,8 @@ describe("message check under the slack backend", () => {
     const code = await main(["message", "check", "--as", "dev", "--backend", "slack"], io);
     expect(code).toBe(0);
     expect(writes).toHaveLength(2);
-    // cursor holds the newest ts for the channel, which the last-seen ts can trail.
+    // The cursor holds the newest timestamp for the channel, which the last-seen
+    // timestamp can trail.
     const cursor = JSON.parse(readFileSync(join(cwd, ".scramble", "cursors", "dev.json"), "utf8"));
     expect(cursor["slack:dev"]).toEqual({ general: "9.5" });
   });
@@ -3969,8 +4034,8 @@ describe("message check under the slack backend", () => {
 
   test("a valid config without a bot token is REPORTED, never a silent nothing", async () => {
     const cwd = scratchDir("mslack-notoken");
-    // config parses (channels+agents valid) but carries no bot token: the
-    // slack backend refuses to open, and `message check` must say so.
+    // If the configuration parses with valid channels and agents but carries no bot
+    // token, the Slack backend refuses to open, and `message check` must report it.
     writeSlackConfig(cwd, { appToken: "xapp-1", channels: { general: "C1" }, agents: {} });
     const errs: string[] = [];
     const io: Io = {
@@ -3999,10 +4064,10 @@ describe("message check under the slack backend", () => {
 
 
 describe("channel join on the slack backend", () => {
-  // An app cannot add itself to a Slack conversation, public or private: a
-  // member invites it. So the verb reports whether the invite has happened and
-  // prints the invite line when it has not, and it never touches the local
-  // daemon, which is not running under this backend.
+  // An app cannot add itself to a public or private Slack conversation. A member
+  // invites it. So the command reports whether the invite has happened and prints
+  // the invite line when it has not. The command never touches the local daemon,
+  // which is not running under this backend.
   function joinIo(cwd: string, fetch: (u: string) => Promise<Response>): { io: Io; writes: string[]; errs: string[] } {
     const writes: string[] = [];
     const errs: string[] = [];
@@ -4081,8 +4146,9 @@ describe("channel join on the slack backend", () => {
 });
 
 describe("message check across a config several agents share", () => {
-  // Measured live: scramble-dev was invited to one channel of the four in the config, and `message
-  // check` answered `read failed: channel_not_found` and drained NOTHING, which a sweeping agent
+  // During a live measurement, scramble-dev was invited to one channel of the four
+  // in the config. The command `message check` returned
+  // `read failed: channel_not_found` and drained nothing, which a sweeping agent
   // cannot tell from a quiet workspace.
   function checkIo(cwd: string, fetch: (u: string) => Promise<Response>): { io: Io; writes: string[]; errs: string[] } {
     const writes: string[] = [];
@@ -4123,9 +4189,9 @@ describe("message check across a config several agents share", () => {
     expect(await main(["message", "check", "--as", "dev", "--backend", "slack"], io)).toBe(0);
     expect(writes).toHaveLength(1);
     const said = errs.join(" ");
-    // NAMED, and named as what it is: this agent is not a member of it, which
-    // the membership listing settles. It used to read `theirs: channel_not_found`
-    // on every single check, identical to a real failure.
+    // The response is named for what it is: this agent is not a member of the
+    // channel, which the membership listing settles. Every check previously read
+    // `theirs: channel_not_found`, identical to a real failure.
     expect(said).toContain("theirs");
     expect(said).toContain("is not a member of");
   });
@@ -4183,9 +4249,9 @@ describe("message check across a config several agents share", () => {
 
 
 describe("staleListeners", () => {
-  // A committed fix does not reach a running process, and twice that produced a
-  // visible defect the code had already fixed. Nothing said so, which is what
-  // this answers.
+  // A running process does not receive a committed fix. This produced a visible
+  // defect twice where the code had already fixed the issue. This document explains
+  // the behavior because no previous text stated it.
   const proc = (pid: string, cmd: string, startedMs: number) => ({ pid, cmd, startedMs });
 
   test("a listener for this agent that predates the code is stale", () => {
@@ -4202,11 +4268,11 @@ describe("staleListeners", () => {
   });
 
   test("a running listener TELLS ITS OWN AGENT when a newer copy is installed", () => {
-    // One version per machine is what this workspace wants, so an install by
-    // any agent leaves every running listener behind. The install prints who is
-    // affected, and the INSTALLER reads that. This is the half the stale agent
-    // reads, on the stream it already watches. Two agents reported being left
-    // behind and learning it only from doctor.
+    // This workspace requires one version per machine, so an install by any agent
+    // leaves every running listener behind. The install prints which listeners are
+    // affected, and the installer reads that output. The stale agent reads this
+    // section on the stream it already watches. Two agents reported being left behind
+    // and learning about it only from doctor.
     const home = scratchDir("drift-home");
     const store = join(home, ".local", "share", "scramble");
     mkdirSync(join(store, "current", "src"), { recursive: true });
@@ -4228,30 +4294,31 @@ describe("staleListeners", () => {
     };
     const drift = watchForNewerInstall(io);
     try {
-      // Same commit: nothing to say.
+      // The commit is identical, so there is nothing to report.
       drift.tick();
       expect(outs).toEqual([]);
-      // Somebody installs.
+      // An operator runs the installation.
       writeFileSync(join(store, "current", "src", "COMMIT"), "bbbbbbb\n");
       drift.tick();
       expect(outs.join(" ")).toContain("this listener runs aaaaaaa and bbbbbbb is installed now");
-      // ON THE DELIVERY STREAM, AS JSON. One agent's launcher sent stderr to a
-      // file its monitor never read, so 58 of these notices reached nobody, and
-      // merging that host's streams would have fed prose to a reader that
+      // The delivery stream carries these notices as JSON. One agent's launcher sent
+      // stderr to a file that its monitor never read, so 58 of these notices reached
+      // nobody, and merging that host's streams would have fed prose to a reader that
       // parses every line. A reader consuming deliveries consumes this.
       expect(errs).toEqual([]);
       const parsed = JSON.parse(outs[0] ?? "null") as Record<string, unknown>;
       expect(parsed.scramble).toBe("stale-listener");
       expect(parsed.running).toBe("aaaaaaa");
       expect(parsed.installed).toBe("bbbbbbb");
-      // ONCE per change: a line every 30 seconds would teach the agent to skip it.
+      // Emit a line once per change, because a line every 30 seconds would teach the
+      // agent to skip it.
       drift.tick();
       expect(outs).toHaveLength(1);
     } finally {
       drift.stop();
     }
-    // A copy with no COMMIT beside it falls back to the installed commit, so a
-    // checkout run through bun directly compares against itself and says nothing.
+    // A copy without a COMMIT beside it falls back to the installed commit, so a
+    // checkout run directly through bun compares against itself and prints nothing.
     const bare: Io = { ...io, moduleDir: () => join(home, "no-commit-here") };
     const second = watchForNewerInstall(bare);
     try {
@@ -4262,12 +4329,12 @@ describe("staleListeners", () => {
   });
 
   test("a SHELL carrying the words is not a listener", () => {
-    // A substring match over /proc counts any process whose arguments carry the
-    // words, and the processes most likely to carry them are the ones people run
-    // while looking into listeners. I hit this on my own host, where my
-    // debugging shells matched the scan, and fixed the TESTS by feeding them an
-    // empty /proc, which left the detector able to do it to anyone. argv[0]
-    // settles it: a listener is executed by bun.
+    // A substring match over `/proc` counts any process whose arguments carry the
+    // searched words, and processes run while investigating listeners are the most
+    // likely to carry them. Debugging shells matched the scan on a host, and supplying
+    // an empty `/proc` to the tests masked the failure, which left the detector able
+    // to produce false matches for any user. Inspecting `argv[0]` identifies the
+    // process, because `bun` executes a listener.
     const shell = proc("900", "/bin/bash -c pgrep -f 'bin.ts listen' | grep -- '--as dev'", 1_000);
     const grep = proc("901", "grep -F bin.ts listen --as dev", 1_000);
     const real = proc("902", "bun /srv/agents/scramble/abc1234/src/bin.ts listen --as dev", 1_000);
@@ -4277,24 +4344,24 @@ describe("staleListeners", () => {
   });
 
   test("a pid that has gone is dropped before it is NAMED", () => {
-    // An agent killed its listener, ran `doctor --wake`, and was refused with
-    // the pid of a process that had already gone. A refusal naming a dead pid
-    // sends someone hunting for a process to stop, and the probe it withheld
-    // would have worked.
+    // An agent stopped its listener and executed `doctor --wake`, but the command
+    // refused the request with the PID of a process that had already exited. A refusal
+    // that names a dead PID prompts an operator to search for a process to stop, and
+    // the probe that the command withheld would have succeeded.
     const root = mkdtempSync(join(tmpdir(), "scramble-proc-"));
     mkdirSync(join(root, "500"), { recursive: true });
     expect(stillAlive(["500", "501"], root)).toEqual(["500"]);
-    // A root that cannot be read answers "none alive", which is the safe
-    // direction here: it lets the probe RUN and be judged on its own result.
+    // A root that cannot be read reports "none alive". This response is safe because
+    // it allows the probe to RUN and be judged on its own result.
     expect(stillAlive(["500"], join(root, "nothing"))).toEqual([]);
   });
 
   test("a listener names the COMMIT it runs, and only an installed one can", () => {
-    // The launcher execs the resolved commit directory, so the version is in the
-    // process's own command line. Exec'ing `current` would have every listener
-    // on the host say `current`, which names a symlink that has since moved.
+    // The launcher executes the resolved commit directory, so the version is in
+    // the process's own command line. Executing `current` would make every listener
+    // on the host report `current`, which names a symlink that has since moved.
     expect(listenerCommit("bun /s/share/scramble/995edba/src/bin.ts listen --as dev")).toBe("995edba");
-    // A checkout has no commit to name, which is the case reported differently.
+    // A checkout has no commit to name, and this case is reported differently.
     expect(listenerCommit("bun src/bin.ts listen --as dev")).toBe("");
     expect(listenerCommit("bun /somewhere/else/src/bin.ts listen --as dev")).toBe("");
   });
@@ -4307,14 +4374,15 @@ describe("staleListeners", () => {
       { pid: "13", cmd: "bun src/bin.ts listen --as dev" },
     ];
     expect(listenersBehind(procs, "dev", "995edba")).toEqual([{ pid: "10", commit: "4f7b942" }]);
-    // Nothing installed means no comparison to make. A false accusation would follow.
+    // Because nothing is installed, the system has no comparison to make, which would
+    // produce a false accusation.
     expect(listenersBehind(procs, "dev", "")).toEqual([]);
   });
 
   test("a LIVE listener is found whatever its age, which is a different question", () => {
-    // pickStale asks which listeners are behind the code. liveListeners asks
-    // whether anything holds the socket at all, which is what decides whether
-    // `doctor --wake` can mean anything.
+    // `pickStale` identifies which listeners run behind the current code.
+    // `liveListeners` checks whether any process holds the socket, which determines
+    // whether `doctor --wake` can have any effect.
     const fresh = proc("200", "bun src/bin.ts listen --as dev", 9_000);
     const old = proc("201", "bun src/bin.ts listen --as dev", 1_000);
     const other = proc("202", "bun src/bin.ts listen --as someone-else", 1_000);
@@ -4325,13 +4393,14 @@ describe("staleListeners", () => {
   });
 
   test("the agent's name appearing in the working directory is not the agent's listener", () => {
-    // Measured: an agent named after the product, and a checkout under a
-    // directory carrying that same name, made a substring match report every
-    // listener under every agent. doctor named the same three pids twice and
-    // told me to restart processes that were not mine.
-    // A REAL cmdline: /proc holds the argv of the process, so the shell's `cd`
-    // and `&&` are never in it. The checkout path carries the other agent's name,
-    // which is what this case exercises.
+    // During measurement, an agent named after the product in a checkout directory
+    // carrying that same name caused a substring match to report every listener under
+    // every agent. The doctor diagnostic listed the same three process IDs twice and
+    // instructed the operator to restart processes owned by other users.
+    //
+    // Because `/proc` holds the argument vector of the process, the shell's `cd`
+    // and `&&` never appear in it. The checkout path carries the other agent's name,
+    // which this case exercises.
     const other = proc("104", "bun /srv/hark/scramble/src/bin.ts listen --as scramble-dev", 1_000);
     expect(pickStale([other], "hark", 5_000)).toEqual([]);
     expect(pickStale([other], "scramble-dev", 5_000)).toEqual([{ pid: "104", ageBehind: 4 }]);
@@ -4342,8 +4411,9 @@ describe("staleListeners", () => {
   });
 
   test("a pid whose cmdline cannot be read is skipped rather than crashing the scan", () => {
-    // A process can exit between the listing and the read; that one is gone,
-    // not stale. An unreadable /proc entirely answers an empty list.
+    // A process can exit between the listing and the read. Such a process has
+    // terminated and does not persist as stale data. If `/proc` is entirely
+    // unreadable, the operation returns an empty list.
     const root = scratchDir("procfake");
     mkdirSync(join(root, "42"), { recursive: true });
     writeFileSync(join(root, "42", "cmdline"), "bun src/bin.ts listen --as dev\0");
@@ -4403,8 +4473,8 @@ describe("staleListeners", () => {
 });
 
 describe("message react", () => {
-  // A reaction acknowledges without spending a line, which is why the skill uses
-  // it in place of an "on it" message.
+  // The skill uses a reaction to acknowledge messages because reactions avoid
+  // spending a line while fulfilling the role of an "on it" message.
   function reactIo(cwd: string, router: (u: string) => Promise<Response>) {
     const errs: string[] = [];
     const bodies: Array<Record<string, unknown>> = [];
@@ -4429,7 +4499,8 @@ describe("message react", () => {
     const cwd = scratchDir("react-ok");
     writeSlackConfig(cwd, { token: "xoxb-d", channels: { room: "C1" }, agents: { dev: { token: "T_DEV" } } });
     const { io, bodies } = reactIo(cwd, ok);
-    // The colons a person types around an emoji are stripped: Slack wants the name.
+    // The colons a person types around an emoji are stripped because Slack requires
+    // the name.
     const code = await main(["message", "react", "--target", "room", "--to", "9.9", "--emoji", ":tada:", "--as", "dev", "--backend", "slack"], io);
     expect(code).toBe(0);
     expect(bodies[0]).toEqual({ channel: "C1", timestamp: "9.9", name: "tada" });
@@ -4448,20 +4519,20 @@ describe("message react", () => {
     const { io, errs } = reactIo(cwd, async () => new Response(JSON.stringify({ ok: false, error: "invalid_name" }), { status: 200 }));
     expect(await main(["message", "react", "--target", "room", "--to", "9.9", "--emoji", "nope", "--as", "dev", "--backend", "slack"], io)).toBe(1);
     expect(errs.join(" ")).toContain("invalid_name");
-    // WHAT IT ASKED FOR, with the answer. `react failed: channel_not_found`
-    // named the error and nothing else, and an agent that measured a direct
-    // reactions.add answering ok:true could take the report no further, because
-    // the line said neither which channel id went out nor under whose
-    // credential.
+    // The log records the request alongside the answer. The output
+    // `react failed: channel_not_found` named the error alone. An agent that
+    // measured a direct `reactions.add` returning `ok:true` could take the report
+    // no further, because the line stated neither which channel id went out nor
+    // which credential it used.
     expect(errs.join(" ")).toContain("channel room resolved to C1");
     expect(errs.join(" ")).toContain("ts 9.9");
     expect(errs.join(" ")).toContain("under dev's own token");
   });
 
   test("the failure names the CONFIG DEFAULT when the agent has no token of its own", () => {
-    // An agent's own token and the config default are different apps, and which
-    // one acted is the first thing to know when Slack says a channel does not
-    // exist.
+    // When Slack reports that a channel does not exist, first determine which
+    // application acted, because an agent's own token and the configuration default
+    // belong to different applications.
     const cwd = scratchDir("react-defaulttoken");
     writeSlackConfig(cwd, { token: "xoxb-d", channels: { room: "C1" }, agents: { dev: {} } });
     const { io, errs } = reactIo(cwd, async () => new Response(JSON.stringify({ ok: false, error: "channel_not_found" }), { status: 200 }));
@@ -4487,9 +4558,9 @@ describe("message react", () => {
     const a2 = reactIo(cwd, ok);
     expect(await main(["message", "react", "--target", "ghost", "--to", "1.1", "--emoji", "x", "--as", "dev", "--backend", "slack"], a2.io)).toBe(1);
     expect(a2.errs.join(" ")).toContain("channel ghost");
-    // --backend local said out loud: with neither a flag nor SCRAMBLE_BACKEND,
-    // the backend follows the config on disk, and this workspace HAS a slack
-    // config, so the derived answer here is slack.
+    // Specifying `--backend local` explicitly sets the backend. Without a flag or
+    // `SCRAMBLE_BACKEND`, the backend follows the configuration on disk, and this
+    // workspace contains a Slack configuration, so the derived backend is Slack.
     const a3 = reactIo(cwd, ok);
     expect(
       await main(["message", "react", "--target", "room", "--to", "1.1", "--emoji", "x", "--as", "dev", "--backend", "local"], a3.io),
@@ -4499,10 +4570,11 @@ describe("message react", () => {
 });
 
 describe("the automatic status posts as the ACTING agent", () => {
-  // It used to post with the config's default token, which belongs to a
-  // different app that is usually not in the agent's channel: Slack answered
-  // channel_not_found, a failed status never fails the work it brackets, and the
-  // feature was silently dead for every agent except the default.
+  // The system previously posted messages using the default token from the
+  // configuration. That token belongs to a different application that is usually
+  // missing from the agent's channel, so Slack returned channel_not_found. Because a
+  // failed status never fails the work it brackets, the feature was silently dead
+  // for every agent except the default.
   test("the status call goes out with the acting agent's own token", async () => {
     const cwd = scratchDir("status-token");
     writeSlackConfig(cwd, {
@@ -4536,13 +4608,13 @@ describe("the automatic status posts as the ACTING agent", () => {
       createSocket: () => ({ send: () => {}, close: () => {}, onopen: null, onmessage: null, onclose: null, onerror: null }),
     };
     expect(await main(["message", "check", "--as", "dev", "--backend", "slack"], io)).toBe(0);
-    // The status post went out under dev's own token.
+    // The status post was published using the developer's personal access token.
     expect(auths).toContain("Bearer T_DEV");
     expect(auths).not.toContain("Bearer xoxb-DEFAULT");
     const ledger = JSON.parse(readFileSync(join(cwd, ".scramble", "status.json"), "utf8")) as {
       entries: Array<{ thread?: string; ts?: string }>;
     };
-    // A recorded THREAD is the proof Slack accepted the status, and no `ts`,
+    // A recorded THREAD proves Slack accepted the status, and it contains no `ts`
     // because a status is no longer a message.
     expect(ledger.entries[0]!.thread).toBe("5.5");
     expect(ledger.entries[0]!.ts).toBeUndefined();
@@ -4550,17 +4622,17 @@ describe("the automatic status posts as the ACTING agent", () => {
 });
 
 describe("doctor, and the warning an agent gets without asking", () => {
-  // AN EMPTY PROCESS TABLE, injected, because these tests otherwise scan the
-  // REAL /proc. The listener matcher looks for `bin.ts listen` and `--as <name>`
-  // in a command line, and a shell command that merely QUOTES those strings
-  // matches: four of these tests went red whenever one of my own debugging
-  // shells happened to hold them, and green when it did not. A test that reads
-  // the machine reports the machine.
+  // The test runner injects an empty process table because these tests otherwise
+  // scan the real `/proc`. The listener matcher searches for `bin.ts listen` and
+  // `--as <name>` in a command line, and a shell command that quotes those strings
+  // matches. Four of these tests failed whenever an active debugging shell held
+  // those strings, and passed when it did not. A test that reads the machine
+  // reports the machine.
   const EMPTY_PROC = scratchDir("doctor-empty-proc");
 
-  // An agent onboarded before a fix keeps running and silently lacks it. Nothing
-  // else tells a RUNNING agent its own config went out of date, which is what
-  // this verb and this warning exist for.
+  // An agent onboarded before a fix continues to run without that fix. No other
+  // mechanism notifies a running agent that its configuration is out of date, which
+  // is why this command and this warning exist.
   function docIo(cwd: string, headers: Record<string, string>, body: Record<string, unknown>) {
     const writes: string[] = [];
     const errs: string[] = [];
@@ -4576,9 +4648,10 @@ describe("doctor, and the warning an agent gets without asking", () => {
     };
     return { io, writes, errs };
   }
-  // DERIVED FROM THE SOURCE LIST. This was a hand-kept copy and it fell behind
-  // the real list by two scopes, so "a healthy agent" was healthy against a list
-  // that no longer existed, which is the drift that let the events go unchecked.
+  // This copy is derived from the source list. Maintainers kept this copy by hand,
+  // and it fell behind the real list by two scopes, so "a healthy agent" was
+  // healthy against a list that no longer existed, which is the drift that let the
+  // events go unchecked.
   const ALL = SCOPE_NAMES.join(",");
 
   test("a healthy agent reports ok with its handle", async () => {
@@ -4590,10 +4663,10 @@ describe("doctor, and the warning an agent gets without asking", () => {
   });
 
   test("ok carries the PEER RECORD'S health, so a monitor reads a field", async () => {
-    // Six agents append to that file on one host, one of them found a line no
-    // parser could read, and the agent that armed a watcher for it wrote its own
-    // parse loop. Two definitions of `damaged` disagree the day the row shape
-    // changes, and a monitor grepping the prose sentence breaks on a rewording.
+    // Six agents append to that file on one host. One agent found a line that no
+    // parser could read, and the agent that armed a watcher for it wrote its own parse
+    // loop. Two definitions of `damaged` disagree the day the row shape changes, and a
+    // monitor that greps the prose sentence breaks on a rewording.
     const cwd = scratchDir("doc-peer-record");
     writeSlackConfig(cwd, { token: "xoxb-d", channels: {}, agents: { dev: { token: "T", handle: "dev_bot" } } });
     writeFileSync(
@@ -4606,17 +4679,18 @@ describe("doctor, and the warning an agent gets without asking", () => {
   });
 
   test("ok says whether the REWRITE is on, and never prints the key", async () => {
-    // Turning it on is four environment variables read by whichever process
-    // sends, so a way to ask without sending a message is the difference between
-    // configured and believed-configured.
+    // The sending process reads four environment variables to enable the feature, so
+    // checking the status without sending a message verifies whether the process is
+    // configured or believed-configured.
     const cwd = scratchDir("doc-rewrite");
     writeSlackConfig(cwd, { token: "xoxb-d", channels: {}, agents: { dev: { token: "T", handle: "dev_bot" } } });
     const off = docIo(cwd, { "x-oauth-scopes": ALL }, { ok: true, user: "dev_bot" });
     expect(await main(["doctor", "--as", "dev", "--backend", "slack"], off.io)).toBe(0);
     expect(JSON.parse(off.writes[0]!)).toMatchObject({ rewrite: { on: false } });
-    // AND ON EVERY RUN, whether or not anything else is wrong. It sat in the
-    // clean line only, so on a host where every other answer is a problem, the
-    // one question an operator asks while setting it up had no answer.
+    // The check runs on every run, whether or not anything else is wrong. The output
+    // appeared in the clean line only, so on a host where every other answer is a
+    // problem, an operator received no answer to the question they ask while setting
+    // it up.
     expect(off.errs.join(" ")).toContain("the outgoing rewrite is OFF");
 
     const on = docIo(cwd, { "x-oauth-scopes": ALL }, { ok: true, user: "dev_bot" });
@@ -4639,11 +4713,12 @@ describe("doctor, and the warning an agent gets without asking", () => {
   });
 
   test("ok NAMES the granted scopes, since a count cannot price a change", async () => {
-    // `scopes: 14` answers no question anyone asks. Pricing a change asks WHICH
-    // are granted, and with only a count on this surface I told an agent that
-    // reading reactions needed a scope change and a reinstall. `reactions:read`
-    // was already one of the fourteen, listed in this repo's own
-    // app-manifest.ts, and they corrected me from their app.
+    // The `scopes: 14` output answers no question an operator asks. Pricing a change
+    // requires knowing which scopes are granted. Because this surface displayed only
+    // a count, an operator told an agent that reading reactions needed a scope change
+    // and a reinstall. The `reactions:read` scope was already one of the fourteen
+    // scopes listed in this repository's app-manifest.ts, and the agent corrected the
+    // mistake from their application.
     const cwd = scratchDir("doc-scopes");
     writeSlackConfig(cwd, { token: "xoxb-d", channels: {}, agents: { dev: { token: "T", handle: "dev_bot" } } });
     const { io, writes } = docIo(cwd, { "x-oauth-scopes": ALL }, { ok: true, user: "dev_bot" });
@@ -4684,9 +4759,9 @@ describe("doctor, and the warning an agent gets without asking", () => {
   });
 
   test("a missing config, an unknown agent and a tokenless agent each name themselves", async () => {
-    // Three refusals, since "doctor said no" is useless on its own: the
-    // fix differs for a config that is not there, a name that is not in it, and
-    // an entry with no token.
+    // The system provides three distinct refusals, since a bare failure message is
+    // useless on its own. The fix differs for a configuration that is missing, a name
+    // that is not in the configuration, and an entry with no token.
     const nowhere = scratchDir("doc-nocfg");
     const a1 = docIo(nowhere, {}, { ok: true });
     expect(await main(["doctor", "--as", "dev", "--backend", "slack"], a1.io)).toBe(1);
@@ -4706,10 +4781,10 @@ describe("doctor, and the warning an agent gets without asking", () => {
   });
 
   test("an org install whose manifest disables org deploy is named as a DEAD INBOX", async () => {
-    // The defect this check exists for, measured live: Slack accepts an
-    // enterprise install of an app declaring org_deploy_enabled:false, every
-    // REST call keeps working, the socket opens and says hello, and no event is
-    // ever delivered. A green-looking agent with a silent wake path.
+    // This check detects a defect measured live: Slack accepts an enterprise
+    // install of an app declaring org_deploy_enabled:false, every REST call keeps
+    // working, and the socket opens and says hello, but no event is ever delivered.
+    // The agent appears green while its wake path remains silent.
     const home = scratchDir("doc-orgdeploy");
     mkdirSync(join(home, ".slack"), { recursive: true });
     writeFileSync(join(home, ".slack", "credentials.json"), JSON.stringify({ E1: { token: "xoxe-cli" } }));
@@ -4730,7 +4805,7 @@ describe("doctor, and the warning an agent gets without asking", () => {
             headers: { "x-oauth-scopes": ALL },
           });
         }
-        // The app's own manifest, which is where the contradiction shows.
+        // The app's own manifest shows the contradiction.
         return new Response(
           JSON.stringify({ ok: true, manifest: { settings: { org_deploy_enabled: false } } }),
           { status: 200 },
@@ -4793,14 +4868,13 @@ describe("doctor, and the warning an agent gets without asking", () => {
   });
 
   test("an app that subscribes to no invite event is named as the silent half of an inbox", async () => {
-    // THE DEFECT THIS EXISTS FOR, measured live: the operator invited an agent
-    // to a channel and nothing arrived. The app declared
-    // org_deploy_enabled:true, held every scope, and its socket was delivering
-    // mentions the whole time. It was subscribed to three events, leaving out
-    // member_joined_channel, and Slack sends nothing for an event an app has
-    // not asked for. Everything else about the agent was healthy, which is why
-    // the wake path has to be checked field by field. Arriving messages prove
-    // nothing about the fields.
+    // A live measurement caught this defect when an operator invited an agent to a
+    // channel and nothing arrived. The application declared `org_deploy_enabled:true`,
+    // held every scope, and its socket delivered mentions the entire time. It
+    // subscribed to three events while omitting `member_joined_channel`, and Slack
+    // sends nothing for an event an application has not requested. Everything else
+    // about the agent was healthy, which is why the wake path has to be checked
+    // field by field. Arriving messages prove nothing about the fields.
     const home = scratchDir("doc-events");
     mkdirSync(join(home, ".slack"), { recursive: true });
     writeFileSync(join(home, ".slack", "credentials.json"), JSON.stringify({ E1: { token: "xoxe-cli" } }));
@@ -4872,8 +4946,8 @@ describe("doctor, and the warning an agent gets without asking", () => {
   });
 
   test("no CLI credential leaves the question open; a REFUSED export is reported", async () => {
-    // Each of these means "cannot tell", and a check that cannot tell must not
-    // report a defect: a false alarm on the wake path would send an agent to
+    // Each of these results means "cannot tell". A check that cannot tell must not
+    // report a defect, because a false alarm on the wake path would send an agent to
     // reinstall an app that is fine.
     async function run(setup: (home: string) => void, exportOk: boolean): Promise<number> {
       const home = scratchDir(`doc-open-${Math.random().toString(36).slice(2)}`);
@@ -4901,19 +4975,19 @@ describe("doctor, and the warning an agent gets without asking", () => {
       };
       return main(["doctor", "--as", "dev", "--backend", "slack"], io);
     }
-    // credentials.json is not JSON
+    // The credentials.json file does not contain JSON.
     expect(await run((h) => {
       mkdirSync(join(h, ".slack"), { recursive: true });
       writeFileSync(join(h, ".slack", "credentials.json"), "not json");
     }, true)).toBe(0);
-    // credentials.json holds no token
+    // The credentials.json file does not contain a token.
     expect(await run((h) => {
       mkdirSync(join(h, ".slack"), { recursive: true });
       writeFileSync(join(h, ".slack", "credentials.json"), JSON.stringify({ E1: {} }));
     }, true)).toBe(0);
-    // A REFUSED EXPORT IS NO LONGER AN OPEN QUESTION. With a credential present
-    // and the export refused, the app is not this login's to read, so its scopes
-    // and events cannot be checked or repaired from here, and that is reported.
+    // A refused export is no longer an open question. When a credential is present
+    // and the export is refused, this login cannot read the app, so the system cannot
+    // check or repair its scopes and events from here, and reports this condition.
     expect(await run((h) => {
       mkdirSync(join(h, ".slack"), { recursive: true });
       writeFileSync(join(h, ".slack", "credentials.json"), JSON.stringify({ E1: { token: "x" } }));
@@ -4947,9 +5021,9 @@ describe("doctor, and the warning an agent gets without asking", () => {
   });
 
   test("a listener on a DIFFERENT commit than the install is reported, with both", async () => {
-    // For an installed agent the commit is a fact in the process's own command
-    // line, so this needs no mtimes: those describe whatever `src` sits in the
-    // current directory, which for an installed copy is a different tree.
+    // An installed agent includes the commit in its process command line, so the
+    // system needs no modification times. Those times describe whatever `src` sits
+    // in the current directory, which is a different tree for an installed copy.
     const cwd = scratchDir("doc-behind");
     const home = scratchDir("doc-behind-home");
     const share = join(home, ".local", "share", "scramble");
@@ -4965,8 +5039,8 @@ describe("doctor, and the warning an agent gets without asking", () => {
       writeErr: (l) => errs.push(l),
       fetch: async () =>
         new Response(JSON.stringify({ ok: true, user: "dev_bot" }), { status: 200, headers: { "x-oauth-scopes": ALL } }),
-      // HOME points at the fake install; the config is named explicitly, since
-      // HOME also decides where the config is looked for.
+      // The HOME variable points at the fake install. The command names the config
+      // explicitly, since HOME also determines where the tool looks for the config.
       env: (n) =>
         n === "SCRAMBLE_PROC" ? procRoot
         : n === "HOME" ? home
@@ -4977,10 +5051,11 @@ describe("doctor, and the warning an agent gets without asking", () => {
       serve: async () => 0,
       createSocket: () => ({ send: () => {}, close: () => {}, onopen: null, onmessage: null, onclose: null, onerror: null }),
     };
-    // AN ADVISORY, so the verb still answers ok. A listener on an older commit
-    // still DELIVERS; zero listeners means nothing arrives, and reporting the
-    // two with the same weight made an agent build its own grading on top:
-    // "advisory for a commit mismatch, alarm only for zero listeners".
+    // The system issues an advisory, so the verb still answers ok. A listener on an
+    // older commit still delivers messages. Zero listeners means nothing arrives, and
+    // reporting the two with the same weight caused an agent to build its own grading
+    // on top: it uses an advisory for a commit mismatch and alarms only for zero
+    // listeners.
     expect(await main(["doctor", "--as", "dev", "--backend", "slack"], io)).toBe(0);
     const said = errs.join(" ");
     expect(said).toContain("doctor advisory:");
@@ -4989,9 +5064,9 @@ describe("doctor, and the warning an agent gets without asking", () => {
   });
 
   test("a host with no readable process table SAYS so, and never reports ok", async () => {
-    // Both listener checks read /proc. A host without one is not a host where
-    // the listeners are fine; it is a host where nothing looked. scramble is
-    // about to run on machines that are not this one.
+    // Both listener checks read /proc. When a host lacks a check, no process has
+    // inspected it, so the state of its listeners remains unverified. scramble is
+    // about to run on other machines.
     expect(processesReadable("/proc")).toBe(true);
     expect(processesReadable(join(scratchDir("no-proc"), "absent"))).toBe(false);
     const cwd = scratchDir("doc-noproc");
@@ -5013,10 +5088,10 @@ describe("doctor, and the warning an agent gets without asking", () => {
   });
 
   test("two agents on ONE app are named, because Slack splits their events", async () => {
-    // A fourth agent measured it: its listener and a second app on the same
-    // adopted token were splitting mentions between "a consumer that answers and
-    // a consumer that discards them", and a human asked the same question twice
-    // inside that window.
+    // A fourth agent measured this. Its listener and a second application on the
+    // same adopted token were splitting mentions between a consumer that answers and
+    // a consumer that discards them, and a human asked the same question twice inside
+    // that window.
     const cwd = scratchDir("doc-shared-app");
     writeSlackConfig(cwd, {
       token: "xoxb-d",
@@ -5034,15 +5109,16 @@ describe("doctor, and the warning an agent gets without asking", () => {
     expect(said).toContain("A_SHARED");
     expect(said).not.toContain("alone");
 
-    // An agent with an app of its own is clean.
+    // An agent that has its own application is clean.
     const b = docIo(cwd, { "x-oauth-scopes": ALL }, { ok: true, user: "alone_bot" });
     expect(await main(["doctor", "--as", "alone", "--backend", "slack"], b.io)).toBe(0);
   });
 
   test("an app this login cannot read names the OWNER, never a command that dies", async () => {
-    // A fourth agent onboarded onto someone else's app and doctor told it to run
-    // onboard-agent.ts, which calls apps.manifest.export and dies on its first
-    // call for the same reason: "The repair line assumes the agent owns the app."
+    // When a fourth agent onboarded onto an app owned by another user, doctor
+    // instructed it to run onboard-agent.ts. That script calls apps.manifest.export and
+    // fails on its first call because the repair routine assumes that the agent owns
+    // the app.
     const home = scratchDir("doc-foreign-home");
     mkdirSync(join(home, ".slack"), { recursive: true });
     writeFileSync(join(home, ".slack", "credentials.json"), JSON.stringify({ E1: { token: "xoxe-cli" } }));
@@ -5075,10 +5151,10 @@ describe("doctor, and the warning an agent gets without asking", () => {
     expect(said).toContain("no_permission");
     expect(said).toContain("ask its owner");
 
-    // AN ERROR SLACK NEVER TIED TO ACCESS gets no ownership verdict. The
-    // ownership sentence was the `else` of a whitelist, so each new error
-    // string arrived as an ownership claim: `token_expired`, then
-    // `invalid_refresh_token` from my own rotation code a day later.
+    // An error that Slack never tied to access receives no ownership verdict. The
+    // ownership check ran in the `else` branch of an allowlist, so every new error
+    // string arrived as an ownership claim: `token_expired`, and then
+    // `invalid_refresh_token` from the rotation code a day later.
     const errs2: string[] = [];
     const io2: Io = {
       ...io,
@@ -5097,15 +5173,15 @@ describe("doctor, and the warning an agent gets without asking", () => {
     expect(said2).toContain("UNDETERMINED");
     expect(said2).not.toContain("ask its owner");
     expect(said2).not.toContain("drop this agent's entry");
-    // The command that cannot run is NOT named as the fix.
+    // The fix omits the command that cannot run.
     expect(said).not.toContain("Fix: bun scripts/onboard-agent.ts");
   });
 
   test("a credential failure carries its own repair, and doctor adds no guess to it", async () => {
-    // The first live run of the rotation answered `invalid_refresh_token`, and
-    // doctor appended "This app may have been created by another login" to it:
-    // a cause the evidence never established, on the surface an agent trusts,
-    // which is the same defect the ownership branch had a day earlier.
+    // The first live run of the rotation returned `invalid_refresh_token`, and
+    // doctor appended "This app may have been created by another login" to the output.
+    // The evidence never established this cause on a surface an agent trusts, which is
+    // the same defect the ownership branch had a day earlier.
     const home = scratchDir("doc-selfexpl-home");
     mkdirSync(join(home, ".slack"), { recursive: true });
     writeFileSync(
@@ -5152,10 +5228,10 @@ describe("doctor, and the warning an agent gets without asking", () => {
   });
 
   test("doctor names a peer running a different commit than this host installs", async () => {
-    // THE HOST THAT STOPS UPDATING SENDS NO SIGNAL: the staleness notice
-    // compares a listener to the install beside it, so a machine nobody
-    // installs on stays quiet while it falls behind. One sat five commits back
-    // with every listener matching its own install.
+    // A host that stops updating sends no signal. The staleness notice compares a
+    // listener to the install beside it, so a machine where nobody runs an install
+    // stays quiet while it falls behind. One machine sat five commits back with every
+    // listener matching its own install.
     const cwd = scratchDir("doc-peer-commit");
     const share = scratchDir("doc-peer-share");
     mkdirSync(join(share, "current", "src"), { recursive: true });
@@ -5200,18 +5276,18 @@ describe("doctor, and the warning an agent gets without asking", () => {
     const said = errs.join(" ");
     expect(said).toContain("this host installs mine123");
     expect(said).toContain("faraway on other-host ran newer99");
-    // WHAT THE READING IS: a commit that peer ran when it wrote. An agent was
-    // flagged on `d836964` while running `1f082b8`, because that was the newest
-    // message the ledger held from them.
+    // The reading identifies the commit that a peer ran when it wrote. An agent was
+    // flagged on `d836964` while running `1f082b8`, because that was the newest message
+    // the ledger held from them.
     expect(said).toContain("LAST SPOKE on a different commit");
     expect(said).toContain("upgraded without speaking since still shows the old one");
     expect(said).toContain("A machine nobody installs on never reports staleness");
   });
 
   test("doctor ROTATES a spent app-config token instead of asking a person to log in", async () => {
-    // The token lives twelve hours and nothing renewed it, so doctor lost the
-    // manifest check every night on both hosts. The entry carries a
-    // refresh_token, which is what an agent found in the file.
+    // The token lasts twelve hours and nothing renewed it, so doctor lost the
+    // manifest check every night on both hosts. The entry carries a refresh_token,
+    // which an agent found in the file.
     const home = scratchDir("doc-rotate-home");
     mkdirSync(join(home, ".slack"), { recursive: true });
     writeFileSync(
@@ -5260,7 +5336,7 @@ describe("doctor, and the warning an agent gets without asking", () => {
     await main(["doctor", "--as", "dev", "--backend", "slack"], io);
     expect(rotateUrl).toContain("xoxe-r-old");
     expect(errs.join(" ")).toContain("has been rotated");
-    // The new pair is on disk, and the Slack CLI's own fields survive.
+    // The system stores the new pair on disk and preserves the Slack CLI's own fields.
     const after = JSON.parse(readFileSync(join(home, ".slack", "credentials.json"), "utf8"));
     expect(after.E1.token).toBe("xoxe-new");
     expect(after.E1.refresh_token).toBe("xoxe-r-new");
@@ -5268,10 +5344,11 @@ describe("doctor, and the warning an agent gets without asking", () => {
   });
 
   test("an EXPIRED cli token is a token problem, and says nothing about ownership", async () => {
-    // Run against my own app, which I own, this answered "This app was created
-    // by another login" from a `token_expired` error and told me to ask the
-    // owner or drop the entry. A cause the evidence never established, printed
-    // as fact, on the surface an agent trusts to tell it what is wrong.
+    // When run against an application that the caller owns, the tool returned "This
+    // app was created by another login" from a `token_expired` error and instructed
+    // the caller to ask the owner or drop the entry. The interface printed a cause
+    // that the evidence never established as fact on a surface that an agent trusts
+    // to tell it what is wrong.
     const home = scratchDir("doc-expired-home");
     mkdirSync(join(home, ".slack"), { recursive: true });
     writeFileSync(join(home, ".slack", "credentials.json"), JSON.stringify({ E1: { token: "xoxe-cli" } }));
@@ -5305,21 +5382,22 @@ describe("doctor, and the warning an agent gets without asking", () => {
     expect(said).toContain("Nothing about who owns the app follows from it");
     expect(said).not.toContain("ask its owner");
     expect(said).not.toContain("drop this agent's entry");
-    // NAMES THE FILE THAT HOLDS IT. The credential comes from the Slack CLI's
-    // own store, and this line used to say "the CLI token in this config",
-    // pointing at a scramble config that has no such key. An agent read that,
-    // opened the config, found nothing, and reported it could not fix the gap.
+    // The text names the file that stores the credential. The Slack CLI store provides
+    // this credential. This line previously stated "the CLI token in this config",
+    // which pointed to a configuration file that lacked such a key. An agent read that
+    // description, opened the configuration, found nothing, and reported that it
+    // could not resolve the gap.
     expect(said).toContain("~/.slack/credentials.json");
     expect(said).toContain("slack login");
   });
 
   test("doctor --wake REFUSES to run while a listener holds the socket", async () => {
-    // Measured: with the inbox armed, `doctor --wake` reported "The wake path
-    // is DEAD" and told me to re-onboard, which rotates the bot token and
-    // strands that listener. With the same inbox stopped and nothing else
-    // changed, it answered "delivered". Slack hands each Socket Mode event to
-    // ONE connection, so the armed listener had taken the probe. A test whose
-    // answer would be meaningless is not run.
+    // When the inbox was armed, `doctor --wake` reported "The wake path is DEAD"
+    // and instructed the operator to re-onboard. Re-onboarding rotates the bot
+    // token and strands that listener. With the same inbox stopped and no other
+    // changes made, `doctor --wake` answered "delivered". Slack hands each Socket
+    // Mode event to one connection, so the armed listener had taken the probe.
+    // A test is not run when its answer would be meaningless.
     const cwd = scratchDir("wake-held");
     writeSlackConfig(cwd, {
       token: "xoxb-d",
@@ -5353,13 +5431,14 @@ describe("doctor, and the warning an agent gets without asking", () => {
     const said = errs.join(" ");
     expect(said).toContain("not testing the wake path");
     expect(said).toContain("pid 77");
-    // And it did not post the probe: refusing means not doing it, and a probe
-    // posted here would be a line in the channel proving nothing.
+    // The agent did not post the probe. Refusing an action means withholding it,
+    // because posting a probe here would produce a line in the channel that proves
+    // nothing.
     expect(probed).toBe(false);
   });
 
   test("doctor --wake FAILS when the socket opens and no frame arrives", async () => {
-    // The exact defect: a socket that connects and delivers nothing looks
+    // The exact defect is that a socket that connects and delivers nothing looks
     // identical to a quiet channel, which is how an armed monitor was reported
     // working while it delivered nothing for hours.
     const cwd = scratchDir("wake-dead");
@@ -5386,7 +5465,7 @@ describe("doctor, and the warning an agent gets without asking", () => {
       cwd: () => cwd,
       sleep: async () => {},
       serve: async () => 0,
-      // A socket that connects and never delivers: onmessage is never called.
+      // When a socket connects and never delivers, it never calls `onmessage`.
       createSocket: () => ({ send: () => {}, close: () => {}, onopen: null, onmessage: null, onclose: null, onerror: null }),
     };
     expect(await main(["doctor", "--as", "dev", "--wake", "room", "--backend", "slack"], io)).toBe(1);
@@ -5414,8 +5493,8 @@ describe("doctor, and the warning an agent gets without asking", () => {
         const u = String(input);
         if (u.includes("connections.open")) return new Response(JSON.stringify({ ok: true, url: "wss://x" }), { status: 200 });
         if (u.includes("chat.postMessage")) {
-          // Slack echoes the app's own post back over the socket, which is what
-          // makes a self-probe a valid transport test.
+          // Slack echoes the app's own post back across the socket, which makes a
+          // self-probe a valid test of the transport.
           queueMicrotask(() => sock.onmessage?.(JSON.stringify({ payload: { event: { ts: "9.9" } } })));
           return new Response(JSON.stringify({ ok: true, ts: "9.9" }), { status: 200 });
         }
@@ -5476,9 +5555,9 @@ describe("doctor, and the warning an agent gets without asking", () => {
         : auth(u));
     expect(await main(["doctor", "--as", "dev", "--wake", "room", "--backend", "slack"], a2.io)).toBe(1);
     expect(a2.errs.join(" ")).toContain("invalid_auth");
-    // The probe itself refused: a channel this agent was never invited to. This
-    // is the live shape (`channel_not_found`), and it must FAIL, since a quiet
-    // pass on an unpostable probe proves nothing about the wake path.
+    // The probe failed because the agent was never invited to the channel. The live
+    // system returns `channel_not_found` for this case, and the probe must FAIL,
+    // since a quiet pass on an unpostable probe proves nothing about the wake path.
     const a3 = mk(async (u) =>
       u.includes("connections.open")
         ? new Response(JSON.stringify({ ok: true, url: "wss://x" }), { status: 200 })
@@ -5495,8 +5574,9 @@ describe("doctor, and the warning an agent gets without asking", () => {
     expect(staleConfigWarning(missing, "dev")).toContain("scramble doctor --as dev");
     const present = { ...base, agents: { dev: { token: "T", handle: "dev_bot" } } };
     expect(staleConfigWarning(present, "dev")).toBe("");
-    // An agent absent from the config, and a missing config, say nothing here:
-    // the verb itself reports those with its own error.
+    // When an agent is absent from the config or the config is missing, this command
+    // outputs nothing here, because the verb itself reports those conditions with its
+    // own error.
     expect(staleConfigWarning(present, "nobody")).toBe("");
     expect(staleConfigWarning(null, "dev")).toBe("");
   });
@@ -5546,8 +5626,9 @@ describe("loadSlackConfig", () => {
     expect(loadSlackConfig(sluckIo(cwd))).toBeNull();
   });
 
-  // The config holds BOT TOKENS, so its default home is outside the repo: this
-  // repo is public-bound and a credential in a commit is readable in every clone.
+  // The configuration file holds bot tokens, so its default location is outside
+  // the repository. This repository will be public, and a credential in a commit
+  // is readable in every clone.
   test("SCRAMBLE_SLACK_CONFIG names the file, beating both defaults", () => {
     const dir = scratchDir("slackcfg-explicit");
     const file = join(dir, "elsewhere.json");
