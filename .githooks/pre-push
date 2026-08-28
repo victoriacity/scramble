@@ -9,9 +9,13 @@
 # The check costs nothing: it compares two commit ids and never runs the suite.
 # Install it with `git config core.hooksPath .githooks`.
 set -uo pipefail
-REPO="$(git rev-parse --show-toplevel)"
+# `git rev-parse --git-dir` RESOLVES BOTH LAYOUTS. In a worktree `.git` is a file
+# holding a pointer, so `$REPO/.git/last-green-sha` names a path inside a regular
+# file: the hook found no stamp and refused every push from a worktree, while a gate
+# run there wrote its stamp somewhere the hook never read.
+GIT_DIR_PATH="$(git rev-parse --git-dir)"
 HEAD_SHA="$(git rev-parse HEAD)"
-STAMP="$REPO/.git/last-green-sha"
+STAMP="$GIT_DIR_PATH/last-green-sha"
 
 if [ ! -f "$STAMP" ]; then
   echo "pre-push REFUSED: no green gate run is recorded. Run: bash scripts/gate.sh" >&2

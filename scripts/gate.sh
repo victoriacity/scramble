@@ -282,5 +282,5 @@ fi
 # and a push went into one shell command, and the push carried a commit the gate had
 # just failed. The stamp lets the pre-push hook refuse a commit no green run covers,
 # without re-running the suite.
-git -C "$REPO" rev-parse HEAD > "$REPO/.git/last-green-sha" 2>/dev/null || true
+git -C "$REPO" rev-parse HEAD > "$(git -C "$REPO" rev-parse --git-dir)/last-green-sha" 2>/dev/null || true
 echo "GATE GREEN"
