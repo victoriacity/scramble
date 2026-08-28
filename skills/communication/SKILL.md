@@ -1,75 +1,79 @@
 ---
 name: communication
-description: How to write to humans and to other agents: answer first, plain words, no jargon, no filler, one owner per task, ask when you are unsure what someone meant. Use it whenever you are about to send a message to a person or an agent, in any channel and any language. Trigger on "write a message", "reply in the channel", "post an update", "answer the operator", or any composition aimed at somebody else.
+description: Write clearly to humans and agents by presenting answers first,
+  using plain language, avoiding jargon and filler, assigning one owner per
+  task, and asking when meaning remains unclear. Apply these instructions when
+  sending messages to people or agents across any channel and language. Triggers
+  include "write a message", "reply in the channel", "post an update", "answer
+  the operator", or any text addressed to another recipient.
 ---
 
 # Communication
 
-The default output of a coding agent is wrong for talking to people. It explains
-its reasoning, it hedges, it compresses, and it assumes the reader shares its
-vocabulary. Every one of those is a defect in a channel with humans and other
-agents in it.
+Default output from a coding agent fails when addressing people. The agent
+details its internal reasoning, hedges statements, compresses text, and assumes
+the reader shares its vocabulary. Each pattern creates a defect in channels with
+human readers and other agents.
 
-> "Communication is very different from default Claude code text output and you
-> need to assume that the natural way you produce text output is wrong in terms
-> of team communication standards"
+Standard agent output conflicts with team communication requirements.
 
 Four rules:
 
-1. **Never assume the reader knows your languages or your jargon.** Be concise
-   through CLARITY. Compression is a different thing and it reads as
-   interrogation. The case that prompted this rule was a three-word demand where
-   a sentence belonged.
+1. **Never assume the reader knows your languages or your jargon.** Achieve
+   brevity through clarity. Text compression creates the tone of an
+   interrogation. A three-word demand sent where a full sentence belonged
+   prompted this rule.
 2. **Never assume you understood what a person or an agent said.** Ask.
-3. **Under-explain.** "Nobody cares about the way you get your answer unless they
-   explicitly ask for it. Even if a detailed explanation is communicated, the
-   only allowed way for it to be done is multiple rounds of back and forth
-   conversation."
-4. **Keep a message short.** In scramble this is enforced: `message send` refuses
-   over 300 words of prose, and code blocks do not count.
+3. **Under-explain.** Readers disregard the steps behind an answer unless they
+   explicitly request them. Deliver a detailed explanation only through multiple
+   conversational turns.
+4. **Keep a message short.** The scramble environment enforces this constraint:
+   `message send` refuses prose exceeding 300 words, and code blocks do not
+   count.
 
-Point 3 is the one that costs the most, because the reasoning is what you have
-just finished thinking about, and it feels like the valuable part. Send the
-answer. Wait to be asked. The operator's wording of it: `Under-articulate to
+Point 3 requires the most discipline, because the reasoning is fresh in memory
+and feels like the valuable component. Deliver the direct answer and wait for
+inquiries. The operational guideline prescribes: `Under-articulate to
 over-communicate`.
 
 ## Who is in the room
 
-A channel of agents and a channel of people take different writing, and the
-difference is not public against private. The operator classifies each channel:
+Channels for agents and channels for people require different writing styles,
+and the distinction extends beyond public versus private access. The operator
+classifies each channel:
 
 ```
 scramble channel tier <channel> internal|external
 ```
 
-A channel whose name starts with `scramble` is internal without any entry, which
-the operator set as a standing rule: those are the channels where this tool is
-built, and the readers there are the agents building it. An entry still wins, so
-a `scramble` channel that fills with people is one command away from the careful
-register. Every other unclassified channel gets the careful one.
+A channel whose name starts with `scramble` is internal without an entry,
+following a standing rule: the team builds this tool in those channels, and the
+agents building it read them. A specific entry still takes precedence, so a
+`scramble` channel that fills with people remains one command away from the
+careful register. Every other unclassified channel receives the careful
+register.
 
-`scramble message send` prints the register it picked and appends that register's
-rules to the rewrite instruction. The rules themselves live in
-`src/prompts/tier-internal.md` and `src/prompts/tier-external.md`, the operator
-writes them, and this file does not copy them. Read the one your channel uses
-before you write for that channel.
+`scramble message send` prints the chosen register and appends that register's
+rules to the rewrite instruction. The operator writes the rules in
+`src/prompts/tier-internal.md` and `src/prompts/tier-external.md`, and this file
+does not duplicate them. Read the relevant file before writing for a channel.
 
-What the external register turns on, in the operator's words: a screenshot of one
-message can reach the CEO as evidence of how this team performs. An unexplained
+The external register accounts for scenarios where a screenshot of one message
+can reach the CEO as evidence of how this team performs. An unexplained
 internal name or a missing "what you have to do" line costs a stakeholder real
 work.
 
 ## Enforcement lives in the send, never in this file
 
-A rule you have to remember to apply is advice, and advice fails. The agent that
-wrote these rules spent a morning bypassing its own documented lint-then-send
-chain without noticing, and the rules only started holding when they moved INSIDE
+A rule you must remember to apply is advice, and advice fails. The agent that
+authored these rules spent a morning bypassing its documented lint-then-send
+sequence without noticing, and the rules held only when they moved inside
 `scramble message send` as a refusal.
 
-So: the token bans, the long-dash ban and the word limit are checked at the send
-and cannot be skipped. What is in this file that a regex cannot check is the
-judgment, and that is the part you have to carry: one owner per task, asking when
-you are unsure, and under-explaining.
+So the send checks the token bans, the long-dash ban, and the word limit, and
+callers cannot skip them. The judgment that a regular expression cannot check
+remains in this file, and you must maintain that standard: one owner per task,
+asking when you are unsure, and under-explaining.
 
 ## How to write
 
@@ -192,23 +196,25 @@ each of those needs the record you read this turn, and you cite it. A guess is
 not a read, and a counter is not a read.
 
 
+
 ## A fact from someone else's message carries its timestamp
 
-Write the ts beside any fact you take from another agent, and the send checks it
-for you: every cited ts is read from Slack and its author printed back.
+Include the timestamp beside every fact taken from another agent. The send tool
+verifies each cited timestamp against Slack and prints the author in response.
 
 ```
 cite: 1787922074.150129 in scramble-dev was written by metrics_bot.
 ```
 
-Two agents reported different things minutes apart and both reports contained the
-number eleven: one had eleven install roots on their host, the other had received
-eleven advisories. A message addressed to both of them said "you counted eleven"
-and gave each of them the other's fact. An earlier message the same day turned the
-agent who REPORTED an incident into the agent who caused it.
+Two agents reported different findings minutes apart, and both reports contained
+the number eleven. One agent had eleven install roots on their host, and the
+other had received eleven advisories. A message addressed to both agents stated
+"you counted eleven" and gave each recipient the other's fact. An earlier message
+on the same day identified the agent who reported an incident as the agent who
+caused it.
 
-A ts identifies a message and its author. A summary of it identifies neither, and
-a joint greeting makes "your" mean nobody in particular.
+A timestamp identifies a message and its author. A summary identifies neither,
+and a joint greeting leaves "your" referring to nobody in particular.
 
 ## One task has one owner
 
@@ -236,14 +242,15 @@ takes the run also reports its result, its failures and its numbers. Handing it
 over is a sentence too.
 
 
+
 ## Concurrency: several agents on one question
 
 - **Drain the wake file before composing.** Someone may have answered already.
-- **Read the crossings your send returns.** `scramble message send` answers with
-  the messages that arrived between your last-seen cursor and your own, so you
-  learn what you raced with at the moment you speak. If a crossing already made
-  your point, do not restate it. Stay quiet, or acknowledge in a few words.
-  Follow up only if the crossing makes your message wrong.
-- Three agents answering one question should produce one useful answer and two
-  silences.
-
+- **Read the concurrent messages that your send returns.** The command
+  `scramble message send` returns the messages that arrived between your
+  last-seen cursor and your own, so you learn what you raced with at the moment
+  you speak. If a concurrent message already made your point, do not restate
+  it. Stay quiet, or acknowledge in a few words. Follow up only if the
+  concurrent message makes your message wrong.
+- When three agents answer one question, they should produce one useful answer
+  and two silences.

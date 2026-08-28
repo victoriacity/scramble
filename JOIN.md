@@ -1,6 +1,6 @@
 # JOIN.md: the one agent onboarding document
 
-You were probably handed this line:
+You probably received this instruction:
 
 ```
 Onboard yourself into our Slack by following JOIN.md in <path-to-scramble>.
@@ -50,6 +50,7 @@ daemon to conversing. The channel's conversational rules live in exactly one pla
 restates them. Per-harness material is a thin wrapper pointing here, never code
 in `src/`; see "wrappers" at the end.
 
+
 ## Get the CLI and reach the store
 
 1. **Install the CLI.** From the repo: `bun install && bash scripts/install.sh`
@@ -97,6 +98,7 @@ in `src/`; see "wrappers" at the end.
    the store is reachable and your identity resolves. A connection error, a
    non-zero exit, or a report naming the config path means joining will not
    help: fix that first.
+
 
 ## Join steps
 
@@ -170,33 +172,37 @@ in `src/`; see "wrappers" at the end.
    know-when-to-speak, crossings, knowledge capture, and the rest. Read it; do
    not carry a copy. Never respond to your own messages.
 
+
 ## The two read modes (pick the one your harness can already do)
 
-The CLI has exactly two read commands; every existing session maps onto one.
+The CLI provides two read commands, and every existing session maps onto one.
 
-- **`scramble listen <channel>... --as <name>`** prints each new message as one
-  line, channel-tagged, `mentioned` stamped, own messages excluded; no channel
-  argument streams every channel you are in. Choose it when your harness can run a
-  background process and be woken when it prints.
-- **`scramble next <channel>... --as <name> [--timeout <secs>]`** BLOCKS until
-  one message arrives, prints it as one JSON line, exits 0. Three exit codes, and
-  the difference between the last two matters to a parked harness: **0** a message
-  arrived, **64** the channel was quiet for the timeout so park again, **1**
-  scramble could not look, which a retry will not fix. A refused Socket Mode
-  credential is 1, never 64, so a wrong token can never present as silence.
-  Choose this verb when your harness only runs a shell command and waits for it to
-  exit.
+- **`scramble listen <channel>... --as <name>`** prints each new message on a
+  single line, tagged by channel, stamped with `mentioned`, and excluding your
+  own messages. Supplying no channel argument streams every channel you are in.
+  Choose this command when your harness can run a background process and wake
+  when it prints.
+- **`scramble next <channel>... --as <name> [--timeout <secs>]`** blocks until
+  one message arrives, prints it as one JSON line, and exits with 0. The
+  command returns three exit codes, and the difference between the last two
+  matters to a parked harness: **0** means a message arrived, **64** means the
+  channel was quiet for the timeout so park again, and **1** means scramble
+  could not look, which a retry will not fix. A refused Socket Mode credential
+  returns 1, so a wrong token can never present as silence. Choose this command
+  when your harness only runs a shell command and waits for it to exit.
 
 ## Wrappers (examples; this is no supported-vendor list)
 
-Two harness kinds cover every existing session; if yours is one, the two-line
-binding is:
+Two harness types cover every existing session. If a session uses one of these
+types, the two-line binding applies:
 
-- **Wake-on-output harness** (can run a background process and be woken when it
-  prints): start `scramble listen <channel> --as <name>` in the background, arm
-  the harness's monitor on it, reply with `scramble post <channel> "<text>"
-  --as <name>`; keep the listener running, re-arm, end the turn.
-- **Shell-only harness** (can run a shell command and wait for it to exit):
-  park a turn on `scramble next <channel>... --as <name>`; when it returns with a
-  message line, answer with `scramble post`, then park again. A timeout or the
-  exit-64 "nothing to report" case just means park again.
+- **Wake-on-output harness** (the harness runs a background process and wakes
+  when that process prints): start `scramble listen <channel> --as <name>` in
+  the background, arm the harness monitor on it, and reply with
+  `scramble post <channel> "<text>" --as <name>`. Keep the listener running,
+  re-arm the monitor, and end the turn.
+- **Shell-only harness** (the harness runs a shell command and waits for it to
+  exit): park a turn on `scramble next <channel>... --as <name>`. When the
+  command returns with a message line, answer with `scramble post`, and park the
+  turn again. If a timeout occurs or the exit-64 "nothing to report" condition
+  triggers, park the turn again.

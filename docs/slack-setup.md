@@ -1,9 +1,10 @@
 # scramble on Slack
 
-With `SCRAMBLE_BACKEND=slack`, Slack **is** the store. scramble reads the
-conversation with `conversations.history` and writes it with `chat.postMessage`,
-over Socket Mode for the live wake, so there is no public URL, no webhook, no
-daemon and no separate process to keep alive. A verb is one short-lived command:
+When configured with `SCRAMBLE_BACKEND=slack`, Slack **is** the store. scramble
+reads the conversation with `conversations.history`, writes messages with
+`chat.postMessage`, and connects over Socket Mode for live wakes, so the setup
+requires no public URL, no webhook, no daemon, and no separate process to keep
+alive. Every operation runs as a single short-lived command:
 
 ```
 export SCRAMBLE_BACKEND=slack
@@ -12,26 +13,27 @@ scramble message read --target team --as akari
 scramble next --timeout 900 --as akari    # 0 a message, 64 quiet, 1 could not look
 ```
 
-The channel in Slack is the same channel the agent reads, so a human scrolling
-Slack sees exactly what the agents saw.
+The channel in Slack is the same channel that the agent reads, so a human
+scrolling Slack sees exactly what the agents saw.
 
 ## One app per agent
 
-Each agent creates and installs its own app (see Setup below) and
-posts with its own bot token. That makes the agent a real Slack user: it has an `@akari` that
-autocompletes, a profile, and a DM channel a human can open. Every message in a
-channel carries its own author, so a human reading the channel can tell three
-agents apart without scramble annotating anything.
+Each agent creates and installs its own app (see Setup below) and posts with
+its own bot token. This makes each agent a full Slack user with an `@akari`
+handle that autocompletes, a profile, and a direct message channel that a human
+can open. Every message in a channel carries its own author, so a human reading
+the channel can tell three agents apart without adding manual annotations.
 
 ## Where the credentials live
 
-`~/.config/scramble/slack.json`, mode `600`, **outside this repo**, which is
-public-bound: a token in a commit is readable in every clone forever. Override
-the path with `SCRAMBLE_SLACK_CONFIG=/path/to/slack.json`. With `HOME` unset the
-fallback is `.scramble/slack.json` in the working directory.
+Credentials live in `~/.config/scramble/slack.json` with mode `600`, **outside
+this repo**, which is public-bound: a token in a commit is readable in every
+clone forever. Override the path with
+`SCRAMBLE_SLACK_CONFIG=/path/to/slack.json`. With `HOME` unset, the fallback is
+`.scramble/slack.json` in the working directory.
 
-Inbound attachments are written to `filesDir`, default `~/.config/scramble/files`, kept
-out of the tree for the same reason.
+The application writes inbound attachments to `filesDir`, default
+`~/.config/scramble/files`, kept out of the tree for the same reason.
 
 ## Setup: the agent onboards itself
 
@@ -216,6 +218,7 @@ Lines printed means the token, the channel id, the history scope and the event
 subscription are all right. An empty read with exit 0 means the app is not in
 that conversation, or the id is wrong.
 
+
 ## The config file
 
 ```json
@@ -238,50 +241,50 @@ that conversation, or the id is wrong.
 
 | Key | Meaning |
 |---|---|
-| `appToken` | App-level token (`xapp-`), scope `connections:write`. The top-level default a Socket Mode connect uses for an agent with no per-agent `appToken`. |
-| `token` | The default bot token (`xoxb-`), used when `--as` names no agent with a token of its own. Required. |
-| `channels` | scramble channel name → Slack conversation id. A channel absent here fails loudly: `no Slack channel for channel <name>`. |
-| `agents` | Agent name → `{ "token": "xoxb-…", "appToken": "xapp-…", "appId": "A…", "handle": "…" }`: the bot and app-level tokens that agent acts with. The per-agent `appToken` is optional: when absent the top-level `appToken` is used for that agent's Socket Mode connect, so a single-app config keeps working unchanged. `onboard-agent.ts` writes both per-agent tokens it receives from `apps.developerInstall` here, plus `appId`, which is what the agent needs to change its own scopes or remove its own app later, plus `handle`, the name Slack resolves a mention to. |
-| `dmChannels` | Slack DM conversation id → the agent that DM belongs to, so an inbound DM is attributed to the right agent. |
-| `roster` | Slack user id → name. A cache: an id absent here resolves through `users.info` (scope `users:read`) and is remembered for the run. |
-| `filesDir` | Where inbound attachments are downloaded and the local file ledger lives. |
+| `appToken` | App-level token (`xapp-`) with scope `connections:write`. A Socket Mode connect uses this fallback default when an agent entry provides no per-agent `appToken`. |
+| `token` | Required default bot token (`xoxb-`), used when `--as` specifies no agent with its own token. |
+| `channels` | Maps a scramble channel name to a Slack conversation id. If a channel name is missing from this map, the command exits with `no Slack channel for channel <name>`. |
+| `agents` | Maps an agent name to `{ "token": "xoxb-…", "appToken": "xapp-…", "appId": "A…", "handle": "…" }` to supply the bot and app-level credentials that agent uses. The per-agent `appToken` is optional. When omitted, the agent uses the top-level `appToken` for its Socket Mode connect, so a single-app configuration continues to work without edits. The script `onboard-agent.ts` records both per-agent tokens returned by `apps.developerInstall` here, along with `appId` so the agent can modify its own scopes or remove its app, and `handle` to record the mention name that Slack resolves. |
+| `dmChannels` | Maps a Slack direct-message conversation id to the assigned agent name, ensuring the system routes incoming direct messages to the matching agent. |
+| `roster` | Maps a Slack user id to a human-readable name. This map serves as a cache: when an id is absent, the system queries `users.info` with scope `users:read` and retains the result for the rest of the run. |
+| `filesDir` | Local directory where the process stores downloaded attachments and keeps the local file ledger. |
 
-Every call uses the ACTING agent's credential: `--as <name>` resolves through
-`agents.<name>.token` (falling back to the top-level `token`) for every read,
-threaded-reply expansion, attachment download and post, and through
-`agents.<name>.appToken` (falling back to the top-level `appToken`) for the
-Socket Mode connect, so an agent talking to Slack is always the agent, never
-somebody else's app.
+Every operation runs with credentials for the acting agent. When an invocation
+specifies `--as <name>`, the runtime reads `agents.<name>.token` (falling back
+to the top-level `token`) for every read operation, threaded-reply expansion,
+attachment download, and post. The runtime also reads `agents.<name>.appToken`
+(falling back to the top-level `appToken`) to establish the Socket Mode
+connect, so each agent talks to Slack under its own application credentials.
 
-Channel names may contain `/` (a DM channel is `dm/<agent>/<peer>`), so
-`--target` takes a bare name with no `#` sigil.
+Channel names may contain `/` (a direct-message channel uses the form
+`dm/<agent>/<peer>`), so `--target` accepts a bare name without a `#` prefix.
 
 ## Getting a conversation id
 
-`channels:read` lists public channels, and the app is **not** granted
-`groups:read`, so a private channel cannot be enumerated: take its id from the
-URL when you open it in a browser, or from **View channel details**. A DM id
-(`D…`) comes the same way.
+The permission `channels:read` lists public channels, and the app is **not**
+granted `groups:read`, so private channels cannot be enumerated. Take the id
+from the URL when opening the channel in a browser, or from **View channel
+details**. A DM id (`D…`) is found the same way.
 
 ## What each feature needs
 
 | Feature | Requirement |
 |---|---|
-| Messages in a channel | `chat:write` + the history scope and `message.*` event for that conversation kind |
-| Private channels | `groups:history` + `message.groups`, and an invite from a member inside the channel |
-| Mentions resolving to names | `users:read`. Without it `<@U…>` stays a raw id, matches no agent name, and the mention is lost |
-| Human DM to one agent | `im:history` + `message.im` + `im:write`, and that DM's id in `dmChannels` |
-| Threaded replies | nothing extra: `--thread <id>` passes `thread_ts` |
-| Attachments | `files:write` to upload, `files:read` to download inbound. See the section below: both directions were probed live and one of them is blocked |
-| Automatic working status | `assistant:write` for an assistant thread; elsewhere it is a living message posted and edited with `chat:write` |
+| Messages in a channel | `chat:write`, the history scope, and the `message.*` event for that conversation kind |
+| Private channels | `groups:history`, `message.groups`, and an invite from a member inside the channel |
+| Mentions resolving to names | `users:read`. Without it, `<@U…>` stays a raw id, matches no agent name, and the mention is lost |
+| Human DM to one agent | `im:history`, `message.im`, `im:write`, and that DM's id in `dmChannels` |
+| Threaded replies | Nothing extra. The `--thread <id>` flag passes `thread_ts` |
+| Attachments | `files:write` to upload, and `files:read` to download inbound data. See the section below. Both directions were probed live, and one of them is blocked |
+| Automatic working status | `assistant:write` for an assistant thread. Elsewhere, the application posts and edits a living message with `chat:write` |
 
 ## Two agents cannot DM each other
 
-Slack has no bot-to-bot direct message: an app's `conversations.open` against
-another app's user id does not produce a usable DM. The working arrangement is a
-**private channel holding just those two agents**, added to `channels` like any
-other. It needs no code and it has a property a DM lacks: a human can be in the
-channel and read the exchange, so agent-to-agent traffic stays observable.
+Slack does not support direct messages between bots. An app calling
+`conversations.open` against another app's user id does not produce a usable DM.
+The working arrangement uses a **private channel holding just those two agents**,
+added to `channels` like any other. This requires no code, and a human can join
+the channel and read the exchange, so agent-to-agent traffic stays observable.
 
 ## What the attachment probes measured
 
@@ -326,3 +329,4 @@ in the right thread, as one message.
 
 `bun scripts/live-smoke.ts inbound` checks the receiving direction against a real
 file and reports the exact response when it fails.
+
