@@ -660,6 +660,97 @@ export function fencedBlocks(text: string): string[] {
  *  rewording and refuses a substitution. */
 export const DOCUMENT_SUBJECT_FLOOR = 0.5;
 
+/** One run of consecutive comment lines in a source file: where it starts, how it
+ *  is marked, and the prose inside it.
+ *
+ *  THE PROSE A PERSON READS IS THE PART A REWRITE TOUCHES, and the code around it
+ *  comes back byte for byte, so a run records its own indentation and marker and
+ *  the caller rebuilds the lines from those. A trailing comment after code on the
+ *  same line is left alone, since rewriting it would reflow a line carrying code. */
+export interface CommentRun {
+  start: number;
+  end: number;
+  indent: string;
+  kind: "slash" | "star" | "hash";
+  prose: string;
+}
+
+export function commentRuns(text: string, style: "slash" | "hash" = "slash"): CommentRun[] {
+  const lines = text.split("\n");
+  const runs: CommentRun[] = [];
+  let i = 0;
+  const lineMarker = style === "hash" ? /^(\s*)#\s?(.*)$/ : /^(\s*)\/\/\s?(.*)$/;
+  while (i < lines.length) {
+    const line = lines[i]!;
+    const m = lineMarker.exec(line);
+    if (m !== null) {
+      const indent = m[1]!;
+      const body: string[] = [m[2]!];
+      let j = i + 1;
+      while (j < lines.length) {
+        const next = lineMarker.exec(lines[j]!);
+        if (next === null || next[1] !== indent) break;
+        body.push(next[2]!);
+        j += 1;
+      }
+      runs.push({ start: i, end: j - 1, indent, kind: style === "hash" ? "hash" : "slash", prose: body.join("\n").trim() });
+      i = j;
+      continue;
+    }
+    const open = style === "slash" ? /^(\s*)\/\*+\s?(.*)$/.exec(line) : null;
+    if (open !== null) {
+      const indent = open[1]!;
+      const body: string[] = [open[2]!.replace(/\*+\/\s*$/, "")];
+      let j = i;
+      if (!/\*+\/\s*$/.test(line)) {
+        j = i + 1;
+        while (j < lines.length) {
+          const l = lines[j]!;
+          const closed = /\*+\/\s*$/.test(l);
+          body.push(l.replace(/^\s*\*+\s?/, "").replace(/\*+\/\s*$/, ""));
+          if (closed) break;
+          j += 1;
+        }
+      }
+      runs.push({ start: i, end: Math.min(j, lines.length - 1), indent, kind: "star", prose: body.join("\n").trim() });
+      i = Math.min(j, lines.length - 1) + 1;
+      continue;
+    }
+    i += 1;
+  }
+  return runs.filter((r) => r.prose !== "");
+}
+
+/** Rebuild a comment run's lines from rewritten prose, wrapped to `width` columns
+ *  including the marker and the indentation. */
+export function renderComment(run: CommentRun, prose: string, width = 88): string[] {
+  const opener = run.kind === "hash" ? "# " : run.kind === "slash" ? "// " : " *  ";
+  const prefix = `${run.indent}${opener}`;
+  const out: string[] = [];
+  for (const para of prose.split("\n")) {
+    if (para.trim() === "") {
+      out.push(`${run.indent}${run.kind === "star" ? " *" : run.kind === "hash" ? "#" : "//"}`);
+      continue;
+    }
+    let line = "";
+    for (const word of para.trim().split(/\s+/)) {
+      const candidate = line === "" ? word : `${line} ${word}`;
+      if (`${prefix}${candidate}`.length > width && line !== "") {
+        out.push(`${prefix}${line}`);
+        line = word;
+      } else {
+        line = candidate;
+      }
+    }
+    if (line !== "") out.push(`${prefix}${line}`);
+  }
+  if (run.kind === "star") {
+    out.unshift(`${run.indent}/**`);
+    out.push(`${run.indent} */`);
+  }
+  return out;
+}
+
 export function chooseText(
   original: string,
   rewritten: { ok: true; text: string } | { ok: false; why: string },

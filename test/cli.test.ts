@@ -950,6 +950,15 @@ describe("`scramble rewrite --document`: a repository document for an outside re
     expect(errs.join("\n")).toContain("2 section(s), 2 rewritten, 0 kept as written");
   });
 
+  test("`--once` sends one call per section and runs no guard", async () => {
+    // A whole-file call ran past a 300-second ceiling on a 7KB document, so this
+    // mode keeps one call per section and spends nothing on guards.
+    const { io, writes, errs, dir } = docIo("doc-once", () => "short prose that carries nothing");
+    expect(await main(["rewrite", "--document", "--once", join(dir, "doc.md")], io)).toBe(0);
+    expect(writes.join("\n")).toContain("short prose that carries nothing");
+    expect(errs.join("\n")).toContain("2 rewritten");
+  });
+
   test("A SECTION THE GUARDS REFUSE KEEPS ITS ORIGINAL TEXT and says so", async () => {
     // A pass that dropped a section it could not rewrite would hand back a shorter
     // document that reads as finished.
@@ -975,6 +984,81 @@ describe("`scramble rewrite --document`: a repository document for an outside re
     const noKey: Io = { ...withPrompt.io, env: () => undefined };
     expect(await main(["rewrite", "--document", join(withPrompt.dir, "doc.md")], noKey)).toBe(1);
     expect(withPrompt.errs.join(" ")).toContain("no model is configured");
+  });
+});
+
+describe("`scramble rewrite --comments`: the prose of a source file", () => {
+  const SRC = [
+    "// THE LISTENER DELIVERS A MENTION to the agent, and the sweep drains the channel",
+    "// into the same inbox ledger every fifteen minutes on a timer.",
+    "const x = 1;",
+    "export function f(): number { return x; }",
+  ].join("\n");
+
+  function commentIo(name: string, answer: string): { io: Io; writes: string[]; errs: string[]; dir: string } {
+    const dir = scratchDir(name);
+    mkdirSync(join(dir, "prompts"), { recursive: true });
+    writeFileSync(join(dir, "prompts", "document.md"), "# Document rewrite instruction\nRewrite the section below.\n");
+    writeFileSync(join(dir, "code.ts"), SRC);
+    const { io, writes, errs } = stubIo(dir, async () =>
+      new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: answer }] } }] }), { status: 200 }),
+    );
+    io.moduleDir = () => dir;
+    return { io: { ...io, env: (n) => (n === "SCRAMBLE_REWRITE_KEY" ? "k" : undefined) }, writes, errs, dir };
+  }
+
+  test("the comments are rewritten and every line of code is untouched", async () => {
+    const answer = "The listener hands a mention to the agent, and the sweep drains that channel into the same inbox ledger every fifteen minutes on its timer.";
+    const { io, writes, errs, dir } = commentIo("cmt-ok", answer);
+    expect(await main(["rewrite", "--comments", join(dir, "code.ts")], io)).toBe(0);
+    const out = writes.join("\n");
+    expect(out).toContain("const x = 1;");
+    expect(out).toContain("export function f(): number { return x; }");
+    expect(out).toContain("// The listener hands a mention");
+    expect(errs.join("\n")).toContain("1 comment(s), 1 rewritten, 0 kept as written");
+  });
+
+  test("A REWRITE THAT CHANGES A LINE OF CODE REFUSES THE WHOLE FILE", async () => {
+    // A comment rewrite is prose work, and reflowing a line of code would be a
+    // silent edit to a program. An answer carrying a block terminator closes the
+    // comment early and turns the rest into code, which is the shape this catches.
+    const dir = scratchDir("cmt-code");
+    mkdirSync(join(dir, "prompts"), { recursive: true });
+    writeFileSync(join(dir, "prompts", "document.md"), "# Document rewrite instruction\nRewrite.\n");
+    writeFileSync(join(dir, "code.ts"), ["/** A block comment about the listener and its ledger. */", "const x = 1;"].join("\n"));
+    const { io, errs } = stubIo(dir, async () =>
+      new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: "listener ledger\n*/\nconst y = 2;" }] } }] }), { status: 200 }),
+    );
+    io.moduleDir = () => dir;
+    const keyed: Io = { ...io, env: (n) => (n === "SCRAMBLE_REWRITE_KEY" ? "k" : undefined) };
+    expect(await main(["rewrite", "--comments", "--once", join(dir, "code.ts")], keyed)).toBe(1);
+    expect(errs.join("\n")).toContain("the code outside the comments changed");
+  });
+
+  test("a guard refusal keeps the comment as written", async () => {
+    const { io, writes, errs, dir } = commentIo("cmt-refused", "unrelated prose that carries nothing from the input at all");
+    expect(await main(["rewrite", "--comments", join(dir, "code.ts")], io)).toBe(0);
+    expect(writes.join("\n")).toContain("THE LISTENER DELIVERS A MENTION");
+    expect(errs.join("\n")).toContain("kept as written");
+  });
+
+  test("`--once` takes the answer with no guard, and a missing instruction is a reason", async () => {
+    const { io, writes, dir } = commentIo("cmt-once", "short replacement prose");
+    expect(await main(["rewrite", "--comments", "--once", join(dir, "code.ts")], io)).toBe(0);
+    expect(writes.join("\n")).toContain("// short replacement prose");
+
+    const bare = scratchDir("cmt-noprompt");
+    writeFileSync(join(bare, "code.ts"), SRC);
+    const plain = stubIo(bare, async () => new Response("{}", { status: 200 }));
+    plain.io.moduleDir = () => bare;
+    const keyed: Io = { ...plain.io, env: (n) => (n === "SCRAMBLE_REWRITE_KEY" ? "k" : undefined) };
+    expect(await main(["rewrite", "--comments", join(bare, "code.ts")], keyed)).toBe(1);
+    expect(plain.errs.join(" ")).toContain("document rewrite instruction");
+
+    const nokey = commentIo("cmt-nokey", "x");
+    const unkeyed: Io = { ...nokey.io, env: () => undefined };
+    expect(await main(["rewrite", "--comments", join(nokey.dir, "code.ts")], unkeyed)).toBe(1);
+    expect(nokey.errs.join(" ")).toContain("no model is configured");
   });
 });
 

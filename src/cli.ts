@@ -81,6 +81,8 @@ import {
   composePrompt,
   citedTimestamps,
   readDocumentTemplate,
+  commentRuns,
+  renderComment,
   splitSections,
   critiquePrompt,
   readTierBlock,
@@ -266,6 +268,7 @@ const BOOLEAN_FLAGS = new Set([
   "again",
   "comments",
   "document",
+  "once",
   "calibrate",
   "dates",
   "json",
@@ -2387,7 +2390,7 @@ async function cmdLint(argv: string[], io: Io): Promise<number> {
  *  A SECTION THE GUARDS REFUSE KEEPS ITS ORIGINAL TEXT, and the refusal prints on
  *  stderr naming the heading. A pass that silently dropped a section it could not
  *  rewrite would hand back a shorter document that reads as finished. */
-async function cmdRewriteDocument(text: string, name: string, io: Io): Promise<number> {
+async function cmdRewriteDocument(text: string, name: string, io: Io, noGuards = false): Promise<number> {
   const dir = io.moduleDir ? io.moduleDir() : "src";
   const template = readDocumentTemplate(dir);
   if (!template.ok) {
@@ -2411,6 +2414,11 @@ async function cmdRewriteDocument(text: string, name: string, io: Io): Promise<n
   for (const [i, section] of sections.entries()) {
     const heading = (section.split("\n", 1)[0] ?? "").slice(0, 70);
     const said = await rewriteWith(io.fetch, cfg, composePrompt(template.text, section));
+    if (noGuards) {
+      if (said.ok) { out.push(said.text.trim()); } else { refused += 1; out.push(section); }
+      io.writeErr(`document: section ${i + 1} of ${sections.length} ${said.ok ? "rewritten" : "kept as written"}: ${heading}`);
+      continue;
+    }
     let chosen = chooseText(section, said, instructionOf(template.text), { document: true });
     // ONE MORE ASK, CARRYING WHAT THE GUARD SAW. Every guard here fires on
     // something the MODEL did, so the model is the party that can fix it. The
@@ -2433,6 +2441,74 @@ async function cmdRewriteDocument(text: string, name: string, io: Io): Promise<n
   io.writeErr(
     `document: ${name}, ${sections.length} section(s), ${sections.length - refused} rewritten, ${refused} kept as written.`,
   );
+  return 0;
+}
+
+/** The lines of a file with every comment run removed, which a comment rewrite has
+ *  to leave untouched. */
+function codeLines(text: string, style: "slash" | "hash"): string[] {
+  const lines = text.split("\n");
+  const drop = new Set<number>();
+  for (const run of commentRuns(text, style)) {
+    for (let i = run.start; i <= run.end; i += 1) drop.add(i);
+  }
+  return lines.filter((_l, i) => !drop.has(i));
+}
+
+/** Rewrite every comment in a source file and print the file.
+ *
+ *  THE CODE IS COMPARED BEFORE ANYTHING IS PRINTED. A rewrite that reflowed a line
+ *  of code would be a silent edit to a program, so the lines outside the comments
+ *  are compared byte for byte and any difference refuses the whole file. */
+async function cmdRewriteComments(text: string, name: string, io: Io, noGuards = false): Promise<number> {
+  const dir = io.moduleDir ? io.moduleDir() : "src";
+  const template = readDocumentTemplate(dir);
+  if (!template.ok) {
+    io.writeErr(`comments: ${template.why}`);
+    return 1;
+  }
+  const cfg = rewriteConfig(io.env);
+  if (cfg.key === undefined) {
+    io.writeErr(`comments: no model is configured; set SCRAMBLE_REWRITE_KEY to turn it on.`);
+    return 1;
+  }
+  const style: "slash" | "hash" = /\.(sh|bash|py|toml|yml|yaml)$/.test(name) ? "hash" : "slash";
+  const runs = commentRuns(text, style);
+  const lines = text.split("\n");
+  let done = 0;
+  let kept = 0;
+  for (const run of [...runs].reverse()) {
+    const said = await rewriteWith(io.fetch, cfg, composePrompt(template.text, run.prose));
+    let chosen: RewriteChoice = noGuards
+      ? said.ok
+        ? { send: said.text, note: "" }
+        : { refuse: said.why, why: said.why }
+      : chooseText(run.prose, said, instructionOf(template.text), { document: true });
+    if (!noGuards && "refuse" in chosen && chosen.retry !== undefined) {
+      const again = await rewriteWith(io.fetch, cfg, `${composePrompt(template.text, run.prose)}\n\n${chosen.retry}`);
+      chosen = chooseText(run.prose, again, instructionOf(template.text), { document: true });
+    }
+    if ("refuse" in chosen) {
+      kept += 1;
+      io.writeErr(`comments: lines ${run.start + 1}-${run.end + 1} kept as written (${chosen.why})`);
+      continue;
+    }
+    done += 1;
+    lines.splice(run.start, run.end - run.start + 1, ...renderComment(run, chosen.send.trim()));
+  }
+  const out = lines.join("\n");
+  const before = codeLines(text, style);
+  const after = codeLines(out, style);
+  if (before.length !== after.length || before.some((l, i) => l !== after[i])) {
+    const at = before.findIndex((l, i) => l !== after[i]);
+    io.writeErr(
+      `comments REFUSED for ${name}: the code outside the comments changed, first at code line ${at + 1}:\n` +
+        `  before: ${before[at] ?? "(no such line)"}\n  after:  ${after[at] ?? "(no such line)"}`,
+    );
+    return 1;
+  }
+  io.write(out);
+  io.writeErr(`comments: ${name}, ${runs.length} comment(s), ${done} rewritten, ${kept} kept as written.`);
   return 0;
 }
 
@@ -2477,7 +2553,12 @@ async function cmdRewrite(argv: string[], io: Io): Promise<number> {
   // it at a design document would delete most of the document. This path reads
   // prompts/document.md, adds the register block, and sends one section per call.
   if (argv.includes("--document")) {
-    return cmdRewriteDocument(text, file ?? "stdin", io);
+    return cmdRewriteDocument(text, file ?? "stdin", io, argv.includes("--once"));
+  }
+  // `--comments` REWRITES THE PROSE OF EVERY COMMENT and leaves every line of code
+  // byte for byte. A comment is prose a person reads.
+  if (argv.includes("--comments")) {
+    return cmdRewriteComments(text, file ?? "stdin", io, argv.includes("--once"));
   }
   const { chosen, retried, configured } = await attemptRewrite(text, io);
   if (!configured) {

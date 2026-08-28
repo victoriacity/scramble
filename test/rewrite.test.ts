@@ -13,6 +13,8 @@ import { WORD_LIMIT } from "../src/language";
 const scratch = (): string => mkdtempSync(join(tmpdir(), "scramble-prompt-"));
 import {
   DEFAULT_MODEL,
+  commentRuns,
+  renderComment,
   documentPromptPath,
   fencedBlocks,
   readDocumentTemplate,
@@ -745,5 +747,57 @@ describe("a document keeps its fenced blocks", () => {
     // the message guards.
     const kept = chooseText(doc, { ok: true, text: "intro rewritten\n```bash\necho hi\n```\nmiddle rewritten\n```\nplain\n```\nend rewritten" }, undefined, { document: true });
     expect("send" in kept).toBe(true);
+  });
+});
+
+describe("comment prose comes out and goes back", () => {
+  const SRC = [
+    "// A LINE RUN AT THE TOP, stating the rule.",
+    "//",
+    "// A second paragraph with a `path/to/file.ts` in it.",
+    "const x = 1;",
+    "",
+    "/** A block comment.",
+    " *",
+    " *  With a second line. */",
+    "export function f(): number {",
+    "  // AN INDENTED RUN inside the function.",
+    "  return x; // a trailing note that stays put",
+    "}",
+  ].join("\n");
+
+  test("every run is found with its indent, its kind and its prose", () => {
+    const runs = commentRuns(SRC);
+    expect(runs).toHaveLength(3);
+    expect(runs[0]!.kind).toBe("slash");
+    expect(runs[0]!.start).toBe(0);
+    expect(runs[0]!.end).toBe(2);
+    expect(runs[0]!.prose).toContain("`path/to/file.ts`");
+    expect(runs[1]!.kind).toBe("star");
+    expect(runs[2]!.indent).toBe("  ");
+    expect(runs[2]!.prose).toBe("AN INDENTED RUN inside the function.");
+    // A TRAILING COMMENT AFTER CODE STAYS PUT, since rewriting it would reflow a
+    // line that carries code.
+    expect(runs.some((r) => r.prose.includes("trailing note"))).toBe(false);
+    // A hash file uses its own marker.
+    expect(commentRuns("# a shell note\necho hi", "hash")).toHaveLength(1);
+    expect(commentRuns("code only\nmore code")).toEqual([]);
+  });
+
+  test("a run is rebuilt with its own marker, indent and width", () => {
+    const runs = commentRuns(SRC);
+    const slash = renderComment(runs[0]!, "One rule, stated once, with enough words in it to need a second line at the width this repository wraps its comments to.");
+    expect(slash.every((l) => l.startsWith("// "))).toBe(true);
+    expect(slash.length).toBeGreaterThan(1);
+    expect(slash.every((l) => l.length <= 88)).toBe(true);
+    const star = renderComment(runs[1]!, "A block, rebuilt.");
+    expect(star[0]).toBe("/**");
+    expect(star[1]).toBe(" *  A block, rebuilt.");
+    expect(star.at(-1)).toBe(" */");
+    expect(renderComment(runs[2]!, "Indented prose.")[0]).toBe("  // Indented prose.");
+    expect(renderComment(runs[0]!, "First.\n\nSecond.")).toContain("//");
+    const hashRuns = commentRuns("# a shell note\necho hi", "hash");
+    expect(renderComment(hashRuns[0]!, "A shell note.")).toEqual(["# A shell note."]);
+    expect(renderComment(hashRuns[0]!, "First.\n\nSecond.")).toContain("#");
   });
 });
