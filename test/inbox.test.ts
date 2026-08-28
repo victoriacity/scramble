@@ -16,8 +16,11 @@ import {
   readSent,
   readSentRows,
   COMPARABLE_SIZE_RATIO,
+  allWords,
+  contentOf,
   contentWords,
   NEAR_DUPLICATE_FLOOR,
+  pairScore,
   saidAlready,
   sentAlready,
   wordOverlap,
@@ -538,7 +541,7 @@ describe("the record of what this agent said", () => {
     const rows = readSentRows(p);
     const now = Date.parse("2026-08-28T04:02:07Z");
     // 0.8 is the shipped threshold, and this pair measures 0.833.
-    const hit = saidAlready(rows, "general", contentWords(reworded), now, 10 * 60 * 1000, 0.8);
+    const hit = saidAlready(rows, "general", contentWords(reworded), now, 10 * 60 * 1000, { content: 0.8, short: 0.85 });
     expect(hit?.row.ts).toBe("9.1");
     expect(hit!.overlap).toBeGreaterThan(0.8);
     // A DIFFERENT REPORT IS NOT A DUPLICATE. Refusing these would teach agents to
@@ -546,7 +549,7 @@ describe("the record of what this agent said", () => {
     const other =
       "The gate is red on the coverage stage, and src/status.ts sits at 92% lines " +
       "after the ledger change.";
-    expect(saidAlready(rows, "general", contentWords(other), now, 10 * 60 * 1000, 0.8)).toBeUndefined();
+    expect(saidAlready(rows, "general", contentWords(other), now, 10 * 60 * 1000, { content: 0.8, short: 0.85 })).toBeUndefined();
     // TWO STATUS REPORTS ON DIFFERENT RUNS share their format and their nouns,
     // and the numbers are what tells them apart, so a number of any length
     // counts as a content word. These measure 0.429.
@@ -554,11 +557,11 @@ describe("the record of what this agent said", () => {
     const runB = "peers 10, damaged 1, my row is on fad46a5 at 05:20";
     expect(wordOverlap(contentWords(runA), contentWords(runB))).toBeLessThan(0.8);
     // Another channel, past the window, or a row with no words: no match.
-    expect(saidAlready(rows, "other", contentWords(reworded), now, 10 * 60 * 1000, 0.8)).toBeUndefined();
+    expect(saidAlready(rows, "other", contentWords(reworded), now, 10 * 60 * 1000, { content: 0.8, short: 0.85 })).toBeUndefined();
     expect(
-      saidAlready(rows, "general", contentWords(reworded), Date.parse("2026-08-28T05:00:00Z"), 10 * 60 * 1000, 0.8),
+      saidAlready(rows, "general", contentWords(reworded), Date.parse("2026-08-28T05:00:00Z"), 10 * 60 * 1000, { content: 0.8, short: 0.85 }),
     ).toBeUndefined();
-    expect(saidAlready([{ ts: "1.1" }], "general", contentWords(reworded), now, 10 * 60 * 1000, 0.8)).toBeUndefined();
+    expect(saidAlready([{ ts: "1.1" }], "general", contentWords(reworded), now, 10 * 60 * 1000, { content: 0.8, short: 0.85 })).toBeUndefined();
     // A SHORT DRAFT IS NEVER A NEAR-DUPLICATE. Containment over a handful of
     // words reaches 1.0 on two unrelated one-liners, and it refused a second
     // one-line draft in this suite before the floor existed.
@@ -567,7 +570,7 @@ describe("the record of what this agent said", () => {
     expect(wordOverlap(shortA, shortB)).toBe(1);
     expect(shortB.length).toBeLessThan(NEAR_DUPLICATE_FLOOR);
     const shortRows = [{ ts: "8.8", channel: "general", at: "2026-08-28T04:00:00Z", words: shortA }];
-    expect(saidAlready(shortRows, "general", shortB, now, 10 * 60 * 1000, 0.8)).toBeUndefined();
+    expect(saidAlready(shortRows, "general", shortB, now, 10 * 60 * 1000, { content: 0.8, short: 0.85 })).toBeUndefined();
     // The words themselves: content and numbers, deduplicated, sorted, with edge
     // punctuation off and an inner dot kept.
     expect(contentWords("The run is on port 3005 and the run held.")).toEqual(["3005", "held", "port"]);
@@ -670,6 +673,40 @@ describe("the record of what this agent said", () => {
     expect(argued).toContain("1 send(s) went out under --again");
     expect(argued).toContain("0.910  ts 5.5 against 3.3");
     expect(argued).toContain("labelled false positives");
+  });
+
+  test("A ONE-LINE DUPLICATE IS SCORED, on every token instead of the content words", () => {
+    // The real duplicate two agents confirmed: one line sent twice, 127 seconds
+    // apart, by an agent reporting the same test pass. It held 6 and 5 content
+    // words, under the floor, so it was never scored at all while the threshold
+    // debate ran on a number that never applied to it.
+    const first = "@andrew The hallucination metric end-to-end test passed on the dev box";
+    const second = "@andrew The hallucination metric passed E2E on the dev box";
+    expect(contentOf(allWords(first)).length).toBeLessThan(NEAR_DUPLICATE_FLOOR);
+    const scored = pairScore(allWords(first), allWords(second));
+    expect(scored.scale).toBe("short");
+    expect(scored.overlap).toBeGreaterThan(0.85);
+    // THE SHORT NEGATIVES STAY BELOW IT, measured on the labelled pairs.
+    const pairs: Array<[string, string, number]> = [
+      ["peers 9 damaged 0 on fad46a5", "peers 10 damaged 1 on fad46a5", 0.85],
+      ["the gate is green", "the gate is green and the suite passes", 0.85],
+      ["the line as drafted", "a second line, drafted separately", 0.85],
+      ["restarted my listener on 8188178", "the coverage stage is red at 92%", 0.85],
+    ];
+    for (const [x, y, ceiling] of pairs) {
+      const s = pairScore(allWords(x), allWords(y));
+      expect(s.scale).toBe("short");
+      expect(s.overlap).toBeLessThan(ceiling);
+    }
+    // A LONG PAIR STILL USES THE CONTENT SCALE, where the grammar a rewording
+    // changes drops out.
+    const reportA =
+      "The end-to-end run finished on ports 3005 and 8600, and the judge scored " +
+      "mushroom_shaman, blueberry_pie and copper_kettle without a fallback.";
+    const reportB =
+      "On ports 3005 and 8600 the end-to-end run completed, and the judge scored " +
+      "the three assets mushroom_shaman, blueberry_pie and copper_kettle, with no fallback taken.";
+    expect(pairScore(allWords(reportA), allWords(reportB)).scale).toBe("content");
   });
 
   test("a malformed row reads as an empty ts, never taking the file down", () => {

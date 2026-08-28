@@ -55,10 +55,24 @@ const CITED_TS_CAP = 6;
  *    two status reports, different runs  0.429
  *    two unrelated messages              0.000
  *
- *  0.8 sits above the pair that has to pass and below the pair that has to fail.
+ *  0.81 sits between the two labelled pairs another agent measured: an install
+ *  report at 0.800 that had to go out, and a duplicate at 0.833 that had to stop.
+ *  0.8 refused the install report by one hundredth.
+ *
+ *  A SHORT DRAFT IS SCORED ON EVERY TOKEN AT 0.85. It has too few content words
+ *  for the other scale, and the real duplicate two agents confirmed, one line
+ *  sent twice 127 seconds apart, held 6 and 5 content words: it was never scored
+ *  at all while the threshold debate ran. Measured on six labelled short pairs:
+ *
+ *    the real duplicate            0.889   refused
+ *    one thing retyped             0.800   sent
+ *    two short status reports      0.667   sent
+ *    an addendum to a line         0.571   sent
+ *    two unrelated one-liners      0.500   sent
+ *    two different topics          0.000   sent
  *  Refusing a legitimate second report would teach agents to pass `--again` by
  *  reflex, which retires the guard. */
-const NEAR_DUPLICATE_OVERLAP = 0.8;
+const NEAR_DUPLICATE_OVERLAP = { content: 0.81, short: 0.85 };
 import {
   chooseText,
   composePrompt,
@@ -92,8 +106,8 @@ import {
   closeInboxItems,
   closeItemById,
   readSent,
+  allWords,
   closestSaid,
-  contentWords,
   nearReport,
   readSentRows,
   recordSent,
@@ -640,7 +654,7 @@ async function postText(
   // WHAT THIS SEND MEASURED, recorded whether or not it crossed the threshold, so
   // the distribution accumulates in the field. The number this guard uses rests
   // on corpus runs three agents did by hand.
-  let closest: { row: SentRow; overlap: number } | undefined;
+  let closest: { row: SentRow; overlap: number; scale: "content" | "short" } | undefined;
   // MEASURED ON EVERY SEND, `--again` included. Recording only what went out
   // records the negative class alone: every row is a message the author meant to
   // send. The `--again` re-sends are the labelled FALSE POSITIVES, the one class
@@ -649,7 +663,7 @@ async function postText(
   closest = closestSaid(
     readSentRows(sentPath(slackConfigPath(io), sender)),
     channel,
-    contentWords(draft),
+    allWords(draft),
     Date.now(),
     DUPLICATE_WINDOW_MS,
   );
@@ -675,7 +689,11 @@ async function postText(
     // 0.970 word overlap by their measure, and the digest passed it because no
     // two bytes lined up. A reader of the channel sees two reports of one run
     // either way.
-    const said = closest !== undefined && closest.overlap >= NEAR_DUPLICATE_OVERLAP ? closest : undefined;
+    const said =
+      closest !== undefined &&
+      closest.overlap >= (closest.scale === "short" ? NEAR_DUPLICATE_OVERLAP.short : NEAR_DUPLICATE_OVERLAP.content)
+        ? closest
+        : undefined;
     if (said !== undefined) {
       io.writeErr(
         `message send REFUSED: this says what you already sent to ${channel} at ts ${said.row.ts} ` +
@@ -899,7 +917,7 @@ async function postText(
       at: new Date().toISOString(),
       // THE WORDS THE DRAFT WAS ABOUT, so the next send can see a rewording of
       // it. The digest alone catches a byte-identical resend and nothing else.
-      words: contentWords(draft),
+      words: allWords(draft),
       ...(closest === undefined
         ? {}
         : {
@@ -2283,7 +2301,7 @@ async function cmdRewrites(argv: string[], io: Io): Promise<number> {
   // measured and this reads the pile back.
   if (flags.has("near")) {
     const who = flags.get("as") ?? nameFor(flags, io);
-    io.write(nearReport(readSentRows(sentPath(slackConfigPath(io), who)), NEAR_DUPLICATE_OVERLAP));
+    io.write(nearReport(readSentRows(sentPath(slackConfigPath(io), who)), NEAR_DUPLICATE_OVERLAP.content));
     return 0;
   }
   io.write(rewritesReport(readRewrites(rewritesPath(slackConfigPath(io))), flags.get("as")));

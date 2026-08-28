@@ -391,16 +391,25 @@ export interface SentRow {
  *  Short words carry the grammar a rewording changes, so they are dropped: what
  *  survives is what the message is ABOUT, which is what a retry repeats. Fenced
  *  blocks stay in, since an evidence table is the part a retry copies verbatim. */
-export function contentWords(text: string): string[] {
+/** Every token a draft carries, deduplicated and sorted: words of any length,
+ *  numbers, and CJK character bigrams.
+ *
+ *  THE SHORT DRAFTS NEED THE SHORT WORDS. `contentWords` drops tokens under four
+ *  characters, which is right for a report and wrong for a one-line status: the
+ *  real duplicate two agents confirmed, one line sent twice 127 seconds apart,
+ *  held 6 and 5 content words and never reached the scorer at all. The full set
+ *  is what a short pair is compared on. */
+export function allWords(text: string): string[] {
   // CJK TEXT CARRIES NO SPACES, so a word filter written for ASCII reduced a
   // Chinese message to its identifiers: 166 Chinese characters left 20 tokens,
   // every one of them a number or a path. Two unrelated Chinese reports then
-  // scored 0.500 on shared shas alone, and two tellings of one thing in Chinese
-  // scored 0. An agent who writes in Chinese measured both directions.
+  // scored 0.500 on shared shas alone. CHARACTER BIGRAMS stand in for
+  // segmentation: no dictionary, and a shared phrase shows up as shared bigrams.
+  // A run of one character keeps the character.
   //
-  // CHARACTER BIGRAMS stand in for segmentation: no dictionary, and a shared
-  // phrase shows up as shared bigrams. A run of one character keeps the
-  // character.
+  // EDGE PUNCTUATION IS NOT PART OF A WORD, and an inner dot or slash is: a path
+  // and a version number survive whole. Without that, `fallback.` at the end of a
+  // sentence counted as a different word from `fallback`.
   const cjk = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uac00-\ud7af]+/g;
   const grams: string[] = [];
   for (const run of text.match(cjk) ?? []) {
@@ -412,17 +421,29 @@ export function contentWords(text: string): string[] {
     .replace(cjk, " ")
     .replace(/[^a-z0-9_./-]+/g, " ")
     .split(" ")
-    // EDGE PUNCTUATION IS NOT PART OF A WORD, and an inner dot or slash is: a
-    // path and a version number have to survive whole. Without this, `fallback.`
-    // at the end of a sentence counted as a different word from `fallback`, and
-    // two tellings of one thing measured further apart than they are.
     .map((w) => w.replace(/^[./-]+/, "").replace(/[./-]+$/, ""))
-    // A NUMBER OF ANY LENGTH COUNTS. Dropping short tokens dropped the
-    // measurements, and a measurement is what a report is FOR: two status lines
-    // reading `peers 9, damaged 0` and `peers 10, damaged 1` shared every
-    // surviving word and scored 1.000, which would have refused the second one.
-    .filter((w) => w.length >= 4 || /[0-9]/.test(w));
+    .filter((w) => w !== "");
   return [...new Set([...words, ...grams])].sort();
+}
+
+/** The subset of a token list that carries the message's subject: four characters
+ *  or more, or anything holding a digit. */
+export function contentOf(words: string[]): string[] {
+  // A CJK BIGRAM IS CONTENT, whatever its length. This filter kept tokens of four
+  // characters or more, so deriving the content words from the full token set
+  // dropped every bigram and put a Chinese message back to its identifiers: the
+  // defect an agent had reported an hour earlier, reintroduced by a refactor and
+  // caught by the test written for it.
+  const cjk = /^[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uac00-\ud7af]/;
+  return words.filter((w) => w.length >= 4 || /[0-9]/.test(w) || cjk.test(w));
+}
+
+export function contentWords(text: string): string[] {
+  // ONE TOKENIZER, ONE FILTER. This held its own copy of the tokenizer for an
+  // hour after `allWords` arrived, which is two places to fix the day a script or
+  // a punctuation rule changes. The coverage gate found the copy: its CJK branch
+  // was unreached, since every CJK test went through the other one.
+  return contentOf(allWords(text));
 }
 
 /** THE SHORTER DRAFT MUST BE COMPARABLE IN SIZE for containment to mean
@@ -537,23 +558,54 @@ export function sentAlready(
  *  is the right trade for a message somebody can reread in a second. */
 export const NEAR_DUPLICATE_FLOOR = 8;
 
+/** A short pair is scored on its FULL token set, and only while the two drafts
+ *  are close in size. */
+export const SHORT_SIZE_RATIO = 0.75;
+
+/** The score for one pair, and which scale it came from.
+ *
+ *  TWO SCALES, PICKED BY LENGTH. A report is scored on content words, which drops
+ *  the grammar a rewording changes. A one-line status has too few content words
+ *  for that: the real duplicate two agents confirmed held 6 and 5 of them and was
+ *  never scored, while the debate ran on a threshold that never applied to it.
+ *  Short drafts are scored on every token, with a tighter size requirement, since
+ *  containment over a handful of words reaches 1.0 on an addendum. */
+export function pairScore(
+  aTokens: string[],
+  bTokens: string[],
+): { overlap: number; scale: "content" | "short" } {
+  const aContent = contentOf(aTokens);
+  const bContent = contentOf(bTokens);
+  if (aContent.length >= NEAR_DUPLICATE_FLOOR && bContent.length >= NEAR_DUPLICATE_FLOOR) {
+    return { overlap: wordOverlap(aContent, bContent), scale: "content" };
+  }
+  const smaller = Math.min(aTokens.length, bTokens.length);
+  const larger = Math.max(aTokens.length, bTokens.length);
+  if (smaller === 0) return { overlap: 0, scale: "short" };
+  const set = new Set(aTokens);
+  let shared = 0;
+  for (const w of new Set(bTokens)) if (set.has(w)) shared += 1;
+  return {
+    overlap: smaller / larger >= SHORT_SIZE_RATIO ? shared / smaller : shared / larger,
+    scale: "short",
+  };
+}
+
 export function closestSaid(
   rows: SentRow[],
   channel: string,
   words: string[],
   nowMs: number,
   windowMs: number,
-): { row: SentRow; overlap: number } | undefined {
-  if (words.length < NEAR_DUPLICATE_FLOOR) return undefined;
-  let best: { row: SentRow; overlap: number } | undefined;
+): { row: SentRow; overlap: number; scale: "content" | "short" } | undefined {
+  let best: { row: SentRow; overlap: number; scale: "content" | "short" } | undefined;
   for (let i = rows.length - 1; i >= 0; i--) {
     const r = rows[i]!;
     if (r.channel !== channel || r.at === undefined || r.words === undefined) continue;
-    if (r.words.length < NEAR_DUPLICATE_FLOOR) continue;
     const at = Date.parse(r.at);
     if (!Number.isFinite(at) || nowMs - at > windowMs) continue;
-    const overlap = wordOverlap(words, r.words);
-    if (best === undefined || overlap > best.overlap) best = { row: r, overlap };
+    const scored = pairScore(words, r.words);
+    if (best === undefined || scored.overlap > best.overlap) best = { row: r, ...scored };
   }
   return best;
 }
@@ -566,10 +618,11 @@ export function saidAlready(
   words: string[],
   nowMs: number,
   windowMs: number,
-  threshold: number,
-): { row: SentRow; overlap: number } | undefined {
+  threshold: { content: number; short: number },
+): { row: SentRow; overlap: number; scale: "content" | "short" } | undefined {
   const best = closestSaid(rows, channel, words, nowMs, windowMs);
-  return best !== undefined && best.overlap >= threshold ? best : undefined;
+  if (best === undefined) return undefined;
+  return best.overlap >= (best.scale === "short" ? threshold.short : threshold.content) ? best : undefined;
 }
 
 /** What every send measured against the closest thing that agent had already
