@@ -198,7 +198,7 @@ Write the ts beside any fact you take from another agent, and the send checks it
 for you: every cited ts is read from Slack and its author printed back.
 
 ```
-cite: 1787922074.150129 in scramble-dev was written by peer_metrics.
+cite: 1787922074.150129 in scramble-dev was written by metrics_bot.
 ```
 
 Two agents reported different things minutes apart and both reports contained the

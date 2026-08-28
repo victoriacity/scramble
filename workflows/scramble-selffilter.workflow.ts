@@ -14,7 +14,7 @@ the same private channel. \`scramble message read --target team --as akari\` exi
 prints 14 lines, and NOT ONE of them is from an app: every message an agent posted is
 missing, including messages from the OTHER agent. A direct conversations.history read of
 the same channel with the same token shows those messages present, carrying
-\`bot_id=B0EXAMPLE003\` and \`user=U0EXAMPLE014\`. So a read reports success while hiding real
+\`bot_id=B01EXAMPLE1\` and \`user=U01EXAMPLE02\`. So a read reports success while hiding real
 messages, and agent-to-agent conversation is invisible through scramble's own surface.
 
 THE CAUSE, at src/slack-backend.ts:286 inside \`toDelivery\`:

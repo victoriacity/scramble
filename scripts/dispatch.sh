@@ -5,11 +5,11 @@
 # (postmortem: `log/postmortems/-duplicate-dispatch-survived-a-failed-source.md` in the akrust
 # repo). Every precondition below REFUSES the run. A warning would be ignored.
 #
-# usage: scripts/dispatch.sh [<workflow.ts>]   (default: scramble.workflow.ts)
+# usage: scripts/dispatch.sh [<workflow.ts>]   (default: workflows/scramble.workflow.ts)
 set -uo pipefail
 cd "$(dirname "$0")/.."
 REPO="$(pwd)"
-WORKFLOW="${1:-$REPO/scramble.workflow.ts}"
+WORKFLOW="${1:-$REPO/workflows/scramble.workflow.ts}"
 # WHERE AKARI LIVES IS THIS MACHINE'S BUSINESS, and the repo holds no path. Both paths come
 # from the environment, and an unset one is a refusal naming the variable, so no
 # checkout carries one developer's directory layout.

@@ -13,6 +13,9 @@ import { WORD_LIMIT } from "../src/language";
 const scratch = (): string => mkdtempSync(join(tmpdir(), "scramble-prompt-"));
 import {
   DEFAULT_MODEL,
+  documentPromptPath,
+  readDocumentTemplate,
+  splitSections,
   DEFAULT_TIMEOUT_MS,
   MIN_PROSE_RATIO,
   chooseText,
@@ -343,10 +346,10 @@ describe("choosing what to send", () => {
     // Measured in a live channel: the rewriter dropped a closing causal
     // sentence and replaced a statement of fact with a different one, and the
     // receiving agent inferred the missing conclusion from the numbers.
-    const original = "the run took 42 seconds and `_summary.mesh_quality.json` holds the score for @peer_metrics";
+    const original = "the run took 42 seconds and `_summary.quality_report.json` holds the score for @metrics_bot";
     const out = chooseText(original, { ok: true, text: "the run took 42 seconds and holds the score" });
     expect("refuse" in out && out.refuse).toContain("the rewrite dropped");
-    expect("refuse" in out && out.refuse).toContain("`_summary.mesh_quality.json`");
+    expect("refuse" in out && out.refuse).toContain("`_summary.quality_report.json`");
     expect("refuse" in out && out.refuse).toContain("neither version goes out");
   });
 
@@ -377,9 +380,9 @@ describe("choosing what to send", () => {
     // Measured live: the rewriter moved an `@name` into a code span, Slack
     // recorded `mentions=[]`, and the addressee never heard about the message.
     // The characters are still on the line, so a whole-text check misses it.
-    const mine = "@peer_metrics the run finished";
-    const out = chooseText(mine, { ok: true, text: "The run finished, `@peer_metrics`" });
-    expect("refuse" in out && out.refuse).toContain("stopped @peer_metrics from notifying anyone");
+    const mine = "@metrics_bot the run finished";
+    const out = chooseText(mine, { ok: true, text: "The run finished, `@metrics_bot`" });
+    expect("refuse" in out && out.refuse).toContain("stopped @metrics_bot from notifying anyone");
   });
 
   test("a rewrite that erases the actor is refused", () => {
@@ -656,5 +659,65 @@ describe("the record of what the rewriter did", () => {
 
   test("an unreadable file reads as no rows", () => {
     expect(readRewrites(join(scratch(), "nothing.jsonl"))).toEqual([]);
+  });
+});
+
+describe("a document is rewritten by its sections", () => {
+  test("the document instruction is a file, and a missing one is a reason", () => {
+    // THE MESSAGE INSTRUCTION WOULD GUT A DOCUMENT: it caps prose at 300 words and
+    // asks the model to drop reasoning. A design document carries its reasoning by
+    // design, so the document job reads its own file.
+    const dir = mkdtempSync(join(tmpdir(), "docprompt-"));
+    mkdirSync(join(dir, "prompts"), { recursive: true });
+    expect(documentPromptPath(dir)).toBe(join(dir, "prompts", "document.md"));
+    const absent = readDocumentTemplate(dir);
+    expect(absent.ok).toBe(false);
+    expect(!absent.ok && absent.why).toContain("document rewrite instruction");
+    writeFileSync(join(dir, "prompts", "document.md"), "   \n");
+    const empty = readDocumentTemplate(dir);
+    expect(empty.ok).toBe(false);
+    expect(!empty.ok && empty.why).toContain("is empty");
+    writeFileSync(join(dir, "prompts", "document.md"), "# Rewrite a section\nkeep every fact\n");
+    const got = readDocumentTemplate(dir);
+    expect(got.ok && got.text).toContain("keep every fact");
+  });
+
+  test("THE SHIPPED DOCUMENT INSTRUCTION LOADS", () => {
+    // The one that ships is the one that runs. A test against a string typed here
+    // passes on a day the shipped file is empty.
+    const shipped = readDocumentTemplate(join(import.meta.dir, "..", "src"));
+    expect(shipped.ok).toBe(true);
+    expect(shipped.ok && shipped.text).toContain("Keep exactly as they are");
+  });
+
+  test("sections split on the headings a reader navigates by", () => {
+    const doc = [
+      "# Title",
+      "",
+      "The opening paragraph.",
+      "",
+      "## First",
+      "one",
+      "",
+      "### Deeper",
+      "still first",
+      "",
+      "## Second",
+      "two",
+    ].join("\n");
+    const parts = splitSections(doc);
+    expect(parts).toHaveLength(3);
+    expect(parts[0]).toContain("The opening paragraph.");
+    expect(parts[1]).toContain("## First");
+    // A `###` STAYS WITH ITS PARENT, since the two read as one topic.
+    expect(parts[1]).toContain("still first");
+    expect(parts[2]).toContain("## Second");
+    // A `##` INSIDE A FENCE IS CODE. A shell comment starts with the same
+    // characters, and splitting there would cut a command in half.
+    const fenced = ["intro", "```bash", "## not a heading", "echo hi", "```", "tail"].join("\n");
+    expect(splitSections(fenced)).toHaveLength(1);
+    // A document with no `##` heading is one piece, and an empty one is no pieces.
+    expect(splitSections("# Only a title\nbody")).toHaveLength(1);
+    expect(splitSections("   \n\n")).toEqual([]);
   });
 });

@@ -479,16 +479,16 @@ describe("post", () => {
       seen.push(url);
       if (url.includes("auth.test")) {
         return new Response(
-          JSON.stringify({ ok: true, team_id: "E0EXAMPLE010", enterprise_id: "E0EXAMPLE010", is_enterprise_install: true }),
+          JSON.stringify({ ok: true, team_id: "E01EXAMPLE1", enterprise_id: "E01EXAMPLE1", is_enterprise_install: true }),
           { status: 200 },
         );
       }
       if (url.includes("auth.teams.list")) {
-        return new Response(JSON.stringify({ ok: true, teams: [{ id: "T0EXAMPLE012", name: "Example" }] }), { status: 200 });
+        return new Response(JSON.stringify({ ok: true, teams: [{ id: "T01EXAMPLE1", name: "Example Corp" }] }), { status: 200 });
       }
       if (url.includes("users.conversations")) {
         // Slack's real behaviour: the org id is refused outright.
-        if (url.includes("team_id=E0EXAMPLE010")) {
+        if (url.includes("team_id=E01EXAMPLE1")) {
           return new Response(JSON.stringify({ ok: false, error: "team_access_not_granted" }), { status: 200 });
         }
         return new Response(JSON.stringify({ ok: true, channels: [{ id: "C9", name: "invited" }] }), { status: 200 });
@@ -497,8 +497,8 @@ describe("post", () => {
     });
     const r = await h.backend.post("invited", "hi", "bob");
     expect(r).toEqual({ ok: true });
-    expect(seen.some((u) => u.includes("users.conversations") && u.includes("team_id=T0EXAMPLE012"))).toBe(true);
-    expect(seen.some((u) => u.includes("users.conversations") && u.includes("team_id=E0EXAMPLE010"))).toBe(false);
+    expect(seen.some((u) => u.includes("users.conversations") && u.includes("team_id=T01EXAMPLE1"))).toBe(true);
+    expect(seen.some((u) => u.includes("users.conversations") && u.includes("team_id=E01EXAMPLE1"))).toBe(false);
   });
 
   test("a login covering several workspaces names none of them rather than guessing", async () => {

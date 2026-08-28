@@ -11,7 +11,7 @@
     "noEmit": true,
     "skipLibCheck": true
   },
-  // A WHITELIST, so *.workflow.ts at the repo root stays out: those are akari
+  // A WHITELIST, so workflows/*.workflow.ts stays out: those are akari
   // dispatch scripts, not product code, and they run under a host that provides
   // `agent`, `phase`, `parallel` and a top-level `return`, which tsc reports as
   // errors on a file that ships nothing.

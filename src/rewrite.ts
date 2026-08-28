@@ -283,6 +283,50 @@ export function promptPath(moduleDir: string): string {
   return join(moduleDir, "prompts", "rewrite.md");
 }
 
+export function documentPromptPath(moduleDir: string): string {
+  return join(moduleDir, "prompts", "document.md");
+}
+
+/** The instruction for rewriting a REPOSITORY DOCUMENT, which is a different job
+ *  from rewriting a message.
+ *
+ *  THE MESSAGE INSTRUCTION WOULD GUT A DOCUMENT: it caps prose at 300 words, tells
+ *  the model to drop reasoning and process detail, and asks for a Slack message
+ *  from a startup team. A design document carries 4000 words of reasoning by
+ *  design. */
+export function readDocumentTemplate(moduleDir: string): { ok: true; text: string } | { ok: false; why: string } {
+  return readInstructionFile(documentPromptPath(moduleDir), "the document rewrite instruction");
+}
+
+/** A document split into the pieces one model call handles: the text before the
+ *  first heading, then each `##` section with everything under it.
+ *
+ *  WHOLE-FILE CALLS FAIL TWO WAYS. A 6000-word document runs past the answer
+ *  length a single call returns, and a stall costs the whole file where a section
+ *  would have been the only loss. Sections are also the unit a reader skips by, so a rewrite that keeps
+ *  their boundaries keeps the document navigable.
+ *
+ *  Split on `##` and deeper stays inside its parent section, since a `###` under a
+ *  `##` reads as one topic. A document with no `##` heading is one piece. */
+export function splitSections(text: string): string[] {
+  const lines = text.split("\n");
+  const out: string[] = [];
+  let current: string[] = [];
+  let fenced = false;
+  for (const line of lines) {
+    // A `##` INSIDE A FENCE IS CODE, and shell comments start with the same
+    // characters, so the fence state decides whether a line is a heading.
+    if (/^\s*```/.test(line)) fenced = !fenced;
+    if (!fenced && /^## /.test(line) && current.length > 0) {
+      out.push(current.join("\n"));
+      current = [];
+    }
+    current.push(line);
+  }
+  if (current.length > 0) out.push(current.join("\n"));
+  return out.filter((s) => s.trim() !== "");
+}
+
 /** Read the instruction. A missing or empty file is a REASON, never a default:
  *  a rewrite driven by no instruction is worse than no rewrite, since the model
  *  would be free to do anything to a claim. */

@@ -51,7 +51,7 @@ const USERS_CONVERSATIONS_URL = "https://slack.com/api/users.conversations";
  * CHOSEN BY NEWEST REPLY. At 5 roots picked by root age, an agent replying in a
  * thread started hours earlier read the channel back, saw nothing newer than
  * 04:34:09, decided the send had failed, and posted the same progress report
- * FIVE times (peer-metrics, ts 1787715280 through 1787715629). The thread they
+ * FIVE times (one agent, ts 1787715280 through 1787715629). The thread they
  * were writing in is the one they need expanded, and its root is old by
  * definition. */
 export const THREAD_EXPANSION_CAP = 25;
@@ -638,7 +638,7 @@ export class SlackBackend {
    *  conversations.list answers `team_access_not_granted` to that, so reading
    *  the obvious field gives an id that is wrong in a way whose error names
    *  neither the field nor the fix. Measured against this org: auth.test says
-   *  E0EXAMPLE010, auth.teams.list says T0EXAMPLE012, and only the second works.
+   *  E01EXAMPLE1, auth.teams.list says T01EXAMPLE1, and only the second works.
    *
    *  Empty when the login covers no workspace or several, since there is then no
    *  single answer to invent; the lookup still runs, and Slack's own refusal is

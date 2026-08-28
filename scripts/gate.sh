@@ -183,7 +183,7 @@ fi
 # the others and a red gate teaches nothing while the backlog sits. The backlog
 # is drained, so the stage checks what the source comments are checked for.
 echo "== the tests, the scripts and the workflows pass the language check =="
-DATE_FILES=$(git -C "$REPO" ls-files 'test/*.ts' 'scripts/*.ts' 'scripts/*.sh' '*.workflow.ts')
+DATE_FILES=$(git -C "$REPO" ls-files 'test/*.ts' 'scripts/*.ts' 'scripts/*.sh' 'workflows/*.workflow.ts')
 if [ -n "$DATE_FILES" ]; then
   # shellcheck disable=SC2086
   ( cd "$REPO" && "$BUN" src/bin.ts lint --comments $DATE_FILES )
@@ -219,6 +219,32 @@ else
   leak_rc=0
 fi
 
+# NOTHING FROM THE PRIVATE WORKSPACE IN A PUBLIC FILE. This repository is
+# published, and the names carrying the company, its products, its hosts and its
+# people's Slack accounts were spread across tests, fixtures, comments and one
+# calibration table. A scrub with no gate behind it comes back the next time
+# somebody quotes a channel message into a comment, which is how most of them
+# arrived.
+echo "== no private-workspace reference in a tracked file =="
+# THE PATTERN IS ASSEMBLED FROM FRAGMENTS so this file carries no machine path of
+# its own, which the paths stage above would flag.
+HOME_DIRS="/j""fs/home|/st""orage/home"
+USER_NAME="sy""zs"
+PRIVATE="$(git -C "$REPO" grep -IniE "example|muse[_-]|$HOME_DIRS|$USER_NAME|4090" -- . ':(exclude)scripts/gate.sh' 2>/dev/null || true)"
+# A REAL SLACK ACCOUNT ID identifies a person, and the fixtures now carry ids with
+# EXAMPLE in them so the shape stays testable.
+IDS="$(git -C "$REPO" grep -InE '\b(U0|T0|E0|B0)[0-9A-Z]{8,}' -- . ':(exclude)scripts/gate.sh' 2>/dev/null | grep -vE 'EXAMPLE|0{6,}' || true)"
+if [ -n "$PRIVATE" ] || [ -n "$IDS" ]; then
+  echo "GATE FAIL: a tracked file names the private workspace or a real Slack account:"
+  [ -n "$PRIVATE" ] && echo "$PRIVATE"
+  [ -n "$IDS" ] && echo "$IDS"
+  echo "Use a neutral name. An example id carries EXAMPLE so this scan can tell it from a real one."
+  private_rc=1
+else
+  echo "no private-workspace references and no real account ids in tracked files"
+  private_rc=0
+fi
+
 echo "== every src file reaches the coverage report =="
 COVERED=$("$BUN" test --coverage 2>&1 | grep -oE 'src/[a-z-]+\.ts' | sort -u)
 MISSING=""
@@ -242,8 +268,8 @@ echo "== bun test --coverage =="
 test_rc=$?
 
 echo "== gate summary =="
-echo "self_test_rc=$self_rc (nonzero required) paths_rc=$paths_rc lang_rc=$lang_rc skill_rc=$skill_rc comment_rc=$comment_rc dates_rc=$dates_rc leak_rc=$leak_rc cover_rc=$cover_rc tsc_rc=$tsc_rc test_rc=$test_rc"
-if [ "$paths_rc" -ne 0 ] || [ "$lang_rc" -ne 0 ] || [ "$skill_rc" -ne 0 ] || [ "$comment_rc" -ne 0 ] || [ "$dates_rc" -ne 0 ] || [ "$leak_rc" -ne 0 ] || [ "$cover_rc" -ne 0 ] || [ "$tsc_rc" -ne 0 ] || [ "$test_rc" -ne 0 ]; then
+echo "self_test_rc=$self_rc (nonzero required) paths_rc=$paths_rc lang_rc=$lang_rc skill_rc=$skill_rc comment_rc=$comment_rc dates_rc=$dates_rc leak_rc=$leak_rc private_rc=$private_rc cover_rc=$cover_rc tsc_rc=$tsc_rc test_rc=$test_rc"
+if [ "$paths_rc" -ne 0 ] || [ "$lang_rc" -ne 0 ] || [ "$skill_rc" -ne 0 ] || [ "$comment_rc" -ne 0 ] || [ "$dates_rc" -ne 0 ] || [ "$leak_rc" -ne 0 ] || [ "$private_rc" -ne 0 ] || [ "$cover_rc" -ne 0 ] || [ "$tsc_rc" -ne 0 ] || [ "$test_rc" -ne 0 ]; then
   echo "GATE RED"
   exit 1
 fi

@@ -878,7 +878,7 @@ describe("message check (local => cursor drain)", () => {
 describe("`--help`, and the agent name that is not a directory", () => {
   // A remote agent: "`--help` is unknown CLI-wide, and `doctor --help` falls
   // through to the working directory as the agent name: doctor: no agent
-  // "mbench3d"... From /tmp it says "tmp", from home it says "agent"." An
+  // "mbench3d"... From /tmp it says "tmp", from home it says the user name." An
   // unknown flag turned a directory into an identity.
   test("--help lists the verbs and exits 0, from any verb", async () => {
     const cwd = scratchDir("help");

@@ -19,12 +19,12 @@ function scratch(name: string): string {
 
 const FILE = JSON.stringify(
   {
-    E0EXAMPLE010: {
+    E01EXAMPLE1: {
       token: "xoxe.xoxp-old",
       refresh_token: "xoxe-refresh-old",
       exp: 1787402756,
-      team_id: "E0EXAMPLE010",
-      user_id: "U0EXAMPLE013",
+      team_id: "E01EXAMPLE1",
+      user_id: "U01EXAMPLE01",
       team_domain: "examplecorp",
     },
   },
@@ -37,7 +37,7 @@ describe("the Slack app-config credential", () => {
     const got = firstCredential(FILE);
     expect(got.ok).toBe(true);
     if (got.ok) {
-      expect(got.cred.key).toBe("E0EXAMPLE010");
+      expect(got.cred.key).toBe("E01EXAMPLE1");
       expect(got.cred.exp).toBe(1787402756);
       expect(got.cred.refreshToken).toBe("xoxe-refresh-old");
     }
@@ -122,11 +122,11 @@ describe("the Slack app-config credential", () => {
     expect(asked).toContain("tooling.tokens.rotate");
     expect(asked).toContain("xoxe-refresh-old");
     const onDisk = JSON.parse(readFileSync(path, "utf8"));
-    expect(onDisk.E0EXAMPLE010.token).toBe("xoxe.xoxp-new");
-    expect(onDisk.E0EXAMPLE010.refresh_token).toBe("xoxe-refresh-new");
-    expect(onDisk.E0EXAMPLE010.exp).toBe(1787500000);
+    expect(onDisk.E01EXAMPLE1.token).toBe("xoxe.xoxp-new");
+    expect(onDisk.E01EXAMPLE1.refresh_token).toBe("xoxe-refresh-new");
+    expect(onDisk.E01EXAMPLE1.exp).toBe(1787500000);
     // The fields the Slack CLI put there are still there.
-    expect(onDisk.E0EXAMPLE010.team_domain).toBe("examplecorp");
+    expect(onDisk.E01EXAMPLE1.team_domain).toBe("examplecorp");
   });
 
   test("every failure names the entry, the file, and who has to act", async () => {
@@ -168,7 +168,7 @@ describe("the Slack app-config credential", () => {
       "STAMP",
     );
     expect(refused.ok === false && refused.why).toContain("invalid_refresh_token");
-    expect(refused.ok === false && refused.why).toContain("E0EXAMPLE010");
+    expect(refused.ok === false && refused.why).toContain("E01EXAMPLE1");
 
     const badFile = await freshCliToken("{}", path, async () => new Response("{}", { status: 200 }), at, "STAMP");
     expect(badFile.ok === false && badFile.why).toContain("no entry");

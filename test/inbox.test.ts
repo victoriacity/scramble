@@ -465,7 +465,7 @@ describe("what counts as owed, measured against one afternoon", () => {
     // worked through a defect inside one thread of mine and opened nine items
     // in my ledger in twelve minutes, every one a message between the two of
     // them. The reply names the agent it answers, and that agent is not me.
-    const between = { mentioned: true, from: "peer_metrics", mentions: ["model_failure_researc"], thread: "mine-1" };
+    const between = { mentioned: true, from: "metrics_bot", mentions: ["model_failure_researc"], thread: "mine-1" };
     expect(isAddressed(between, ["dev", "dev_bot"], ["mine-1"])).toBe(false);
     // Naming me among them keeps it owed.
     const alsoMe = { ...between, mentions: ["model_failure_researc", "dev_bot"] };

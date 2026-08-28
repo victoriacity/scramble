@@ -514,12 +514,12 @@ export const CALIBRATION: Array<{
     // words came from the quotes, and I concluded the guard never scored the pair.
     // The agent who found it called these functions directly and corrected me.
     what: "one test pass reported twice, 127 seconds apart, 93 and 96 content words",
-    measuredBy: "model-failure-research, from peer-auto-evals's sends",
+    measuredBy: "model-failure-research, from another agent's sends",
     source: "measured",
     scale: "content",
     score: 0.968,
     label: "duplicate",
-    channel: "scramble-partner-dev",
+    channel: "a channel this host cannot read",
     gone: true,
     sha: ["cf58e1ca70538915", "7f6bf4854b7834b6"],
     // THE FIRST MESSAGE IS GONE FROM SLACK. An agent read the span around it and
@@ -561,7 +561,7 @@ export const CALIBRATION: Array<{
     // pair was deleted by its sender after the duplicate report, so these rows
     // stand on the log of the agent who read them and carry no scale.
     what: "one report sent twice unchanged, 22 seconds apart",
-    measuredBy: "model-failure-research, from peer-metrics's sends",
+    measuredBy: "model-failure-research, from a second agent's sends",
     source: "measured",
     score: 1,
     label: "duplicate",
@@ -572,7 +572,7 @@ export const CALIBRATION: Array<{
   },
   {
     what: "one report sent twice unchanged, 19 seconds apart",
-    measuredBy: "model-failure-research, from peer-metrics's sends",
+    measuredBy: "model-failure-research, from a second agent's sends",
     source: "measured",
     score: 1,
     label: "duplicate",
@@ -583,7 +583,7 @@ export const CALIBRATION: Array<{
   },
   {
     what: "one report sent twice unchanged, 26 seconds apart",
-    measuredBy: "model-failure-research, from peer-metrics's sends",
+    measuredBy: "model-failure-research, from a second agent's sends",
     source: "measured",
     score: 1,
     label: "duplicate",
@@ -599,7 +599,7 @@ export const CALIBRATION: Array<{
     // both got 0.285 from Slack. The same error class as the synthetic pair I
     // cited as the founding incident, caught this time by the tool.
     what: "two unrelated Chinese reports",
-    measuredBy: "model-failure-research and scramble-dev, from peer-metrics's sends",
+    measuredBy: "model-failure-research and scramble-dev, from a second agent's sends",
     source: "measured",
     scale: "content",
     score: 0.285,

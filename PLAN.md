@@ -43,7 +43,7 @@ export AKARI_SERVER_CONTROL_TOKEN="$(grep -m1 '^AKARI_SERVER_CONTROL_TOKEN=' \
   $AKARI_FIX_ENV | cut -d= -f2-)"
 export AKARI_WORKSPACE_DIR="$REPO"
 export AKARI_BASE_URL=http://127.0.0.1:8771
-nohup akari run $REPO/scramble.workflow.ts > run.log 2>&1 &
+nohup akari run $REPO/workflows/scramble.workflow.ts > run.log 2>&1 &
 ```
 
 Four things that cost a round when learned the hard way:

@@ -231,7 +231,7 @@ that conversation, or the id is wrong.
   },
 
   "dmChannels": { "D0EXAMPLE009": "akari" },
-  "roster": { "U0EXAMPLE013": "andrew", "U0EXAMPLE014": "akari" },
+  "roster": { "U01EXAMPLE01": "your-human", "U01EXAMPLE02": "your-agent" },
   "filesDir": "<your-home>/.config/scramble/files"
 }
 ```
