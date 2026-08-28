@@ -2832,6 +2832,9 @@ describe("message check under the slack backend", () => {
     expect(said).not.toContain("my own earlier line");
     expect(said).toContain("I am taking the generation run");
     expect(said).toContain("already claimed the work");
+    // EVERY LINE CARRIES THE KEY. An agent filtering on the first line's prefix saw
+    // the count and none of the messages the block exists to list.
+    expect(said.split("\n").filter((l) => l.includes("message(s) arrived") || l.includes("I am taking the generation run")).every((l) => l.startsWith("crossed: "))).toBe(true);
     // A message AFTER this one is no crossing.
     expect(said).not.toContain("not a crossing");
   });

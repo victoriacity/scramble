@@ -2756,10 +2756,16 @@ async function reportCrossings(
   );
   if (crossed.length === 0) return;
   const lines = crossed.map((m) => `  ${m.from}: ${(m.text ?? "").replace(/\s+/g, " ").slice(0, 100)}`);
+  // KEYED LIKE THE READ-BACK BLOCK. An agent filtering on `sent:|verify:|REFUSED`
+  // saw the count line and none of the messages under it, which is the block's
+  // whole content, and said so after a night of it.
   io.writeErr(
-    `${crossed.length} message(s) arrived in ${channel} before yours and you have not read them:\n` +
-      `${lines.join("\n")}\n` +
-      `If one of them already made your point, or already claimed the work, say nothing further.`,
+    keyed(
+      "crossed:",
+      `${crossed.length} message(s) arrived in ${channel} before yours and you have not read them:\n` +
+        `${lines.join("\n")}\n` +
+        `If one of them already made your point, or already claimed the work, say nothing further.`,
+    ),
   );
 }
 
