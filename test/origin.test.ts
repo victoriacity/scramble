@@ -18,6 +18,7 @@ import {
   peersOnOtherCommits,
   peersReport,
   readOrigin,
+  readOneFile,
   readPeerFile,
   readPeers,
   recordPeer,
@@ -171,10 +172,10 @@ describe("the peers record", () => {
     // nothing on a change would lose the move. The newest row wins on read, and
     // the older one stays, so "it used to run there" is answerable.
     const p = peersPath(join(scratch(), "slack.json"));
-    expect(recordPeer(p, "dev", HERE, "2026-08-22T10:00:00Z")).toBe(true);
-    expect(recordPeer(p, "dev", HERE, "2026-08-22T10:05:00Z")).toBe(false);
-    expect(recordPeer(p, "dev", { ...HERE, dir: "/srv/other-work" }, "2026-08-22T10:10:00Z")).toBe(true);
-    expect(recordPeer(p, "dev", { ...HERE, dir: "/srv/other-work", commit: "def5678" }, "2026-08-22T10:15:00Z")).toBe(
+    expect(recordPeer(p, "dev", "dev", HERE, "2026-08-22T10:00:00Z")).toBe(true);
+    expect(recordPeer(p, "dev", "dev", HERE, "2026-08-22T10:05:00Z")).toBe(false);
+    expect(recordPeer(p, "dev", "dev", { ...HERE, dir: "/srv/other-work" }, "2026-08-22T10:10:00Z")).toBe(true);
+    expect(recordPeer(p, "dev", "dev", { ...HERE, dir: "/srv/other-work", commit: "def5678" }, "2026-08-22T10:15:00Z")).toBe(
       true,
     );
     expect(readPeers(p)).toHaveLength(3);
@@ -188,10 +189,10 @@ describe("the peers record", () => {
     // ever published and dropped every later one, so the file pointed at a
     // session that had died.
     const p = peersPath(join(scratch(), "slack.json"));
-    expect(recordPeer(p, "dev", RUNNING, "2026-08-28T10:00:00Z")).toBe(true);
-    expect(recordPeer(p, "dev", RUNNING, "2026-08-28T10:01:00Z")).toBe(false);
+    expect(recordPeer(p, "dev", "dev", RUNNING, "2026-08-28T10:00:00Z")).toBe(true);
+    expect(recordPeer(p, "dev", "dev", RUNNING, "2026-08-28T10:01:00Z")).toBe(false);
     const restarted: Origin = { ...RUNNING, runtime: { ...RUNNING.runtime!, session: "b71d0e2", pid: "22110" } };
-    expect(recordPeer(p, "dev", restarted, "2026-08-28T10:02:00Z")).toBe(true);
+    expect(recordPeer(p, "dev", "dev", restarted, "2026-08-28T10:02:00Z")).toBe(true);
     expect(currentPeers(readPeers(p))[0]?.runtime).toEqual({
       name: "claude-code",
       version: "2.1.234",
@@ -215,18 +216,18 @@ describe("the peers record", () => {
     // belongs to is the authority on which name is its own.
     const p = peersPath(join(scratch(), "slack.json"));
     // The row it wrote about itself.
-    expect(recordPeer(p, "model-failure-research", { ...RUNNING, agent: "model-failure-research" }, "t1")).toBe(true);
+    expect(recordPeer(p, "model-failure-research", "model-failure-research", { ...RUNNING, agent: "model-failure-research" }, "t1")).toBe(true);
     // A message from it, arriving under its Slack handle, carrying the same name.
     expect(
-      recordPeer(p, "model_failure_researc", { ...RUNNING, agent: "model-failure-research" }, "t2"),
+      recordPeer(p, "model_failure_researc", "model_failure_researc", { ...RUNNING, agent: "model-failure-research" }, "t2"),
     ).toBe(true);
     expect(currentPeers(readPeers(p)).map((r) => r.agent)).toEqual(["model-failure-research"]);
     // The handle it arrived under is kept on the row, which is what retires a row
     // written under that handle before agents published their names.
     const withHandle = peersPath(join(scratch(), "slack.json"));
-    expect(recordPeer(withHandle, "model_failure_researc", RUNNING, "t0")).toBe(true);
+    expect(recordPeer(withHandle, "model_failure_researc", "model_failure_researc", RUNNING, "t0")).toBe(true);
     expect(
-      recordPeer(withHandle, "model_failure_researc", { ...RUNNING, agent: "model-failure-research" }, "t1"),
+      recordPeer(withHandle, "model_failure_researc", "model_failure_researc", { ...RUNNING, agent: "model-failure-research" }, "t1"),
     ).toBe(true);
     expect(currentPeers(readPeers(withHandle)).map((r) => r.agent)).toEqual(["model-failure-research"]);
     // Both rows stay in the file: the record of what was seen is never rewritten.
@@ -266,7 +267,7 @@ describe("the peers record", () => {
     const p = peersPath(join(scratch(), "slack.json"));
     const writers = Array.from({ length: 8 }, (_, i) =>
       Promise.resolve().then(() =>
-        recordPeer(p, `agent-${i}`, { host: "h", dir: "/w", commit: "abc1234", agent: `agent-${i}` }, `t${i}`),
+        recordPeer(p, `agent-${i}`, `agent-${i}`, { host: "h", dir: "/w", commit: "abc1234", agent: `agent-${i}` }, `t${i}`),
       ),
     );
     expect((await Promise.all(writers)).filter(Boolean)).toHaveLength(8);
@@ -275,9 +276,9 @@ describe("the peers record", () => {
     expect(read.rows).toHaveLength(8);
     // And a repeat from every one of them adds nothing.
     for (let i = 0; i < 8; i += 1) {
-      expect(recordPeer(p, `agent-${i}`, { host: "h", dir: "/w", commit: "abc1234", agent: `agent-${i}` }, "t9")).toBe(
-        false,
-      );
+      expect(
+        recordPeer(p, `agent-${i}`, `agent-${i}`, { host: "h", dir: "/w", commit: "abc1234", agent: `agent-${i}` }, "t9"),
+      ).toBe(false);
     }
     expect(readPeerFile(p).rows).toHaveLength(8);
   });
@@ -291,8 +292,8 @@ describe("the peers record", () => {
     // its file needs no agreement with anybody.
     const cfg = join(scratch(), "slack.json");
     const p = peersPath(cfg);
-    expect(recordPeer(p, "ana", { host: "h", dir: "/a", agent: "ana" }, "2026-08-28T01:00:00Z")).toBe(true);
-    expect(recordPeer(p, "bo", { host: "h", dir: "/b", agent: "bo" }, "2026-08-28T01:00:01Z")).toBe(true);
+    expect(recordPeer(p, "ana", "ana", { host: "h", dir: "/a", agent: "ana" }, "2026-08-28T01:00:00Z")).toBe(true);
+    expect(recordPeer(p, "bo", "bo", { host: "h", dir: "/b", agent: "bo" }, "2026-08-28T01:00:01Z")).toBe(true);
     // Two files, one per writer, and the shared file untouched by either.
     expect(readdirSync(peersDir(p)).sort()).toEqual(["ana.jsonl", "bo.jsonl"]);
     expect(existsSync(p)).toBe(false);
@@ -310,6 +311,25 @@ describe("the peers record", () => {
     }
   });
 
+  test("THE FILE IS NAMED FOR THE WRITER, so learning one peer never shares a file", () => {
+    // The name was the SUBJECT's first. Six agents on one host each learn the
+    // same remote peer from its messages, so all six appended to that peer's
+    // file: the shared writer removed an hour earlier, back under another name.
+    // An agent read the code and reported it before any line tore.
+    const p = peersPath(join(scratch(), "slack.json"));
+    const peer = { host: "h2", dir: "/peer-work", agent: "remote-peer" };
+    expect(recordPeer(p, "ana", "remote_peer", peer, "t1")).toBe(true);
+    expect(recordPeer(p, "bo", "remote_peer", peer, "t2")).toBe(true);
+    expect(readdirSync(peersDir(p)).sort()).toEqual(["ana.jsonl", "bo.jsonl"]);
+    // Both rows are ABOUT the peer, and each writer holds its own copy.
+    for (const f of ["ana.jsonl", "bo.jsonl"]) {
+      const rows = readOneFile(join(peersDir(p), f)).rows;
+      expect(rows.map((r) => r.agent)).toEqual(["remote-peer"]);
+    }
+    // The merged view still holds one row per agent, newest first seen.
+    expect(currentPeers(readPeerFile(p).rows).map((r) => r.agent)).toEqual(["remote-peer"]);
+  });
+
   test("THE SHARED FILE IS STILL READ, so no row written before this change is lost", () => {
     const cfg = join(scratch(), "slack.json");
     const p = peersPath(cfg);
@@ -321,7 +341,7 @@ describe("the peers record", () => {
         `{"agent":"torn","ho\n`,
     );
     // And one row from a writer that owns its file, newer than the legacy row.
-    expect(recordPeer(p, "old", { host: "h", dir: "/now", agent: "old" }, "2026-08-28T10:00:00Z")).toBe(true);
+    expect(recordPeer(p, "old", "old", { host: "h", dir: "/now", agent: "old" }, "2026-08-28T10:00:00Z")).toBe(true);
     const read = readPeerFile(p);
     expect(read.damaged).toBe(1);
     // Newest wins across the two files, and the older row stays readable.

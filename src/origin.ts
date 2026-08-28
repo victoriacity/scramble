@@ -300,7 +300,7 @@ export function readOneFile(path: string): { rows: PeerRow[]; damaged: number } 
  *  directory has both facts on the record with their times, which is what makes
  *  "it used to run there" answerable. A repeat of what the newest row already
  *  says is not written, so a busy channel does not grow the file per message. */
-export function recordPeer(path: string, arrivedAs: string, o: Origin, at: string): boolean {
+export function recordPeer(path: string, writer: string, arrivedAs: string, o: Origin, at: string): boolean {
   // THE NAME THE AGENT PUBLISHES WINS. A delivered line names its sender by Slack
   // handle, and an agent's own row names itself by scramble name, so one agent
   // held two rows carrying the same host, directory and session under
@@ -318,7 +318,12 @@ export function recordPeer(path: string, arrivedAs: string, o: Origin, at: strin
   //
   // The lock stays for the processes of THIS agent, which are several: a
   // listener, a send, and a sweep on a timer all record the same row.
-  const mine = peerFileFor(path, agent);
+  // THE FILE IS NAMED FOR THE WRITER, and it held the SUBJECT's name first. Six
+  // agents on one host each learn the same remote peer from its messages, so all
+  // six appended to that peer's file: the shared writer I had just removed, back
+  // under another name. An agent read the code and reported it before any line
+  // tore. A writer owns one file and records whoever it learns about in it.
+  const mine = peerFileFor(path, writer);
   return withFileLock(mine, () => {
     const rows = readOneFile(mine).rows;
     const last = rows.filter((r) => r.agent === agent).at(-1);

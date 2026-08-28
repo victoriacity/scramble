@@ -1327,6 +1327,7 @@ export function recordSelf(io: Io, agent: string): void {
     const handle = loadSlackConfig(io)?.agents[agent]?.handle;
     recordPeer(
       peersPath(slackConfigPath(io)),
+      agent,
       handle === undefined || handle === "" ? agent : handle,
       mine,
       new Date().toISOString(),
@@ -2341,7 +2342,9 @@ function emitDelivery(io: Io, agent: string, line: Record<string, unknown>, addr
     const o = org as Origin;
     if (typeof o.host === "string" && typeof o.dir === "string") {
       try {
-        recordPeer(peersPath(slackConfigPath(io)), from, o, new Date().toISOString());
+        // THE WRITER IS THIS AGENT, and the row is about `from`. Naming the file
+        // for the subject put every agent on a host into one peer's file.
+        recordPeer(peersPath(slackConfigPath(io)), agent, from, o, new Date().toISOString());
       } catch (e) {
         io.writeErr(`peer record not written for ${from}: ${String(e)}`);
       }
