@@ -478,6 +478,72 @@ describe("downloadFile (shared)", () => {
   });
 });
 
+describe("a send carrying a file takes the SAME road as one without", () => {
+  // `--attach` uploaded from the verb and returned before the send path ran, so
+  // it skipped the duplicate guard, the rewriter and every line the send prints.
+  // An agent posted one draft twice, seven seconds apart, saw no output either
+  // time, and deleted the copy by hand.
+  const okUpload = async (url: string): Promise<Response> => {
+    if (url.includes("getUploadURLExternal"))
+      return new Response(JSON.stringify({ ok: true, upload_url: "https://u/x", file_id: "F1" }), { status: 200 });
+    if (url === "https://u/x") return new Response("", { status: 200 });
+    if (url.includes("completeUploadExternal"))
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          files: [{ id: "F1", permalink: "https://x/f", shares: { public: { C1: [{ ts: "77.7" }] } } }],
+        }),
+        { status: 200 },
+      );
+    return new Response(JSON.stringify({ ok: true, messages: [] }), { status: 200 });
+  };
+
+  test("it says POSTED, and the SAME draft twice is refused", async () => {
+    const cwd = scratchDir("attach-guards");
+    const filesDir = scratchDir("attach-guards-files");
+    writeSlackCfg(cwd, filesDir);
+    const src = join(cwd, "report.txt");
+    writeFileSync(src, "the bytes");
+    const first = slackIo(cwd, okUpload);
+    first.io.readStdin = async () => "the report is attached and the numbers are in it";
+    expect(
+      await main(["message", "send", "--target", "general", "--attach", src, "--no-verify", "--backend", "slack"], first.io),
+    ).toBe(0);
+    // THE LINE THAT STOPS A RESEND. Neither run printed one before this change.
+    expect(first.errs.join(" ")).toContain("posted: general at ts 77.7");
+    expect(first.errs.join(" ")).toContain("sent: general at ts 77.7");
+
+    // THE SECOND RUN IS REFUSED, from the record the first one wrote.
+    const second = slackIo(cwd, okUpload);
+    second.io.readStdin = async () => "the report is attached and the numbers are in it";
+    expect(
+      await main(["message", "send", "--target", "general", "--attach", src, "--no-verify", "--backend", "slack"], second.io),
+    ).toBe(1);
+    expect(second.errs.join(" ")).toContain("you already sent this exact draft");
+    expect(second.errs.join(" ")).toContain("77.7");
+  });
+
+  test("a draft the language rules refuse never reaches the upload", async () => {
+    // The file would sit in the channel with no message to go with it.
+    const cwd = scratchDir("attach-lint");
+    const filesDir = scratchDir("attach-lint-files");
+    writeSlackCfg(cwd, filesDir);
+    const src = join(cwd, "report.txt");
+    writeFileSync(src, "the bytes");
+    let uploads = 0;
+    const { io, errs } = slackIo(cwd, async (url) => {
+      if (url.includes("getUploadURLExternal")) uploads += 1;
+      return okUpload(url);
+    });
+    io.readStdin = async () => "honestly the report is attached";
+    expect(
+      await main(["message", "send", "--target", "general", "--attach", src, "--backend", "slack"], io),
+    ).toBe(1);
+    expect(uploads).toBe(0);
+    expect(errs.join(" ")).toContain("language rule");
+  });
+});
+
 describe("the ts of the message a completed upload posted", () => {
   // Completing an upload posts its own message carrying the text, so it has a ts
   // like any other message, and everything the send does afterwards needs it:

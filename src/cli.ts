@@ -471,6 +471,47 @@ async function postLocalCore(
   return 0;
 }
 
+/** Upload every `--attach` file to the target and let the FIRST one carry the
+ *  message text, which is what makes Slack attach the file to the message.
+ *
+ *  It answers in the shape `post` answers, so the send path treats an attachment
+ *  send and a plain send the same way from here on. */
+async function uploadAsMessage(
+  paths: string[],
+  channel: string,
+  text: string,
+  flags: Map<string, string>,
+  io: Io,
+  backend: "local" | "slack",
+  as: string,
+  thread?: string,
+): Promise<{ ok: true; ts?: string; thread?: string; problem?: string; files?: Attachment[] } | { ok: false; error: string }> {
+  let files: Attachment[] | undefined;
+  let ts: string | undefined;
+  for (const path of paths) {
+    const up = await attachmentUpload(
+      path,
+      channel,
+      flags.get("mime-type"),
+      io,
+      backend,
+      as,
+      files === undefined ? text : undefined,
+      thread,
+    );
+    if (!up.ok) return { ok: false, error: up.error };
+    files = files ?? [];
+    files.push({ id: up.id, name: basename(path), mime: guessMime(path), size: sizeOf(path), path });
+    if (ts === undefined) ts = up.ts;
+  }
+  return {
+    ok: true,
+    ...(ts === undefined ? {} : { ts }),
+    ...(thread === undefined ? {} : { thread }),
+    ...(files === undefined ? {} : { files }),
+  };
+}
+
 /** Post one message under whichever backend the run selects. The mirrored verb
  *  (`message send`) and the alias (`post <channel> <text>`) share this path so
  *  the backend switch sits below the verb parsing. `files` rides the local
@@ -548,6 +589,7 @@ async function postText(
   io: Io,
   backend: "local" | "slack",
   files?: Attachment[],
+  attachPaths: string[] = [],
 ): Promise<number> {
   // THE CHOKE POINT: every verb that puts this agent's prose in front of a
   // person funnels through here, so the language check sits here and `post`
@@ -658,6 +700,24 @@ async function postText(
   const thread = flags.get("thread") ?? undefined;
   const status = statusTracker(io, backend, nameFor(flags, io));
   await settleStatus(status?.clearExpired());
+  // THE UPLOAD RUNS AFTER THE GUARDS AND THE REWRITE, for both backends. It ran
+  // in the verb and returned before any of them, so a send carrying a file
+  // printed nothing, checked no duplicate and rewrote nothing: one agent posted
+  // an identical draft twice, seven seconds apart, and deleted the copy by hand.
+  //
+  // On Slack the upload POSTS the message, since the text rides as the file's
+  // comment, so it answers in the shape `post` answers and everything after it
+  // is shared. On the local backend it records the file and the post below
+  // carries it.
+  const uploaded =
+    attachPaths.length > 0
+      ? await uploadAsMessage(attachPaths, channel, text, flags, io, backend, nameFor(flags, io), thread)
+      : undefined;
+  if (uploaded !== undefined && !uploaded.ok) {
+    io.writeErr(`post failed: ${uploaded.error}`);
+    return 1;
+  }
+  if (uploaded !== undefined && uploaded.ok && uploaded.files !== undefined) files = uploaded.files;
   if (backend === "slack") {
     const from = nameFor(flags, io);
     const s = slackBackend(io);
@@ -665,7 +725,13 @@ async function postText(
       io.writeErr(s.error ?? "slack backend unavailable");
       return 1;
     }
-    const r = await s.backend.post(channel, text, from, thread);
+    // AN ATTACHMENT TAKES THE SAME ROAD. `--attach` used to upload from the verb
+    // and return before this function ran, so a send carrying a file skipped the
+    // duplicate guard, the rewriter and every line this prints: an agent posted
+    // one draft twice, seven seconds apart, with no output either time, and
+    // deleted the copy by hand. The upload posts the message, so it stands where
+    // the post call stands and everything after it is shared.
+    const r = uploaded !== undefined ? uploaded : await s.backend.post(channel, text, from, thread);
     if (!r.ok) {
       io.writeErr(`post failed: ${r.error}`);
       return 1;
@@ -2480,58 +2546,13 @@ async function cmdMessage(args: string[], io: Io, backend: "local" | "slack"): P
           );
         }
       }
-      // `--attach <path>` is repeatable: upload each file to the TARGET before
-      // sending, so the message and its files arrive together, then send the
-      // text carrying the uploaded file metadata (the id + local path).
+      // `--attach <path>` is repeatable, and the upload happens INSIDE the send
+      // path, after the language check, the duplicate guard and the rewriter. It
+      // ran here once and returned before any of them: a send carrying a file
+      // printed nothing, checked nothing and rewrote nothing, so one agent posted
+      // an identical draft twice, seven seconds apart, and deleted the copy.
       const attachPaths = collectValues(args, "--attach");
-      let sentTs: string | undefined;
-      let files: Attachment[] | undefined;
-      const links: string[] = [];
-      if (attachPaths.length > 0) {
-        for (const p of attachPaths) {
-          // The FIRST attachment carries the message text, so the words and the
-          // file arrive as one message; the rest are bare uploads.
-          const up = await attachmentUpload(
-            p,
-            req.channel,
-            flags.get("mime-type"),
-            io,
-            backend,
-            nameFor(flags, io),
-            files === undefined ? text : undefined,
-            flags.get("thread"),
-          );
-          if (!up.ok) {
-            io.writeErr(up.error);
-            return 1;
-          }
-          files = files ?? [];
-          files.push({ id: up.id, name: basename(p), mime: guessMime(p), size: sizeOf(p), path: p });
-          if (up.permalink !== undefined) links.push(up.permalink);
-          // The FIRST upload carries the text, so its message is this send's.
-          if (sentTs === undefined) sentTs = up.ts;
-        }
-      }
-      // The upload SHARES the file into the channel (channel_id on
-      // completeUploadExternal), so the text carries the message and nothing
-      // else. The permalink used to be appended here because a broken upload
-      // shared nothing and the unfurl was the only thing that attached it; with
-      // the bytes posted correctly that workaround would just add a link nobody
-      // needs to read.
-      void links;
-      // With an attachment the upload already posted the message and its text,
-      // so posting again would repeat the words beside the file.
-      //
-      // EVERYTHING A SEND DOES AFTER POSTING STILL HAS TO HAPPEN. This returned
-      // here and skipped all of it, so a reply carrying a file closed nothing,
-      // remembered nothing and reported nothing. Caught by my own ledger: two
-      // questions I had answered with attachments sat open in `inbox pending`,
-      // and a reply to either would not have been recognised as owed to me.
-      if (backend === "slack" && attachPaths.length > 0) {
-        await settleSend(io, req.channel, nameFor(flags, io), sentTs, flags.get("thread"));
-        return 0;
-      }
-      return postText(req.channel, text, flags, io, backend, files);
+      return postText(req.channel, text, flags, io, backend, undefined, attachPaths);
     }
     case "react": {
       // `message react --target <channel> --to <ts> --emoji <name>`: a reaction
