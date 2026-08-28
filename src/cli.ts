@@ -1785,6 +1785,11 @@ async function messageCheckSlack(flags: Map<string, string>, io: Io): Promise<nu
   const ids = s.backend.identities(name);
   let unreachable = 0;
   let drained = 0;
+  // THE LINE COUNT, SAID BY THE DRAIN. `drained` counts CHANNELS, and nothing here
+  // stated how many lines went out, so I read the highest `seq` in the output as a
+  // count and published 211 for a tick that delivered 165: seq is per-drain and
+  // skips the lines the drain passes over, including this agent's own sends.
+  let delivered = 0;
   // What I have already said that today's rules would refuse.
   const selfHits: string[] = [];
   // WHAT THIS AGENT IS IN, unioned with what the config names. The sweep used to
@@ -1879,6 +1884,7 @@ async function messageCheckSlack(flags: Map<string, string>, io: Io): Promise<nu
       }
       if (status !== undefined) await settleStatus(deliverStatus(status, line, name));
       emitDelivery(io, name, line as unknown as Record<string, unknown>);
+      delivered += 1;
     }
     if (newest !== undefined) next[channel] = newest;
     if (newestOwn !== undefined) {
@@ -1893,6 +1899,13 @@ async function messageCheckSlack(flags: Map<string, string>, io: Io): Promise<nu
   // THE SKIPPED SET RIDES WITH THE CURSOR, written by the same call, so the
   // next sweep can tell a moved set from a standing one.
   writeSlackCursor(io, name, next, [...notMine].sort());
+  // SAID ON EVERY SWEEP, zero included: a tick that delivered nothing is the state
+  // an agent wants confirmed, and a count nobody prints gets inferred from the
+  // records instead.
+  // `drained` COUNTS CHANNELS READ, and a channel with nothing new is one of them,
+  // so the line says read and never delivered-from: the first wording reported "from
+  // 1 channel" for a sweep that carried nothing.
+  io.writeErr(`check: ${delivered} line(s) delivered, ${drained} channel(s) read.`);
   if (selfHits.length > 0) {
     io.writeErr(
       `${selfHits.length} message(s) you already sent would be refused by today's rules:\n` +

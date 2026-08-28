@@ -2854,6 +2854,41 @@ describe("message check under the slack backend", () => {
     expect(said).not.toContain("not a crossing");
   });
 
+  test("the sweep states how many lines it delivered and from how many channels", async () => {
+    // I READ THE HIGHEST `seq` IN A SWEEP'S OUTPUT AS A LINE COUNT and published
+    // 211 for a tick whose own log holds 165 records: seq is per-drain and skips
+    // what the drain passes over, this agent's own sends included. The drain held
+    // the number and said nothing.
+    const cwd = scratchDir("check-count");
+    const errs: string[] = [];
+    const io = slackCheckIo(cwd, {
+      fetch: async (url) => {
+        if (String(url).includes("conversations.history"))
+          return new Response(
+            JSON.stringify({
+              ok: true,
+              messages: [
+                { ts: "10.0", user: "U9", text: "one" },
+                { ts: "11.0", user: "U9", text: "two" },
+              ],
+            }),
+            { status: 200 },
+          );
+        return new Response(JSON.stringify({ ok: true, messages: [] }), { status: 200 });
+      },
+    });
+    const watched: Io = { ...io, writeErr: (l) => errs.push(l) };
+    expect(await main(["message", "check", "--as", "dev", "--backend", "slack"], watched)).toBe(0);
+    expect(errs.join("\n")).toContain("check: 2 line(s) delivered, 1 channel(s) read.");
+    // AND ZERO IS SAID TOO, since a tick that carried nothing is the state an agent
+    // wants confirmed. A channel with nothing new was still READ, which is what the
+    // second number counts.
+    const quiet: string[] = [];
+    const empty: Io = { ...slackCheckIo(scratchDir("check-count-zero")), writeErr: (l) => quiet.push(l) };
+    expect(await main(["message", "check", "--as", "dev", "--backend", "slack"], empty)).toBe(0);
+    expect(quiet.join("\n")).toContain("check: 0 line(s) delivered, 1 channel(s) read.");
+  });
+
   test("the crossings block keeps the newest and counts what it left out", async () => {
     // 165 LINES ON EVERY SEND from this agent, because the cursor this block reads
     // advances on a `message check` sweep and an agent reading through a listener
