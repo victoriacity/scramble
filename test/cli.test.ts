@@ -6,7 +6,7 @@ import type { ChannelStore } from "../src/store";
 import { createStore } from "../src/store";
 import { createHandler } from "../src/server";
 import { WORD_LIMIT } from "../src/language";
-import { KNOWN_ENV, unknownEnvNote, hashVerdict, textHash, main, parseBind, loadSlackConfig, slackConfigPath, staleConfigWarning, staleListeners, pickStale, staleListenerProblem, readProcesses, liveListeners, stillAlive, watchForNewerInstall, listenerCommit, listenersBehind, processesReadable, type Io } from "../src/cli";
+import { KNOWN_ENV, unknownEnvNote, hashVerdict, textHash, differenceLine, main, parseBind, loadSlackConfig, slackConfigPath, staleConfigWarning, staleListeners, pickStale, staleListenerProblem, readProcesses, liveListeners, stillAlive, watchForNewerInstall, listenerCommit, listenersBehind, processesReadable, type Io } from "../src/cli";
 import { SCOPE_NAMES, BOT_EVENT_NAMES } from "../src/app-manifest";
 import { readTierBlock } from "../src/rewrite";
 
@@ -1217,6 +1217,21 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     expect(await main(["rewrites", "--near", "--as", "dev"], some.io)).toBe(0);
     expect(some.writes.join(" ")).toContain("2 send(s) measured against an earlier draft");
     expect(some.writes.join(" ")).toContain("0.710  ts 3.3 against 2.2 in general");
+  });
+
+  test("the verify names the first line that differs", () => {
+    // I READ "DIFFERS" AND THE WHOLE STORED TEXT, and found the cause with a diff
+    // I wrote by hand: Slack had auto-linked a bare `users.info`. The guard says
+    // which line now.
+    const out = differenceLine("one\ntwo users.info\nthree", "one\ntwo <http://users.info|users.info>\nthree");
+    expect(out).toContain("First line that differs (2)");
+    expect(out).toContain("sent:   two users.info");
+    expect(out).toContain("stored: two <http://users.info|users.info>");
+    // A MISSING LINE SAYS SO, in place of an empty match that reads as agreement.
+    expect(differenceLine("one\ntwo", "one")).toContain("stored: (no such line)");
+    expect(differenceLine("one", "one\ntwo")).toContain("sent:   (no such line)");
+    // Identical texts name nothing, so the caller prints nothing extra.
+    expect(differenceLine("same", "same")).toBe("");
   });
 
   test("a recorded hash is compared against the read-back and never called failure", () => {

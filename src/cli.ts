@@ -898,6 +898,11 @@ async function postText(
           const lostHere = mentionsIn(text).filter((m) => !storedProse.includes(m));
           io.writeErr(
             `verify: ${channel} holds text that DIFFERS from what was sent.\n` +
+              // THE LINE, NAMED. This printed the whole stored text and left the
+              // reader to find the difference in it, and I found mine with a
+              // hand-written diff: Slack had auto-linked a bare `users.info` into
+              // `<http://users.info|users.info>`. Nobody should re-derive that.
+              differenceLine(readerForm(text), readerForm(stored.text)) +
               `What Slack stored:\n${stored.text}\n` +
               (lostHere.length > 0
                 ? `Mentions that stopped notifying: ${lostHere.join(", ")}\n`
@@ -2175,6 +2180,23 @@ function cmdVersion(io: Io): number {
  *  Prints `file:line: [label] "match"` and exits 1 when anything hit. */
 /** A source file with everything except its comment lines blanked, keeping
  *  every newline so an offset still names its own line. */
+/** The first line where two texts diverge, printable, or an empty string when
+ *  they differ only in trailing lines nobody wrote.
+ *
+ *  A GUARD PRINTS WHAT IT SAW, and "DIFFERS" with the whole stored text under it
+ *  is a summary: the reader still has to find the divergence. Slack transforms
+ *  what it stores (a bare `users.info` came back as an auto-link), and telling
+ *  that apart from a dropped mention is the whole point of reading the line. */
+export function differenceLine(sent: string, stored: string): string {
+  const a = sent.split("\n");
+  const b = stored.split("\n");
+  for (let i = 0; i < Math.max(a.length, b.length); i += 1) {
+    if ((a[i] ?? "") === (b[i] ?? "")) continue;
+    return `First line that differs (${i + 1}):\n  sent:   ${a[i] ?? "(no such line)"}\n  stored: ${b[i] ?? "(no such line)"}\n`;
+  }
+  return "";
+}
+
 /** The 16 hex of sha256 that a calibration row records for each of its two
  *  messages. */
 export function textHash(text: string): string {
