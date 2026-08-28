@@ -414,14 +414,28 @@ export function causalIn(text: string): string[] {
 /** Phrases only this file's own prompts use, so an answer carrying one is the
  *  model repeating its instructions into the message. Lower case, matched against
  *  a lower-cased answer. */
-export const INSTRUCTION_ECHOES = [
-  "your previous attempt was rejected",
-  "rewrite again without that",
-  "rewrite your message and send again",
-  "the reviewer rejected",
-  "you must rewrite the message",
-  "output only the rewritten message",
-];
+/** The longest span of `prompt` that `answer` repeats, or "" when they share
+ *  nothing that long.
+ *
+ *  THE OUTPUT MUST NOT QUOTE ITS OWN INSTRUCTION. A phrase list was here first,
+ *  and it caught the retry complaint in the exact words this file writes. The
+ *  model then produced `The system rejected your previous attempt` and `Rewrite
+ *  the message again without that`, neither of which the list held: a wording
+ *  guard needs the wording, and a paraphrase has its own. Comparing against the
+ *  prompt catches any span the model copies out of it, whatever the phrasing
+ *  around it.
+ *
+ *  The DRAFT is excluded by the caller: a rewrite shares long spans with the
+ *  author's words on purpose. */
+export function quotedSpan(answer: string, prompt: string, span = 40): string {
+  const a = answer.toLowerCase().replace(/\s+/g, " ");
+  const p = prompt.toLowerCase().replace(/\s+/g, " ");
+  for (let i = 0; i + span <= p.length; i += 1) {
+    const piece = p.slice(i, i + span);
+    if (a.includes(piece)) return piece;
+  }
+  return "";
+}
 
 /** The refusal a failed rewrite produces, carrying what the model returned so the
  *  author sees what happened before writing it again. */
@@ -535,6 +549,9 @@ export type RewriteChoice =
 export function chooseText(
   original: string,
   rewritten: { ok: true; text: string } | { ok: false; why: string },
+  /** The instruction the model was given, with the author's draft left out. An
+   *  answer that repeats a span of it is quoting its own orders. */
+  instruction?: string,
 ): RewriteChoice {
   if (!rewritten.ok) {
     return {
@@ -554,9 +571,11 @@ export function chooseText(
   // the channel as though I had written them to a peer.
   //
   // The retry sentence is fixed text this file owns, so the detector is exact.
-  const echoed = INSTRUCTION_ECHOES.find((phrase) => rewritten.text.toLowerCase().includes(phrase));
-  if (echoed !== undefined) {
-    return refusal(`the rewrite copied the instruction into the message ("${echoed}")`, rewritten.text);
+  if (instruction !== undefined && instruction !== "") {
+    const echoed = quotedSpan(rewritten.text, instruction);
+    if (echoed !== "") {
+      return refusal(`the rewrite copied its own instruction into the message ("${echoed.trim()}")`, rewritten.text);
+    }
   }
   const over = lengthRefusal(rewritten.text);
   if (over !== "") {

@@ -572,6 +572,15 @@ function channelTier(channel: string, io: Io): { tier: Tier; why: string } {
  *  with nowhere to send, so the preview an author reads is the same code path
  *  their message takes. A preview built from a second copy of these steps would
  *  drift away from the send and lie about it. */
+/** The instruction the model was given, WITHOUT the author's draft.
+ *
+ *  A rewrite shares long spans with the draft on purpose, so the draft is left
+ *  out of what the answer is checked against. What remains is the orders, and an
+ *  answer repeating a span of those is quoting them into the channel. */
+function instructionOf(template: string, register?: string): string {
+  return register === undefined || register === "" ? template : `${template}\n\n${register}`;
+}
+
 async function attemptRewrite(
   text: string,
   io: Io,
@@ -593,7 +602,7 @@ async function attemptRewrite(
     template === undefined
       ? { send: text, note: "" }
       : template.ok
-        ? chooseText(text, await ask(composePrompt(template.text, text, register)))
+        ? chooseText(text, await ask(composePrompt(template.text, text, register)), instructionOf(template.text, register))
         : chooseText(text, { ok: false, why: template.why });
   // ONE MORE ATTEMPT, WITH WHAT IT BROKE. Every guard fires on something the
   // MODEL did, so the model is the party that can fix it, and the author is
@@ -604,7 +613,11 @@ async function attemptRewrite(
     const why = guardName(chosen.why);
     io.writeErr(`rewrite: ${chosen.retry} Asking once more.`);
     return {
-      chosen: chooseText(text, await ask(`${composePrompt(template.text, text, register)}\n\n${chosen.retry}`)),
+      chosen: chooseText(
+        text,
+        await ask(`${composePrompt(template.text, text, register)}\n\n${chosen.retry}`),
+        `${instructionOf(template.text, register)}\n\n${chosen.retry}`,
+      ),
       retried: true,
       retriedWhy: why,
       configured: true,

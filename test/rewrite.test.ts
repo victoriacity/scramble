@@ -19,7 +19,7 @@ import {
   causalIn,
   connectivesIn,
   factsIn,
-  INSTRUCTION_ECHOES,
+  quotedSpan,
   citedTimestamps,
   mentionsIn,
   proseRatio,
@@ -292,27 +292,32 @@ describe("choosing what to send", () => {
     expect(chooseText("same words", { ok: true, text: " same words " })).toEqual({ send: "same words", note: "" });
   });
 
-  test("a rewrite that COPIES THE INSTRUCTION into the message is refused", () => {
+  test("a rewrite that QUOTES ITS OWN INSTRUCTION is refused", () => {
     // On a second attempt the model receives the guard's complaint appended to
-    // the instruction, and one answer came back with that complaint as a closing
-    // paragraph addressed to the reader: "The reviewer rejected your previous
-    // attempt because ... You must rewrite the message again without that added
-    // cause." Sending it would have put a guard's words in the channel as the
-    // author's own.
+    // the instruction, and it came back as a closing paragraph addressed to the
+    // reader. A phrase list caught the complaint in the exact words this file
+    // writes; the model then produced `The system rejected your previous attempt`,
+    // which the list did not hold. The answer is checked against the instruction
+    // it was given.
+    const retry = "Your previous attempt was rejected: the rewrite invented a reason. Rewrite again without that.";
+    const instruction = `Rewrite the message the way a startup team talks.\n\n${retry}`;
     const leaked =
       "Your reading of the mechanism is correct.\n\n" +
-      "The reviewer rejected your previous attempt because the rewrite claimed a cause you did not assert.";
-    const out = chooseText("your reading of the mechanism is right", { ok: true, text: leaked });
-    expect("refuse" in out && out.refuse).toContain("copied the instruction into the message");
-    expect("refuse" in out && out.refuse).toContain("the reviewer rejected");
-    // Every phrase this file's prompts own is caught, whatever the casing.
-    for (const phrase of INSTRUCTION_ECHOES) {
-      const echo = chooseText("mine", { ok: true, text: `A fine sentence. ${phrase.toUpperCase()}.` });
-      expect("refuse" in echo).toBe(true);
-    }
+      "Your previous attempt was rejected: the rewrite invented a reason. Rewrite again without that.";
+    const out = chooseText("your reading of the mechanism is right", { ok: true, text: leaked }, instruction);
+    expect("refuse" in out).toBe(true);
+    expect("refuse" in out && out.refuse).toContain("copied its own instruction into the message");
+    // The span is found whatever the whitespace around it.
+    expect(quotedSpan(`...\n  ${retry.toUpperCase()} ...`, instruction)).not.toBe("");
+    // A SHORT ORDER IS UNDER THE SPAN, which is the limit: the check catches
+    // copying of a long stretch, and a rewrite that echoes four words does not
+    // trip it.
+    expect(quotedSpan("output only the rewritten message", "Output only the rewritten message.")).toBe("");
     // Prose that merely discusses rewriting still goes out.
-    const fine = chooseText("mine", { ok: true, text: "I rewrote the message and sent it again." });
+    const fine = chooseText("mine", { ok: true, text: "I rewrote the message and sent it again." }, instruction);
     expect("send" in fine).toBe(true);
+    // With no instruction to compare against, the check stays quiet.
+    expect("send" in chooseText("mine", { ok: true, text: leaked })).toBe(true);
   });
 
   test("a rewrite that DROPS what the original carried is refused", () => {
