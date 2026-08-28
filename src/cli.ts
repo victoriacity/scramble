@@ -897,9 +897,8 @@ async function postText(
           const storedProse = mentionsIn(stored.text);
           const lostHere = mentionsIn(text).filter((m) => !storedProse.includes(m));
           io.writeErr(
-            keyed(
-              "verify:",
-              `${channel} holds text that DIFFERS from what was sent.\n` +
+            (
+              `verify: ${channel} holds text that DIFFERS from what was sent.\n` +
                 // THE LINE, NAMED. This printed the whole stored text and left the
                 // reader to find the difference in it, and I found mine with a
                 // hand-written diff: Slack had auto-linked a bare `users.info` into
@@ -908,7 +907,7 @@ async function postText(
                 `What Slack stored:\n${stored.text}\n` +
                 (lostHere.length > 0
                   ? `Mentions that stopped notifying: ${lostHere.join(", ")}\n`
-                  : `Every mention survived: ${storedProse.join(", ") || "none"}\n`),
+                  : `Every mention survived: ${storedProse.join(", ") || "none"}\n`)
             ),
           );
         }
@@ -2183,19 +2182,24 @@ function cmdVersion(io: Io): number {
  *  Prints `file:line: [label] "match"` and exits 1 when anything hit. */
 /** A source file with everything except its comment lines blanked, keeping
  *  every newline so an offset still names its own line. */
-/** Every line of a multi-line diagnostic prefixed with the key its first line
- *  carries.
+/** One multi-line diagnostic/** One multi-line diagnostic, with its own key repeated onto every line after the
+ *  first.
  *
- *  AGENTS FILTER THIS OUTPUT AND LOSE HALF A DIAGNOSTIC. Three of us did it in one
- *  night: `grep -E "^posted|^verify|REFUSED"`, `grep -E 'sent:|verify:|REFUSED'`
- *  and `tail -4`, each dropping the continuation lines under a `verify:` line and
- *  each then rebuilding by hand what the output already held. Telling agents to
- *  stop filtering is advice; a line that answers its own filter is a fix. */
-export function keyed(key: string, block: string): string {
-  return block
-    .split("\n")
-    .map((line) => `${key} ${line}`)
-    .join("\n");
+ *  THE EMITTER OWNS THIS. Call sites declare a key on the first line and stop
+ *  there. I keyed the read-back block by
+ *  hand and left three more bare, and an agent running the commands found two of
+ *  them within the hour: `inbox pending` and `rewrites --near`. Any line the tool
+ *  writes now carries the key its first line declares, which covers every block
+ *  written from here on.
+ *
+ *  A first line with no `key:` prefix passes through untouched, and shows up in the
+ *  output as a block a filter can still halve. */
+export function autoKey(text: string): string {
+  const first = text.split("\n", 1)[0] ?? "";
+  const key = /^([a-z][a-z0-9-]*:)(?: |$)/.exec(first)?.[1];
+  if (key === undefined || !text.includes("\n")) return text;
+  const [head, ...rest] = text.split("\n");
+  return [head, ...rest.map((line) => `${key} ${line}`)].join("\n");
 }
 
 /** The first line where two texts diverge, printable, or an empty string when
@@ -2729,6 +2733,10 @@ function guardName(why: string): string {
  *
  *  Reported and never fatal: a failed lookup here must not turn a delivered
  *  message into an error, so it says what it could not do and stops. */
+/** How many crossed messages the send prints. The rest are counted and their
+ *  oldest ts named, since a cap nobody prints reads as full coverage. */
+const CROSSINGS_CAP = 15;
+
 async function reportCrossings(
   io: Io,
   backend: SlackBackend,
@@ -2755,17 +2763,29 @@ async function reportCrossings(
       (cursor === undefined || slackTs(m.ts) > slackTs(cursor)),
   );
   if (crossed.length === 0) return;
-  const lines = crossed.map((m) => `  ${m.from}: ${(m.text ?? "").replace(/\s+/g, " ").slice(0, 100)}`);
+  // NEWEST FIRST AND CAPPED, WITH THE REMAINDER NAMED. The cursor this reads
+  // advances on a `message check` sweep, and an agent whose reading happens through
+  // a listener never runs one, so the block printed 165 lines on every send from
+  // this agent. A wall that size is what teaches agents to filter the output, which
+  // is the defect two of us reported tonight. The question it answers is whether
+  // somebody just made your point, and that lives in the newest lines.
+  const newest = [...crossed].sort((a, b) => slackTs(b.ts) - slackTs(a.ts));
+  const shown = newest.slice(0, CROSSINGS_CAP);
+  const lines = shown.map((m) => `  ${m.from}: ${(m.text ?? "").replace(/\s+/g, " ").slice(0, 100)}`);
+  if (newest.length > shown.length) {
+    const rest = newest.slice(shown.length);
+    lines.push(
+      `  ${rest.length} older message(s) not listed, back to ${rest[rest.length - 1]!.ts}. ` +
+        `\`scramble history ${channel}\` reads them.`,
+    );
+  }
   // KEYED LIKE THE READ-BACK BLOCK. An agent filtering on `sent:|verify:|REFUSED`
   // saw the count line and none of the messages under it, which is the block's
   // whole content, and said so after a night of it.
   io.writeErr(
-    keyed(
-      "crossed:",
-      `${crossed.length} message(s) arrived in ${channel} before yours and you have not read them:\n` +
-        `${lines.join("\n")}\n` +
-        `If one of them already made your point, or already claimed the work, say nothing further.`,
-    ),
+    `crossed: ${crossed.length} message(s) arrived in ${channel} before yours and you have not read them:\n` +
+      `${lines.join("\n")}\n` +
+      `If one of them already made your point, or already claimed the work, say nothing further.`,
   );
 }
 
@@ -3862,7 +3882,9 @@ const USAGE = [
   "  working directory into an agent name (remote agent).",
 ].join("\n");
 
-export async function main(argv: string[], io: Io): Promise<number> {
+export async function main(argv: string[], raw: Io): Promise<number> {
+  // EVERY DIAGNOSTIC KEYED, AT THE ONE PLACE THEY ALL PASS THROUGH.
+  const io: Io = { ...raw, writeErr: (line: string) => raw.writeErr(autoKey(line)) };
   if (argv.length === 0 || argv.includes("--help") || argv.includes("-h")) {
     io.write(USAGE);
     return 0;

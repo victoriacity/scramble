@@ -239,7 +239,7 @@ export function pendingReport(items: InboxItem[], agent: string): string {
   if (items.length === 0) return "";
   const lines = items.map((r) => `  ${r.channel} ${r.id} from ${r.from}: ${r.text}`);
   return (
-    `${items.length} inbox item(s) addressed to ${agent} with no reply:\n${lines.join("\n")}\n` +
+    `pending: ${items.length} inbox item(s) addressed to ${agent} with no reply:\n${lines.join("\n")}\n` +
     `Every one of them is someone waiting. Answer in the channel it was asked in.`
   );
 }
@@ -847,7 +847,7 @@ export function nearReport(rows: SentRow[], threshold: number): string {
   // only field evidence that the threshold sits too low.
   const overridden = scored.filter((r) => r.near.again === true);
   return (
-    `${scored.length} send(s) measured against an earlier draft, refused at ${threshold}:\n` +
+    `near: ${scored.length} send(s) measured against an earlier draft, refused at ${threshold}:\n` +
     `${lines.join("\n")}\n` +
     `The closest five, each one a message that WENT OUT:\n` +
     `${top.map((r) => `  ${r.near.score.toFixed(3)}  ts ${r.ts} against ${r.near.ts} in ${r.channel ?? "?"}`).join("\n")}\n` +

@@ -6,7 +6,7 @@ import type { ChannelStore } from "../src/store";
 import { createStore } from "../src/store";
 import { createHandler } from "../src/server";
 import { WORD_LIMIT } from "../src/language";
-import { KNOWN_ENV, unknownEnvNote, hashVerdict, textHash, differenceLine, keyed, main, parseBind, loadSlackConfig, slackConfigPath, staleConfigWarning, staleListeners, pickStale, staleListenerProblem, readProcesses, liveListeners, stillAlive, watchForNewerInstall, listenerCommit, listenersBehind, processesReadable, type Io } from "../src/cli";
+import { KNOWN_ENV, unknownEnvNote, hashVerdict, textHash, differenceLine, autoKey, main, parseBind, loadSlackConfig, slackConfigPath, staleConfigWarning, staleListeners, pickStale, staleListenerProblem, readProcesses, liveListeners, stillAlive, watchForNewerInstall, listenerCommit, listenersBehind, processesReadable, type Io } from "../src/cli";
 import { SCOPE_NAMES, BOT_EVENT_NAMES } from "../src/app-manifest";
 import { readTierBlock } from "../src/rewrite";
 
@@ -1219,13 +1219,21 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     expect(some.writes.join(" ")).toContain("0.710  ts 3.3 against 2.2 in general");
   });
 
-  test("every line of a multi-line diagnostic carries its own key", () => {
+  test("the emitter keys every line of a multi-line diagnostic", () => {
     // THREE AGENTS FILTERED THIS OUTPUT IN ONE NIGHT and each lost the lines under
-    // a `verify:` line: two greps anchored on the key, one `tail -4`. A filter
-    // keyed on `verify:` now keeps the whole block.
-    const out = keyed("verify:", "general holds text that DIFFERS.\nFirst line that differs (2):\n  sent:   a\n  stored: b\n");
-    expect(out.split("\n").filter((l) => l !== "").every((l) => l.startsWith("verify: "))).toBe(true);
+    // a `verify:` line: two greps anchored on the key, one `tail -4`. I then keyed
+    // that one block by hand and left three bare, and an agent running the commands
+    // found two of them within the hour. The emitter does it now, so a block written
+    // tomorrow arrives keyed.
+    const out = autoKey("verify: general holds text that DIFFERS.\nFirst line that differs (2):\n  sent:   a\n  stored: b");
+    expect(out.split("\n").every((l) => l.startsWith("verify: "))).toBe(true);
     expect(out).toContain("verify:   sent:   a");
+    // A SINGLE LINE IS UNTOUCHED, and so is a block whose first line declares no key.
+    expect(autoKey("verify: one line only")).toBe("verify: one line only");
+    expect(autoKey("no key here\nand a second line")).toBe("no key here\nand a second line");
+    // The key comes from the first line, whatever it is.
+    expect(autoKey("crossed: two\n  a")).toBe("crossed: two\ncrossed:   a");
+    expect(autoKey("pending: one\n  a")).toBe("pending: one\npending:   a");
   });
 
   test("the verify names the first line that differs", () => {
@@ -2835,8 +2843,49 @@ describe("message check under the slack backend", () => {
     // EVERY LINE CARRIES THE KEY. An agent filtering on the first line's prefix saw
     // the count and none of the messages the block exists to list.
     expect(said.split("\n").filter((l) => l.includes("message(s) arrived") || l.includes("I am taking the generation run")).every((l) => l.startsWith("crossed: "))).toBe(true);
+    // A CAP THAT SAYS WHAT IT DROPPED. The cursor here advances on a `message
+    // check` sweep, and an agent reading through a listener never runs one, so this
+    // block printed 165 lines on every send and taught two agents to filter it.
     // A message AFTER this one is no crossing.
     expect(said).not.toContain("not a crossing");
+  });
+
+  test("the crossings block keeps the newest and counts what it left out", async () => {
+    // 165 LINES ON EVERY SEND from this agent, because the cursor this block reads
+    // advances on a `message check` sweep and an agent reading through a listener
+    // runs none. A wall that size teaches agents to filter the send output, which
+    // two of them reported doing tonight after losing other blocks to the filter.
+    const cwd = scratchDir("send-crossings-cap");
+    const older = Array.from({ length: 40 }, (_, i) => ({ ts: `${10 + i}.0`, user: "U9", text: `line ${i}` }));
+    const io = slackCheckIo(cwd, {
+      fetch: async (url) => {
+        const u = String(url);
+        if (u.includes("chat.postMessage")) return new Response(JSON.stringify({ ok: true, ts: "90.0", message: {} }), { status: 200 });
+        if (u.includes("conversations.history")) return new Response(JSON.stringify({ ok: true, messages: older }), { status: 200 });
+        return new Response(JSON.stringify({ ok: true, messages: [] }), { status: 200 });
+      },
+    });
+    writeSlackConfig(cwd, {
+      appToken: "xapp-1",
+      token: "xoxb-1",
+      channels: { general: "C1" },
+      agents: { dev: { token: "T", handle: "dev_bot" } },
+      roster: { U9: "peer", UME: "dev_bot" },
+    });
+    const errs: string[] = [];
+    const watched: Io = { ...io, writeErr: (l) => errs.push(l), readStdin: async () => "my line" };
+    expect(await main(["message", "send", "--target", "general", "--as", "dev"], watched)).toBe(0);
+    const said = errs.join("\n");
+    expect(said).toContain("40 message(s) arrived in general");
+    // THE NEWEST ARE THE ONES THAT ANSWER "did somebody just make my point".
+    expect(said).toContain("line 39");
+    expect(said).toContain("line 25");
+    expect(said).not.toContain("line 24");
+    // AND THE CAP NAMES WHAT IT DROPPED, back to the oldest ts, with the command
+    // that reads them.
+    expect(said).toContain("25 older message(s) not listed, back to 10.0");
+    expect(said).toContain("scramble history general");
+    expect(said.split("\n").filter((l) => l.includes("line 39") || l.includes("older message(s) not listed")).every((l) => l.startsWith("crossed: "))).toBe(true);
   });
 
   test("a crossings lookup that FAILS says so, and the message still went", async () => {
