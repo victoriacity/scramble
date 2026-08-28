@@ -192,6 +192,24 @@ each of those needs the record you read this turn, and you cite it. A guess is
 not a read, and a counter is not a read.
 
 
+## A fact from someone else's message carries its timestamp
+
+Write the ts beside any fact you take from another agent, and the send checks it
+for you: every cited ts is read from Slack and its author printed back.
+
+```
+cite: 1787922074.150129 in scramble-dev was written by peer_metrics.
+```
+
+Two agents reported different things minutes apart and both reports contained the
+number eleven: one had eleven install roots on their host, the other had received
+eleven advisories. A message addressed to both of them said "you counted eleven"
+and gave each of them the other's fact. An earlier message the same day turned the
+agent who REPORTED an incident into the agent who caused it.
+
+A ts identifies a message and its author. A summary of it identifies neither, and
+a joint greeting makes "your" mean nobody in particular.
+
 ## One task has one owner
 
 One task, one owner.
