@@ -13,7 +13,11 @@ import {
   readInbox,
   readSent,
   readSentRows,
+  contentWords,
+  NEAR_DUPLICATE_FLOOR,
+  saidAlready,
   sentAlready,
+  wordOverlap,
   recordSent,
   sentPath,
   recordInboxItem,
@@ -507,6 +511,71 @@ describe("the record of what this agent said", () => {
     expect(sentAlready(rows, "general", "abc", Date.parse("2026-08-26T13:00:00Z"), 10 * 60 * 1000)).toBeUndefined();
     // A row predating the field carries no draft, so it never matches.
     expect(sentAlready([{ ts: "1.1" }], "general", "abc", now, 10 * 60 * 1000)).toBeUndefined();
+  });
+
+  test("THE SAME THING IN OTHER WORDS is refused, and a different report is not", () => {
+    // An agent reported one end-to-end run twice, 127 seconds apart, naming the
+    // same ports and the same three images in different sentences: 0.970 word
+    // overlap, and the digest guard passed it because no two bytes lined up. A
+    // reader of the channel sees two reports of one run either way.
+    const first =
+      "The end-to-end run finished on ports 3005 and 8600, and the judge scored " +
+      "mushroom_shaman, blueberry_pie and copper_kettle without a fallback.";
+    const reworded =
+      "On ports 3005 and 8600 the end-to-end run completed, and the judge scored " +
+      "the three assets mushroom_shaman, blueberry_pie and copper_kettle, with no fallback taken.";
+    const p = sentPath(join(scratch(), "slack.json"), "dev");
+    recordSent(p, "9.1", {
+      hash: "aaa",
+      channel: "general",
+      at: "2026-08-28T04:00:00Z",
+      words: contentWords(first),
+    });
+    const rows = readSentRows(p);
+    const now = Date.parse("2026-08-28T04:02:07Z");
+    // 0.8 is the shipped threshold, and this pair measures 0.833.
+    const hit = saidAlready(rows, "general", contentWords(reworded), now, 10 * 60 * 1000, 0.8);
+    expect(hit?.row.ts).toBe("9.1");
+    expect(hit!.overlap).toBeGreaterThan(0.8);
+    // A DIFFERENT REPORT IS NOT A DUPLICATE. Refusing these would teach agents to
+    // pass --again by reflex, which retires the guard.
+    const other =
+      "The gate is red on the coverage stage, and src/status.ts sits at 92% lines " +
+      "after the ledger change.";
+    expect(saidAlready(rows, "general", contentWords(other), now, 10 * 60 * 1000, 0.8)).toBeUndefined();
+    // TWO STATUS REPORTS ON DIFFERENT RUNS share their format and their nouns,
+    // and the numbers are what tells them apart, so a number of any length
+    // counts as a content word. These measure 0.429.
+    const runA = "peers 9, damaged 0, my row is on fad46a5 at 04:18";
+    const runB = "peers 10, damaged 1, my row is on fad46a5 at 05:20";
+    expect(wordOverlap(contentWords(runA), contentWords(runB))).toBeLessThan(0.8);
+    // Another channel, past the window, or a row with no words: no match.
+    expect(saidAlready(rows, "other", contentWords(reworded), now, 10 * 60 * 1000, 0.8)).toBeUndefined();
+    expect(
+      saidAlready(rows, "general", contentWords(reworded), Date.parse("2026-08-28T05:00:00Z"), 10 * 60 * 1000, 0.8),
+    ).toBeUndefined();
+    expect(saidAlready([{ ts: "1.1" }], "general", contentWords(reworded), now, 10 * 60 * 1000, 0.8)).toBeUndefined();
+    // A SHORT DRAFT IS NEVER A NEAR-DUPLICATE. Containment over a handful of
+    // words reaches 1.0 on two unrelated one-liners, and it refused a second
+    // one-line draft in this suite before the floor existed.
+    const shortA = contentWords("the line as drafted");
+    const shortB = contentWords("a second line, drafted separately");
+    expect(wordOverlap(shortA, shortB)).toBe(1);
+    expect(shortB.length).toBeLessThan(NEAR_DUPLICATE_FLOOR);
+    const shortRows = [{ ts: "8.8", channel: "general", at: "2026-08-28T04:00:00Z", words: shortA }];
+    expect(saidAlready(shortRows, "general", shortB, now, 10 * 60 * 1000, 0.8)).toBeUndefined();
+    // The words themselves: content and numbers, deduplicated, sorted, with edge
+    // punctuation off and an inner dot kept.
+    expect(contentWords("The run is on port 3005 and the run held.")).toEqual(["3005", "held", "port"]);
+    expect(contentWords("read src/cli.ts at 92% after v2.1.234.")).toEqual([
+      "92",
+      "after",
+      "read",
+      "src/cli.ts",
+      "v2.1.234",
+    ]);
+    expect(wordOverlap([], ["a"])).toBe(0);
+    expect(wordOverlap(["a", "b"], ["a", "b"])).toBe(1);
   });
 
   test("a malformed row reads as an empty ts, never taking the file down", () => {

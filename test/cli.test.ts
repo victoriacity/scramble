@@ -1581,6 +1581,52 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     expect(posts).toBe(3);
   });
 
+  test("ONE REPORT SENT TWICE UNDER DIFFERENT WORDING is refused, and --again sends it", async () => {
+    // An agent reported one end-to-end run twice, 127 seconds apart, naming the
+    // same ports and the same three images in different sentences. The digest
+    // guard passed it, since no two bytes lined up, and the channel read two
+    // reports of one run.
+    const cwd = scratchDir("send-reworded");
+    let posts = 0;
+    const { io, errs } = stubIo(cwd, async (u) => {
+      if (String(u).includes("chat.postMessage")) {
+        posts += 1;
+        return new Response(JSON.stringify({ ok: true, ts: `7.${posts}`, message: {} }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ ok: true, messages: [] }), { status: 200 });
+    });
+    writeSlackConfig(cwd, {
+      appToken: "xapp-1",
+      token: "xoxb-1",
+      channels: { general: "C1" },
+      agents: { dev: { token: "T", handle: "dev" } },
+    });
+    const send = (extra: string[] = []): Promise<number> =>
+      main(["message", "send", "--target", "general", "--as", "dev", "--no-verify", "--backend", "slack", ...extra], io);
+    io.readStdin = async () =>
+      "The end-to-end run finished on ports 3005 and 8600, and the judge scored " +
+      "mushroom_shaman, blueberry_pie and copper_kettle without a fallback.";
+    expect(await send()).toBe(0);
+    expect(posts).toBe(1);
+    io.readStdin = async () =>
+      "On ports 3005 and 8600 the end-to-end run completed, and the judge scored " +
+      "the three assets mushroom_shaman, blueberry_pie and copper_kettle, with no fallback taken.";
+    expect(await send()).toBe(1);
+    expect(posts).toBe(1);
+    expect(errs.join(" ")).toContain("this says what you already sent to general at ts 7.1");
+    expect(errs.join(" ")).toContain("of its content words");
+    // Saying it again on purpose stays possible.
+    expect(await send(["--again"])).toBe(0);
+    expect(posts).toBe(2);
+    // A DIFFERENT REPORT GOES OUT. Refusing these would teach agents to pass
+    // --again by reflex, which retires the guard.
+    io.readStdin = async () =>
+      "The coverage stage is red: src/status.ts sits at 92% lines after the ledger " +
+      "change, and the uncovered branch is the write failure path.";
+    expect(await send()).toBe(0);
+    expect(posts).toBe(3);
+  });
+
   test("`message check` says when a LISTENER runs older code than the install", async () => {
     // An agent whose listener fell six hours behind found out by running
     // `doctor` for an unrelated reason: the surface that knew was the one

@@ -44,6 +44,21 @@ const DUPLICATE_WINDOW_MS = 10 * 60 * 1000;
  *  table cites a handful; a cap keeps a long one from spending twenty API calls
  *  after the message has already gone out. What it skips is printed. */
 const CITED_TS_CAP = 6;
+
+/** How much of its content words a draft may share with something this agent
+ *  already sent to the same channel inside the window.
+ *
+ *  MEASURED, on four pairs, with the containment score this uses:
+ *
+ *    a reworded retry of one report      0.833
+ *    the identical draft                 1.000
+ *    two status reports, different runs  0.429
+ *    two unrelated messages              0.000
+ *
+ *  0.8 sits above the pair that has to pass and below the pair that has to fail.
+ *  Refusing a legitimate second report would teach agents to pass `--again` by
+ *  reflex, which retires the guard. */
+const NEAR_DUPLICATE_OVERLAP = 0.8;
 import {
   chooseText,
   composePrompt,
@@ -77,8 +92,10 @@ import {
   closeInboxItems,
   closeItemById,
   readSent,
+  contentWords,
   readSentRows,
   recordSent,
+  saidAlready,
   sentAlready,
   sentPath,
   inboxPath,
@@ -633,6 +650,28 @@ async function postText(
       );
       return 1;
     }
+    // ONE THING SAID TWICE UNDER DIFFERENT WORDING is the duplicate the digest
+    // misses. An agent
+    // reported one end-to-end run twice, 127 seconds apart, naming the same ports
+    // and the same three images in different sentences: 0.970 word overlap, and
+    // the digest passed it because no two bytes lined up. A reader of the channel
+    // sees two reports of one run either way.
+    const said = saidAlready(
+      readSentRows(sentPath(slackConfigPath(io), sender)),
+      channel,
+      contentWords(draft),
+      Date.now(),
+      DUPLICATE_WINDOW_MS,
+      NEAR_DUPLICATE_OVERLAP,
+    );
+    if (said !== undefined) {
+      io.writeErr(
+        `message send REFUSED: this says what you already sent to ${channel} at ts ${said.row.ts} ` +
+          `(${said.row.at}), sharing ${(said.overlap * 100).toFixed(0)}% of its content words. Slack has ` +
+          `that copy. Read it, and pass --again if this adds something it lacks.`,
+      );
+      return 1;
+    }
   }
   // A MODEL REWRITES WHAT GOES OUT, when one is configured. Asked for directly:
   // "For every sentence gone through scramble message, using Gemini 3.7 flash to
@@ -846,6 +885,9 @@ async function postText(
       hash: digest,
       channel,
       at: new Date().toISOString(),
+      // THE WORDS THE DRAFT WAS ABOUT, so the next send can see a rewording of
+      // it. The digest alone catches a byte-identical resend and nothing else.
+      words: contentWords(draft),
     });
     if (status !== undefined) await settleStatus(replyStatus(status, channel, from));
     // AND LAST, because a pipe cuts from the end. Three agents independently
@@ -2401,7 +2443,7 @@ async function settleSend(
   from: string,
   ts: string | undefined,
   thread: string | undefined,
-  draft?: { hash: string; channel: string; at: string },
+  draft?: { hash: string; channel: string; at: string; words?: string[] },
 ): Promise<void> {
   const s = slackBackend(io);
   // THE SEND IS THE OTHER PATH EVERY AGENT RUNS. An agent that speaks without

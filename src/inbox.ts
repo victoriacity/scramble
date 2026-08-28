@@ -367,6 +367,53 @@ export interface SentRow {
   hash?: string;
   channel?: string;
   at?: string;
+  /** The draft's content words, which is what a REWORDED retry keeps.
+   *
+   *  A digest catches a byte-identical resend and nothing else. An agent sent one
+   *  end-to-end run twice, 127 seconds apart, at 0.970 word overlap: the second
+   *  draft named the same ports and the same three images in different sentences,
+   *  and the digest guard passed it. */
+  words?: string[];
+}
+
+/** The content words of a draft, lowercased, deduplicated and sorted.
+ *
+ *  Short words carry the grammar a rewording changes, so they are dropped: what
+ *  survives is what the message is ABOUT, which is what a retry repeats. Fenced
+ *  blocks stay in, since an evidence table is the part a retry copies verbatim. */
+export function contentWords(text: string): string[] {
+  const words = text
+    .toLowerCase()
+    .replace(/[^a-z0-9_./-]+/g, " ")
+    .split(" ")
+    // EDGE PUNCTUATION IS NOT PART OF A WORD, and an inner dot or slash is: a
+    // path and a version number have to survive whole. Without this, `fallback.`
+    // at the end of a sentence counted as a different word from `fallback`, and
+    // two tellings of one thing measured further apart than they are.
+    .map((w) => w.replace(/^[./-]+/, "").replace(/[./-]+$/, ""))
+    // A NUMBER OF ANY LENGTH COUNTS. Dropping short tokens dropped the
+    // measurements, and a measurement is what a report is FOR: two status lines
+    // reading `peers 9, damaged 0` and `peers 10, damaged 1` shared every
+    // surviving word and scored 1.000, which would have refused the second one.
+    .filter((w) => w.length >= 4 || /[0-9]/.test(w));
+  return [...new Set(words)].sort();
+}
+
+/** How much of the SMALLER set the two share, 0 to 1.
+ *
+ *  CONTAINMENT, and union-over-intersection was tried first. A rewording that
+ *  adds a sentence drops a union-based score fast: the pair that prompted this
+ *  measured 0.50 that way, which no usable threshold catches. The question a
+ *  duplicate guard asks is whether the new draft SAYS WHAT THE OLD ONE SAID, and
+ *  that is containment. A draft that repeats one report and adds a paragraph is
+ *  still a second telling of the report, and `--again` sends it. */
+export function wordOverlap(a: string[], b: string[]): number {
+  if (a.length === 0 || b.length === 0) return 0;
+  const set = new Set(a);
+  let shared = 0;
+  for (const w of new Set(b)) if (set.has(w)) shared += 1;
+  const smaller = Math.min(new Set(a).size, new Set(b).size);
+  return smaller === 0 ? 0 : shared / smaller;
 }
 
 function rawSentLines(path: string): string[] {
@@ -398,7 +445,11 @@ export function readSent(path: string): string[] {
     .filter((t) => t !== "");
 }
 
-export function recordSent(path: string, ts: string, draft?: { hash: string; channel: string; at: string }): void {
+export function recordSent(
+  path: string,
+  ts: string,
+  draft?: { hash: string; channel: string; at: string; words?: string[] },
+): void {
   const line = draft === undefined ? ts : JSON.stringify({ ts, ...draft });
   const kept = [...rawSentLines(path), line].slice(-500);
   mkdirSync(dirname(path), { recursive: true });
@@ -426,6 +477,45 @@ export function sentAlready(
     if (r.hash !== hash || r.channel !== channel || r.at === undefined) continue;
     const at = Date.parse(r.at);
     if (Number.isFinite(at) && nowMs - at <= windowMs) return r;
+  }
+  return undefined;
+}
+
+/** A draft this agent already sent to this channel under different wording,
+ *  inside the window, with how much of it repeats.
+ *
+ *  THE SECOND TELLING OF ONE THING is the duplicate the digest misses. An agent
+ *  reported one end-to-end run twice, 127 seconds apart, naming the same ports
+ *  and the same three images in different sentences: 0.970 word overlap, and the
+ *  digest passed it because no two bytes lined up. The reader of the channel
+ *  cannot tell that from a resend.
+ *
+ *  Newest first, so the refusal names the closest thing the sender said.
+ *
+ *  A SHORT DRAFT IS NEVER A NEAR-DUPLICATE. Containment over a handful of words
+ *  reaches 1.0 on two unrelated one-liners: `the line as drafted` and `a second
+ *  line, drafted separately` share both their content words, and this refused the
+ *  second one in the suite. Below the floor the digest is the only guard, which
+ *  is the right trade for a message somebody can reread in a second. */
+export const NEAR_DUPLICATE_FLOOR = 8;
+
+export function saidAlready(
+  rows: SentRow[],
+  channel: string,
+  words: string[],
+  nowMs: number,
+  windowMs: number,
+  threshold: number,
+): { row: SentRow; overlap: number } | undefined {
+  if (words.length < NEAR_DUPLICATE_FLOOR) return undefined;
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const r = rows[i]!;
+    if (r.channel !== channel || r.at === undefined || r.words === undefined) continue;
+    if (r.words.length < NEAR_DUPLICATE_FLOOR) continue;
+    const at = Date.parse(r.at);
+    if (!Number.isFinite(at) || nowMs - at > windowMs) continue;
+    const overlap = wordOverlap(words, r.words);
+    if (overlap >= threshold) return { row: r, overlap };
   }
   return undefined;
 }
