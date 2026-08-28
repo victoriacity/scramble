@@ -1,23 +1,35 @@
-// src/slack-transport.ts: the shared Slack wire types and the transport over
-// the slack BACKEND. The bridge (src/slack.ts) is gone, so the types the
-// socket-mode transport and the backend both need live here, next to the socket
-// surface. Everything is on bun built-ins (fetch + an injected WebSocket), so
-// tests use fakes and never touch the network. The binding of createSocket to
-// bun's real WebSocket lives in src/bin.ts (the edge).
+// The file `src/slack-transport.ts` contains the shared Slack wire types and the
+// transport over the Slack backend. Because the bridge (`src/slack.ts`) is gone,
+// the types that the socket-mode transport and the backend both need live here,
+// next to the socket surface. The code relies on Bun built-ins (`fetch` and an
+// injected `WebSocket`), so tests use fakes and never touch the network. The
+// binding of `createSocket` to Bun's real `WebSocket` lives in `src/bin.ts` at the
+// edge.
 
-/** One outbound Slack chat.postMessage call. */
+/**
+ *  The system makes one outbound `chat.postMessage` call to Slack.
+ */
 export interface SlackPostOptions {
   channel: string;
   text: string;
-  /** per-agent bot token (the backend falls back to the config token). */
+  /**
+   *  Each agent can specify a bot token, and the backend falls back to the config
+   *  token.
+   */
   token?: string;
-  /** persona display name (chat:write.customize path). */
+  /**
+   *  The `chat:write.customize` path sets the persona display name.
+   */
   username?: string;
-  /** persona avatar. */
+  /**
+   *  The persona has an avatar.
+   */
   icon_emoji?: string;
 }
 
-/** A Slack Event-API event as delivered by the socket-mode transport. */
+/**
+ *  The socket-mode transport delivers this Slack Event-API event.
+ */
 export interface SlackEvent {
   type?: string;
   subtype?: string;
@@ -27,14 +39,19 @@ export interface SlackEvent {
   bot_id?: string;
 }
 
-/** The injected Slack seam: connect wires the event stream, postMessage sends. */
+/**
+ *  The injected Slack interface uses `connect` to wire the event stream and
+ *  `postMessage` to send messages.
+ */
 export interface SlackTransport {
   connect(onEvent: (ev: SlackEvent) => void): void;
   postMessage(opts: SlackPostOptions): Promise<void>;
 }
 
-/** The tiny socket surface the transport drives. src/bin.ts adapts bun's
- *  WebSocket onto it; tests pass a fake. */
+/**
+ *  The transport drives this minimal socket interface. `src/bin.ts` adapts Bun's
+ *  WebSocket onto it, and tests pass a mock socket.
+ */
 export interface SlackSocket {
   send(data: string): void;
   close(code?: number, reason?: string): void;
@@ -45,15 +62,28 @@ export interface SlackSocket {
 }
 
 export interface SlackTransportDeps {
-  /** app-level token (xapp-) with connections:write, for apps.connections.open. */
+  /**
+   *  The `apps.connections.open` method requires an app-level token (`xapp-`) with the
+   *  `connections:write` scope.
+   */
   appToken: string;
-  /** main bot token (xoxb-) used as the persona-tier postMessage fallback. */
+  /**
+   *  The system uses the main bot token (`xoxb-`) as the fallback for persona-tier
+   *  `postMessage` calls.
+   */
   botToken?: string;
-  /** injected fetch; tests stub it. */
+  /**
+   *  The system injects `fetch`, and the tests stub it.
+   */
   fetch(input: string, init?: RequestInit): Promise<Response>;
-  /** injected socket factory; tests stub it. */
+  /**
+   *  The socket factory is injected, and tests stub it.
+   */
   createSocket(url: string): SlackSocket;
-  /** injectable wait so the reconnect backoff needs no real delay in tests. */
+  /**
+   *  The wait function is injectable, so the reconnect backoff needs no real delay
+   *  in tests.
+   */
   sleep(ms: number): Promise<void>;
 }
 
@@ -62,8 +92,10 @@ const POST_URL = "https://slack.com/api/chat.postMessage";
 const INITIAL_BACKOFF = 1_000;
 const MAX_BACKOFF = 30_000;
 
-/** A socket-mode envelope. Slack redelivers any envelope you do not ACK, so
- *  the transport replies with the envelope_id for every frame that has one. */
+/**
+ *  Slack redelivers any socket-mode envelope that you do not acknowledge, so the
+ *  transport replies with the `envelope_id` for every frame that contains one.
+ */
 interface Frame {
   type?: string;
   envelope_id?: string;
@@ -92,8 +124,9 @@ export function createSlackTransport(deps: SlackTransportDeps): SlackTransport {
       return;
     }
     if (env.type === "disconnect") {
-      // A server-initiated disconnect: close cleanly; onclose schedules the
-      // reconnect so the client comes back before Slack stops delivering.
+      // When the server initiates a disconnect, the client closes cleanly. The onclose
+      // handler schedules the reconnect so the client comes back before Slack stops
+      // delivering.
       socket?.close(1000, "disconnect");
       return;
     }
@@ -154,8 +187,9 @@ export function createSlackTransport(deps: SlackTransportDeps): SlackTransport {
         body: JSON.stringify(payload),
       });
       const data = (await res.json()) as { ok?: boolean; error?: string };
-      // Slack signals failure with HTTP 200 + {"ok":false,"error":...}. A
-      // reader of that body has to surface it as the failure it is.
+      // Slack signals failure by returning an HTTP 200 status code with
+      // {"ok":false,"error":...} in the body. The client reading that body must surface
+      // it as a failure.
       if (data.ok !== true) {
         throw new Error(data.error ?? "Slack postMessage failed");
       }
