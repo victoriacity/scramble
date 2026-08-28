@@ -4163,12 +4163,19 @@ function isListenerProc(cmd: string, agent: string): boolean {
  *  a sweep completed. A monitor that died leaves that value where it was, which is
  *  the difference between "armed" and "still running". */
 export function sweepAgeMinutes(io: Io, agent: string, nowMs = Date.now()): number | undefined {
-  const perChannel = readSlackCursor(io, agent);
-  const newest = Object.values(perChannel)
-    .map((ts) => Number(String(ts).split(".")[0]) * 1000)
-    .filter((ms) => Number.isFinite(ms) && ms > 0)
-    .sort((a, b) => b - a)[0];
-  return newest === undefined ? undefined : Math.round((nowMs - newest) / 60000);
+  // THE FILE'S MTIME IS WHEN THE SWEEP RAN. The timestamps INSIDE it are the newest
+  // messages it read, which is a different fact: an agent measured a sweep that had
+  // finished 42 seconds earlier while this field said 38 minutes, because their
+  // channels had been quiet for half an hour. Reading the contents turns a quiet
+  // channel into a dead monitor and trains everybody to ignore the line.
+  //
+  // Every run writes the cursor file, including a run that delivered nothing, so the
+  // mtime moves whenever a sweep completes.
+  try {
+    return Math.round((nowMs - statSync(cursorPath(io, agent)).mtimeMs) / 60000);
+  } catch {
+    return undefined;
+  }
 }
 
 /** What the two monitors look like right now, one line each, from the primary
