@@ -1234,6 +1234,10 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     // The key comes from the first line, whatever it is.
     expect(autoKey("crossed: two\n  a")).toBe("crossed: two\ncrossed:   a");
     expect(autoKey("pending: one\n  a")).toBe("pending: one\npending:   a");
+    // A JSON LINE PASSES THROUGH BYTE FOR BYTE, since stdout carries records as
+    // well as diagnostics and a record is read by a program.
+    const rec = '{"id":"1.0","text":"a: b\nc"}';
+    expect(autoKey(rec)).toBe(rec);
   });
 
   test("the verify names the first line that differs", () => {

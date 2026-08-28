@@ -3883,8 +3883,15 @@ const USAGE = [
 ].join("\n");
 
 export async function main(argv: string[], raw: Io): Promise<number> {
-  // EVERY DIAGNOSTIC KEYED, AT THE ONE PLACE THEY ALL PASS THROUGH.
-  const io: Io = { ...raw, writeErr: (line: string) => raw.writeErr(autoKey(line)) };
+  // EVERY DIAGNOSTIC KEYED, AT THE ONE PLACE THEY ALL PASS THROUGH. Both streams:
+  // `rewrites --near` writes its histogram to stdout, and wrapping only stderr left
+  // that one block bare while every other went out keyed. A JSON line declares no
+  // key and passes through byte for byte.
+  const io: Io = {
+    ...raw,
+    write: (line: string) => raw.write(autoKey(line)),
+    writeErr: (line: string) => raw.writeErr(autoKey(line)),
+  };
   if (argv.length === 0 || argv.includes("--help") || argv.includes("-h")) {
     io.write(USAGE);
     return 0;
