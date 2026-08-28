@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# REFUSE A PUSH OF A COMMIT NO GREEN GATE COVERS.
+#
+# Twice in one session a gate run and a push shared a shell command, so a push went
+# out while the gate was failing: `bash scripts/gate.sh; ...; git push` runs the push
+# whatever the gate said. Reading the exit code by hand is the step that gets
+# skipped, so this hook reads the stamp a green gate run writes.
+#
+# The check costs nothing: it compares two commit ids and never runs the suite.
+# Install it with `git config core.hooksPath .githooks`.
+set -uo pipefail
+REPO="$(git rev-parse --show-toplevel)"
+HEAD_SHA="$(git rev-parse HEAD)"
+STAMP="$REPO/.git/last-green-sha"
+
+if [ ! -f "$STAMP" ]; then
+  echo "pre-push REFUSED: no green gate run is recorded. Run: bash scripts/gate.sh" >&2
+  exit 1
+fi
+GREEN="$(cat "$STAMP")"
+if [ "$GREEN" != "$HEAD_SHA" ]; then
+  echo "pre-push REFUSED: the last green gate covered $GREEN and HEAD is $HEAD_SHA." >&2
+  echo "Run the gate on this commit, read its verdict, then push in a separate command." >&2
+  exit 1
+fi

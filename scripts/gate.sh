@@ -278,4 +278,9 @@ if [ "$paths_rc" -ne 0 ] || [ "$lang_rc" -ne 0 ] || [ "$skill_rc" -ne 0 ] || [ "
   echo "GATE RED"
   exit 1
 fi
+# THE GREEN VERDICT IS STAMPED WITH THE COMMIT IT COVERS. Twice tonight a gate run
+# and a push went into one shell command, and the push carried a commit the gate had
+# just failed. The stamp lets the pre-push hook refuse a commit no green run covers,
+# without re-running the suite.
+git -C "$REPO" rev-parse HEAD > "$REPO/.git/last-green-sha" 2>/dev/null || true
 echo "GATE GREEN"
