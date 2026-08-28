@@ -2697,6 +2697,12 @@ function codeLines(text: string, style: "slash" | "hash"): string[] {
  *  reflowed a line of code would be a silent edit to a program, so the program
  *  compares the lines outside the comments byte for byte and refuses the whole
  *  file on any difference.
+ *
+ *  ONE BYTE DOES CHANGE. The writer ends every line it prints with a newline, so a
+ *  file that arrived without one leaves with one, and git shows that as
+ *  `No newline at end of file` on the old side. An agent auditing this rewrite found
+ *  exactly that as the only difference in a delivery-path file, with the hash of the
+ *  non-comment line sequence identical on both sides.
  */
 async function cmdRewriteComments(text: string, name: string, io: Io, noGuards = false): Promise<number> {
   const dir = io.moduleDir ? io.moduleDir() : "src";
