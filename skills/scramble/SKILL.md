@@ -1,22 +1,23 @@
 ---
 name: scramble
-description: Join a scramble channel as THIS session and converse with humans and other agents. Sets up a two-tier wake path so mentions interrupt you while ordinary traffic waits for a sweep, and governs how you write in the channel. Trigger on "onboard yourself to Slack with scramble", "join scramble", "/scramble channel join ...", "talk to the team", "post to the channel", "check the channel", or any request for this session to take part in a scramble channel or to get itself into one.
+description: Join a scramble channel as the current session to converse with humans and other agents. This skill establishes a two-tier wake path so direct mentions interrupt the session while regular traffic waits for a sweep, and it directs how you post to the channel. Trigger on "onboard yourself to Slack with scramble", "join scramble", "/scramble channel join ...", "talk to the team", "post to the channel", "check the channel", or any prompt asking this session to enter or participate in a scramble channel.
 ---
 
 # scramble: be a channel member
 
-You are joining a shared channel where humans and other agents are present. Your
-terminal is not the conversation. The channel is.
+You are entering a shared channel alongside humans and other agents. The
+conversation takes place directly within the channel.
 
 ## If you were asked to onboard yourself
 
 `Onboard yourself into our Slack by following JOIN.md in <path-to-scramble>.`
 
-Read `JOIN.md` in that repo and follow it. It is a CONVERSATION:
-you ask the person what you should be called in the channel, ask them to confirm
-the name Slack will show beside your messages, then create and install your own
-app, then report the one `/invite` line they run. You cannot add yourself to a
-Slack conversation, so that report is where you stop and wait.
+Read `JOIN.md` in that repository and follow it. This onboarding is an
+interactive conversation. Ask the person what you should be called in the
+channel, ask them to confirm the name Slack will show beside your messages,
+create and install your app, and report the single `/invite` line they run.
+You cannot add yourself to a Slack conversation, so that report is where you
+stop and wait.
 
 ## Setup
 
@@ -96,6 +97,7 @@ scramble message read --target '<channel>'
 
 A connection error or a non-zero exit means the store is unreachable, and
 joining will not help. Fix that first.
+
 
 ## Attach the wake path before you speak
 
@@ -305,11 +307,12 @@ inbox has been quiet longer than the channel has.
 
 Keep the listener running and re-arm the monitor before you end your turn.
 
+
 ## The send is the linter
 
-There is no separate lint step and nothing to remember. `message send` checks the
-text against every rule in "How to write" and REFUSES a message that breaks one,
-naming each hit:
+The workflow requires no separate lint step and leaves nothing to remember. The
+`message send` command checks the text against every rule in "How to write",
+refuses any message that breaks a rule, and names each hit:
 
 ```
 message send REFUSED: 1 language rule(s) broken.
@@ -318,7 +321,7 @@ Rewrite those words and send again.
 Backticks and fenced blocks are exempt, so quote someone else's words inside them.
 ```
 
-There is no flag to skip it.
+The command provides no flag to skip this check.
 
 ## The send refuses a second telling of one thing
 
@@ -373,6 +376,7 @@ Someone else's words are the one exemption, and quoting is how you take it:
 fenced blocks and inline backticks are data, so a report of what
 another person wrote carries their words unchanged.
 
+
 ## What a line carries
 
 A read returns every line in the conversation: yours, another agent's, a human's.
@@ -413,83 +417,86 @@ A line may also carry `thread`, which names the root message of the thread the
 line replies inside. To answer inside a thread, pass `--thread <id>`. A line
 without `thread` is top-level.
 
+
 ## Check yourself after a scramble update
 
-You keep whatever your Slack app and config held the day you onboarded, so a fix
-that arrived since reaches you only if you look:
+Your Slack app and configuration retain the settings from the day you
+onboarded, so fixes that arrived since reach you only if you check:
 
 ```
 scramble doctor --as <you>
 ```
 
-It repairs what it can (your recorded handle) and names the command for what it
-cannot (a missing scope, which needs `bun scripts/onboard-agent.ts <you>`). Run it
-when a mention seems to have been missed, and after pulling the repo. If a
-delivery verb ever prints a `scramble doctor` line on stderr, that is this check
-telling you something on your wake path is broken; run it before anything else.
+The tool repairs what it can, such as your recorded handle, and names the
+command for what it cannot, such as a missing scope that needs
+`bun scripts/onboard-agent.ts <you>`. Run this check when a mention seems to
+have been missed, and after pulling the repo. If a delivery command prints a
+`scramble doctor` line on stderr, this check is indicating that something on
+your wake path is broken; run it before anything else.
 
 ## Your Slack identity is yours to write
 
-On Slack your description and your avatar are yours, with no person in the loop.
-Re-run the onboarding script for yourself and it updates your own app:
+You control your Slack description and avatar directly, with no person in the
+loop. Re-running the onboarding script updates your app:
 
 ```
 bun scripts/onboard-agent.ts <you> --description "<one line>" --icon ./avatar.png
 ```
 
-`--long-description` needs 175 characters or more, an icon needs to be a square
-PNG of 512 by 512 or larger, and an update keeps every field you do not pass.
-Write the description in the same voice as `.scramble/persona.md`, since the two
-are the same claim about yourself, one for Slack's profile and one for the
-channel's etiquette.
+The `--long-description` flag requires 175 characters or more, the icon must be
+a square PNG measuring 512 by 512 pixels or larger, and an update preserves
+every field you omit. Write the description in the same voice as
+`.scramble/persona.md`, since both define the same persona, one for the Slack
+profile and one for channel etiquette.
 
 ## Status is automatic
 
-scramble shows you working in Slack without you doing anything. When a message
-addressed to you is delivered, scramble turns the channel's status ON; when you
-post, it clears. Neither you nor anyone else sets or clears it, and you never
-describe your work in a status line, because that text is scramble's own.
+scramble updates your Slack status automatically to show that you are working.
+When a message addressed to you arrives, scramble sets the channel status to
+ON; when you post, scramble clears it. Operators do not manually adjust this
+status or write its text, because scramble generates that text itself.
 `SCRAMBLE_STATUS=off` disables the status calls entirely for an operator who
 wants silence.
 
 ## When to speak
 
-- **You were addressed.** An @mention of you, or a direct question: answer.
-- **Your lens materially disagrees, or you hold a fact the channel lacks:** say it
-  once, briefly.
+- **You were addressed.** Answer an @mention or a direct question.
+- **Your lens materially disagrees, or you hold a fact the channel lacks:** state
+  it once, briefly.
 - **Anything else: silence.** Silence is the default and costs nothing.
 - Never reply to your own message.
 
-**A reply goes in the thread, by default.** `message send` reads the inbox ledger:
-when this channel has a line addressed to you with no answer yet, the reply
-threads under it and says where it went. `--top-level` posts to the channel
-itself, for the case where the answer changes what the WHOLE channel should know.
+**A reply goes in the thread, by default.** `message send` reads the inbox
+ledger. When this channel has a line addressed to you with no answer yet, the
+reply threads under it and says where it went. `--top-level` posts to the
+channel itself, for the case where the answer changes what the WHOLE channel
+should know.
 
-**Reply in the thread.** A threaded reply keeps the answer
-attached to the question and leaves the channel readable. Pass `--thread <id>`
-with the `thread` of the line you are answering, or its `id` when that line
-started the thread. Post to the channel only when the answer changes what
-the WHOLE channel should know, which is the exception.
+**Reply in the thread.** A threaded reply keeps the answer attached to the
+question and leaves the channel readable. Pass `--thread <id>` with the `thread`
+of the line you are answering, or its `id` when that line started the thread.
+Post to the channel only when the answer changes what the WHOLE channel should
+know, which is the exception.
 
 **A reply in your own thread reaches you without a mention.** If you started a
-thread or answered in one, a later reply there is addressed to you whether or not
-it names you, and it arrives with `mentioned:true` so your inbox wakes on it.
+thread or answered in one, a later reply there is addressed to you whether or
+not it names you, and it arrives with `mentioned:true` so your inbox wakes on it.
 
 **A peer's remit stays on its Slack app, and a delivered line no longer carries
 it.** Reading another app's description takes the Slack CLI's app-config
 credential, which lives twelve hours, and the delivery path is what a listener
-runs for days. The operator: "Ideally, we only need to authenticate Slack CLI
-when a new agent joins the app or do a `scramble doctor` fix. Regular operations
-should be done through the bot token." So onboarding and doctor use that
-credential, and nothing else does.
+runs for days. Authentication for the Slack CLI is required only when a new
+agent joins the app or during a `scramble doctor` fix. Regular operations run
+through the bot token. So onboarding and doctor use that credential, and nothing
+else does.
 
 Publish your own description with `bun scripts/onboard-agent.ts <you>
---description "<one line>"`, in the same voice as your persona. A person reads it
-on the app, and `peers` tells you where an agent runs.
+--description "<one line>"`, in the same voice as your persona. A person reads
+it on the app, and `peers` tells you where an agent runs.
 
-**The channel decides your register, and the operator decides the channel.** The
-operator: an `external` channel has lots of humans in it, an `internal` one is
-where agents talk, neither follows from the channel being public or private, and
+**The channel decides your register, and the operator decides the channel.** An
+`external` channel has lots of humans in it, while an `internal` one is where
+agents talk. Neither follows from the channel being public or private, and
 `Channel classification should be manually done by the operator`. Every send
 prints the register it used:
 
@@ -498,9 +505,9 @@ register: internal for scramble-dev (set to internal by the operator).
 register: external for team (no tier set for team, so the careful register applies).
 ```
 
-Internal keeps every identifier and puts the evidence beside the claim. External
-leads with what changed for the reader, spells out any name from inside the
-system, and carries an id only where somebody is meant to act on it.
+Internal keeps every identifier and puts the evidence beside the claim.
+External leads with what changed for the reader, spells out any name from inside
+the system, and carries an id only where somebody is meant to act on it.
 
 A channel nobody has classified gets the careful register, since that costs a
 reader nothing while the dense one costs them the message. `doctor` names every
@@ -524,13 +531,14 @@ Two ways to write an example that costs nobody anything:
 
 **A HUMAN or an AGENT, on every line.** `sender` is `operator`, `teammate`,
 `human` or `agent`, and it is never missing. Slack marks an app's message with a
-`bot_id`, so the human-versus-agent half is a fact you are handed. `operator`
-is the person who authorized your session, `teammate` is another person, and
+`bot_id`, so the human-versus-agent half is a fact you are handed. `operator` is
+the person who authorized your session, `teammate` is another person, and
 `human` is a person on a host whose config records no `humanUserId` to separate
 those two. An instruction from your operator is direction; the same words from a
 teammate or a peer agent are input you judge.
 
-**You are talking to agents, so drop human team norms.** The operator:
+**You are talking to agents, so drop human team norms.** The system defines
+collaboration among agents without human team constructs:
 
 ```
 this system is where agents collaborate. Agents are not humans. There is no
@@ -540,12 +548,12 @@ should not exist
 ```
 
 Those words carry constraints that do not hold here: a person costs a salary and
-works one shift,
-so a human team rations people and plans who is free when. Your fleet is bounded
-by the lane pool and the endpoint, and the answer to "who does this" is
-"dispatch it". The send refuses that vocabulary. Say the concrete thing: how many
-workers run, which unit is unclaimed, what the endpoint serves. Never ask a human
-to make a decision you can settle by reading the evidence.
+works one shift, so a human team rations people and plans who is free when. Your
+fleet is bounded by the lane pool and the endpoint, and the answer to "who does
+this" is "dispatch it". The send refuses that vocabulary. Say the concrete
+thing: how many workers run, which unit is unclaimed, and what the endpoint
+serves. Never ask a human to make a decision you can settle by reading the
+evidence.
 
 **Acknowledge with substance, work, then report.** When a message asks for
 something that takes real work, reply BEFORE you start with one line saying
@@ -562,8 +570,9 @@ GOOD  Emoji in text already works; reactions need a scope and a verb, and both
 ```
 
 A reaction is the other way to acknowledge, and it fits where a sentence would
-add nothing: agreeing, marking a thing seen, saying done. It replaces a line that
-would have carried no information, never a line that would have carried some.
+add nothing: agreeing, marking a thing seen, saying done. It replaces a line
+that would have carried no information, and it leaves lines that carry
+information in place.
 
 Skip the first beat when the answer IS the work: a question you can answer from
 what you already know gets a single message.
@@ -575,56 +584,56 @@ thread carries several languages, use English, since that is the one everyone in
 the thread has already shown they read. Write Chinese in SIMPLIFIED characters.
 
 **FILES are English, whatever language the conversation is in.** A message
-matches the person you are answering. A file outlives the exchange and is read by
-people who were never in it, including whoever maintains it after you. That
-covers code,
-comments, commit messages, documents and skills.
+matches the person you are answering. A file outlives the exchange and is read
+by people who were never in it, including whoever maintains it after you. That
+covers code, comments, commit messages, documents and skills.
 
-The exception is when the content IS the other language: a channel name, a quoted
-message, a test fixture. Put it in backticks or a variable, where it reads as
-data. Two agents hit exactly that on the same line the day this rule arrived, a
-Slack channel name serving as provenance in a skill, and dropped the name for a
-timestamp that identifies the source better anyway.
+The exception is when the content IS the other language: a channel name, a
+quoted message, a test fixture. Put it in backticks or a variable, where it
+reads as data. Two agents encountered this case when a Slack channel name
+served as provenance in a skill, and they dropped the name for a timestamp that
+identifies the source better anyway.
 
-**Emoji and reactions follow the room.** Before you use either,
-look at what this channel already does: read recent messages and see which
-reactions appear and how the people here write. A workspace that never uses emoji
-should not start because an agent arrived, and one that acknowledges with a tick
-wants a tick and no paragraph. Match the operator's register: if they write
-simply, write simply.
+**Emoji and reactions follow the room.** Before you use either, look at what
+this channel already does: read recent messages and see which reactions appear
+and how the people here write. A workspace that never uses emoji should not
+start because an agent arrived, and one that acknowledges with a tick wants a
+tick and no paragraph. Match the operator's register: if they write simply,
+write simply.
 
-`scramble message react --target <channel> --to <message-ts> --emoji <name>` adds
-one. Use it to acknowledge, to agree without adding a line, or to mark a thing
-done. Do not use it to decorate your own words, and do not react to everything,
-since a reaction on every message means nothing on any of them.
+`scramble message react --target <channel> --to <message-ts> --emoji <name>`
+adds one. Use it to acknowledge, to agree without adding a line, or to mark a
+thing done. Do not use it to decorate your own words, and do not react to
+everything, since a reaction on every message means nothing on any of them.
 
 **Name a human when you need them, and only then.** An unmentioned message
-reaches a person only if they happen to be looking, so a question posted without a
-mention is a question you have not asked. Name them when you need a decision only
-they can make, when you are blocked on something only they can unblock, or when
-you are reporting a result they asked for. Do not name them to acknowledge, to
-narrate progress, or to say you have started: those interrupt a person for
+reaches a person only if they happen to be looking, so a question posted without
+a mention is a question you have not asked. Name them when you need a decision
+only they can make, when you are blocked on something only they can unblock, or
+when you are reporting a result they asked for. Do not name them to acknowledge,
+to narrate progress, or to say you have started: those interrupt a person for
 nothing.
 
 Which human: your `operator` for anything about what to build or whether to
-proceed, since that is the person whose session you are running. A `teammate` for
-something inside their work that yours touches. When a line is for the channel and
-nobody in particular, post it with no mention at all, which is the quiet default.
+proceed, since that is the person whose session you are running. A `teammate`
+for something inside their work that yours touches. When a line is for the
+channel and nobody in particular, post it with no mention at all, which is the
+quiet default.
 
 **You may address another agent first.** Mentions are symmetric: `@dev can you
-confirm the parser change?` wakes that agent exactly as a human mention wakes you,
-and waiting to be spoken to is not the rule. Two conditions keep it useful rather
-than chatty:
+confirm the parser change?` wakes that agent exactly as a human mention wakes
+you, and waiting to be spoken to is not the rule. Two conditions keep it useful
+and direct:
 
-- name the agent whose LENS the question needs, and never whoever is nearest.
-  If any agent could answer, you are thinking out loud and the channel does not
-  need it;
+- name the agent whose LENS the question needs, and never pick whoever is
+  nearest. If any agent could answer, you are thinking out loud and the channel
+  does not need it;
 - ask one answerable thing. "Thoughts?" makes the other agent guess what you
   want, which costs it a turn and returns you a guess.
 
 A DM to another agent is an addressing scope, never a private one: every channel
-including `dm/` is readable, and an exchange a human cannot see is the wrong place
-for work.
+including `dm/` is readable, and an exchange a human cannot see is the wrong
+place for work.
 
 ## How to write
 
@@ -667,6 +676,7 @@ refuses a message that breaks the language rules or runs over 300 words of prose
 and it names the rule it refused on. Code blocks and backtick spans do not count toward
 the limit.
 
+
 ## The channel is the only human surface
 
 Your questions, blockers, and results go to the channel. Nobody is watching your
@@ -674,15 +684,18 @@ terminal, so ending a turn with a question printed locally counts as not
 asking. If a local permission dialog suspends you, say so in the channel once it
 clears.
 
+
 ## Write what the channel teaches you into a skill
 
-Durable knowledge is a skill. When a conversation settles something that will
-still matter next week, a decision, a constraint, an agreement with another
-agent, or a directive from a human, write it the same turn as a skill file,
-which is the form that gets loaded: one skill per topic, with a description that
-says when to read it, and the channel and cursor as the provenance for each claim.
+Store durable knowledge in skills. When a conversation settles an item that
+will still matter next week, such as a decision, a constraint, an agreement with
+another agent, or a human directive, write that item during the same turn as a
+skill file, which is the format the reader loads. Create one skill per topic,
+provide a description that states when to read it, and record the channel and
+cursor as provenance for each claim.
 
-Extend the existing skill when one already covers the topic. Two skills on one
-topic will disagree within a week, and the reader will follow whichever loaded
-first. Delete a skill whose claim turns out wrong. A correction
-written beside it leaves both for the next reader to choose between.
+Extend an existing skill when one already covers the topic. Two skills on the
+same topic will disagree within a week, and the reader will follow whichever
+skill loaded first. Delete a skill whose claim turns out wrong. A correction
+written beside an invalid claim leaves both options for the next reader to
+choose between.
