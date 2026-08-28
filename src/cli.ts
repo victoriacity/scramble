@@ -3162,6 +3162,9 @@ async function settleSend(
   recordSelf(io, from);
   try {
     if (s.backend !== undefined) await reportCrossings(io, s.backend, channel, from, ts);
+    // BOTH MONITORS, ON EVERY SEND. Arming expires, and the listener check used to
+    // sit inside the sweep, where a dead sweep hid its own absence.
+    for (const line of monitorReport(io, from)) io.writeErr(line);
     closeInboxItems(inboxPath(slackConfigPath(io), from), channel, ts ?? new Date().toISOString(), thread);
     // The draft carries the timestamp, so the next send of the same words can see
     // this draft and refuse.
@@ -4139,6 +4142,59 @@ function isListenerProc(cmd: string, agent: string): boolean {
   const argv0 = cmd.trim().split(/\s+/)[0] ?? "";
   const exe = argv0.split("/").pop() ?? "";
   return exe === "bun" || exe === "node";
+}
+
+/** How long ago this agent's timed sweep last ran, in minutes, or undefined when
+ *  no sweep has ever written a cursor.
+ *
+ *  THE SWEEP'S OWN RECORD IS ITS CURSOR. Every `message check` writes the newest
+ *  timestamp it read per channel, so the newest of those values is the last moment
+ *  a sweep completed. A monitor that died leaves that value where it was, which is
+ *  the difference between "armed" and "still running". */
+export function sweepAgeMinutes(io: Io, agent: string, nowMs = Date.now()): number | undefined {
+  const perChannel = readSlackCursor(io, agent);
+  const newest = Object.values(perChannel)
+    .map((ts) => Number(String(ts).split(".")[0]) * 1000)
+    .filter((ms) => Number.isFinite(ms) && ms > 0)
+    .sort((a, b) => b - a)[0];
+  return newest === undefined ? undefined : Math.round((nowMs - newest) / 60000);
+}
+
+/** What the two monitors look like right now, one line each, from the primary
+ *  record of each.
+ *
+ *  THIS RUNS ON THE SEND, because the listener check used to live inside the sweep:
+ *  a dead sweep hid its own absence, and an agent learned nothing until somebody
+ *  else noticed. Every agent sends messages, so the send is where both states
+ *  reach the agent.
+ *
+ *  ARMING EXPIRES. An agent that completed onboarding hours ago can hold a dead
+ *  monitor: one sweep exited with code 144 and no error text, and its own log ended
+ *  with two ordinary drains. A completed step proves nothing about now. */
+export function monitorReport(io: Io, agent: string, nowMs = Date.now(), staleAfterMinutes = 30): string[] {
+  const out: string[] = [];
+  const procRoot = io.env("SCRAMBLE_PROC") ?? "/proc";
+  if (processesReadable(procRoot)) {
+    if (liveListeners(readProcesses(procRoot), agent).length === 0) {
+      out.push(
+        `monitors: NO listener is running for ${agent}, so nothing wakes this agent between sweeps. ` +
+          `Arm it: scramble listen --addressed --as ${agent}`,
+      );
+    }
+  }
+  const age = sweepAgeMinutes(io, agent, nowMs);
+  if (age === undefined) {
+    out.push(
+      `monitors: no timed sweep has ever run for ${agent}, so ordinary traffic and the lines you owe ` +
+        `never surface. Arm it on a timer: scramble message check --as ${agent}`,
+    );
+  } else if (age > staleAfterMinutes) {
+    out.push(
+      `monitors: the last sweep for ${agent} finished ${age} minute(s) ago, past the ${staleAfterMinutes}-minute ` +
+        `mark, so its monitor may have died. Restart it: scramble message check --as ${agent}`,
+    );
+  }
+  return out;
 }
 
 export function liveListeners(

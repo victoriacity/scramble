@@ -1,12 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import type { ChannelStore } from "../src/store";
 import { createStore } from "../src/store";
 import { createHandler } from "../src/server";
 import { WORD_LIMIT } from "../src/language";
-import { KNOWN_ENV, unknownEnvNote, hashVerdict, textHash, differenceLine, autoKey, installedChanges, changeBlock, main, parseBind, loadSlackConfig, slackConfigPath, staleConfigWarning, staleListeners, pickStale, staleListenerProblem, readProcesses, liveListeners, stillAlive, watchForNewerInstall, listenerCommit, listenersBehind, processesReadable, type Io } from "../src/cli";
+import { KNOWN_ENV, unknownEnvNote, hashVerdict, textHash, differenceLine, autoKey, installedChanges, changeBlock, monitorReport, sweepAgeMinutes, main, parseBind, loadSlackConfig, slackConfigPath, staleConfigWarning, staleListeners, pickStale, staleListenerProblem, readProcesses, liveListeners, stillAlive, watchForNewerInstall, listenerCommit, listenersBehind, processesReadable, type Io } from "../src/cli";
 import { SCOPE_NAMES, BOT_EVENT_NAMES } from "../src/app-manifest";
 import { readTierBlock } from "../src/rewrite";
 
@@ -1075,6 +1075,48 @@ describe("`scramble rewrite --comments`: the prose of a source file", () => {
     const unkeyed: Io = { ...nokey.io, env: () => undefined };
     expect(await main(["rewrite", "--comments", join(nokey.dir, "code.ts")], unkeyed)).toBe(1);
     expect(nokey.errs.join(" ")).toContain("no model is configured");
+  });
+});
+
+describe("both monitors are reported on every send", () => {
+  // A COMPLETED ONBOARDING STEP PROVES NOTHING ABOUT NOW. Several agents finished
+  // onboarding and held a dead monitor: one sweep exited with code 144, printed no
+  // error text, and its log ended with two ordinary drains. The listener check used
+  // to live inside the sweep, so a dead sweep hid its own absence.
+  function io(cwd: string, cursor?: Record<string, string>): Io {
+    const { io: base } = stubIo(cwd, async () => new Response("{}", { status: 200 }));
+    if (cursor !== undefined) {
+      const p = join(cwd, ".scramble", "cursors", "dev.json");
+      mkdirSync(dirname(p), { recursive: true });
+      writeFileSync(p, JSON.stringify({ "slack:dev": cursor }));
+    }
+    return { ...base, env: (n) => (n === "SCRAMBLE_PROC" ? join(cwd, "noproc") : undefined) };
+  }
+
+  test("a sweep that never ran, and one that stopped, each read differently", () => {
+    const now = 1_787_000_000_000;
+    const never = scratchDir("mon-never");
+    expect(sweepAgeMinutes(io(never), "dev", now)).toBeUndefined();
+    expect(monitorReport(io(never), "dev", now).join(" ")).toContain("no timed sweep has ever run");
+
+    // A cursor 45 minutes old is a sweep that stopped, past the 30-minute mark.
+    const stale = scratchDir("mon-stale");
+    const staleTs = `${Math.floor((now - 45 * 60_000) / 1000)}.000100`;
+    expect(sweepAgeMinutes(io(stale, { general: staleTs }), "dev", now)).toBe(45);
+    expect(monitorReport(io(stale, { general: staleTs }), "dev", now).join(" ")).toContain("may have died");
+
+    // A cursor from four minutes ago is a live sweep and says nothing.
+    const fresh = scratchDir("mon-fresh");
+    const freshTs = `${Math.floor((now - 4 * 60_000) / 1000)}.000100`;
+    expect(sweepAgeMinutes(io(fresh, { general: freshTs }), "dev", now)).toBe(4);
+    expect(monitorReport(io(fresh, { general: freshTs }), "dev", now).join(" ")).not.toContain("sweep");
+
+    // THE NEWEST CHANNEL DECIDES, since one quiet channel does not mean a dead sweep.
+    const mixed = scratchDir("mon-mixed");
+    expect(sweepAgeMinutes(io(mixed, { old: staleTs, live: freshTs }), "dev", now)).toBe(4);
+    // A malformed cursor value reads as no sweep at all, which keeps the warning on.
+    const bad = scratchDir("mon-bad");
+    expect(sweepAgeMinutes(io(bad, { general: "not-a-timestamp" }), "dev", now)).toBeUndefined();
   });
 });
 
