@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Refuse a commit that stages a live credential.
+#
+# The check itself lives in `scripts/no_secrets_precommit.sh`, which this hook
+# executes. Both hooks sit in this directory and `scripts/install_hooks.sh` points
+# git at it, so one setting arms every hook this repository ships.
+set -uo pipefail
+# RUN IT THROUGH BASH. Exec on the file itself refused a commit with "Permission
+# denied" when the mode bit was missing, and a refusal for that reason reads exactly
+# like a refusal for a staged credential.
+exec bash "$(git rev-parse --show-toplevel)/scripts/no_secrets_precommit.sh" "$@"

@@ -1,7 +1,8 @@
 # This script runs under `/usr/bin/env bash` and refuses any commit that stages
 # a live credential. Install it as the repository pre-commit hook by running
-# `scripts/install_hooks.sh` or by executing
-# `ln -s ../../scripts/no_secrets_precommit.sh .git/hooks/pre-commit`.
+# `bash scripts/install_hooks.sh`, which points `core.hooksPath` at `.githooks` and
+# arms every hook this repository ships. That script named itself here before it
+# existed, so an agent following this comment armed nothing.
 #
 # This hook exists because a live Slack bot token and an app-level token were
 # committed into this repository, which is going open source. Because the commit
