@@ -900,6 +900,84 @@ describe("`--help`, and the agent name that is not a directory", () => {
   });
 });
 
+describe("`scramble rewrite --document`: a repository document for an outside reader", () => {
+  /** A document with two sections and a fenced block, written the way an engineer
+   *  writes for themselves. */
+  // A REAL SECTION, since the subject guard needs the eight content words a real
+  // one has: the duplicate guard uses the same floor, and a two-word fixture skips
+  // the check it exists to exercise.
+  const DOC = [
+    "# Title",
+    "",
+    "The listener delivers a mention to the agent, and the sweep drains the channel",
+    "into the same inbox ledger every fifteen minutes.",
+    "",
+    "## Section",
+    "```bash",
+    "echo hi",
+    "```",
+    "The install writes the committed tree of HEAD into a directory named by its commit.",
+  ].join("\n");
+
+  function docIo(name: string, answer: (body: string) => string): { io: Io; writes: string[]; errs: string[]; dir: string } {
+    const dir = scratchDir(name);
+    mkdirSync(join(dir, "prompts"), { recursive: true });
+    writeFileSync(join(dir, "prompts", "document.md"), "# Document rewrite instruction\nRewrite the section below.\n");
+    writeFileSync(join(dir, "doc.md"), DOC);
+    const { io, writes, errs } = stubIo(dir, async (_u, init) => {
+      const body = String((init as { body?: unknown } | undefined)?.body ?? "");
+      return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: answer(body) }] } }] }), { status: 200 });
+    });
+    io.moduleDir = () => dir;
+    const keyed: Io = { ...io, env: (n) => (n === "SCRAMBLE_REWRITE_KEY" ? "k" : undefined) };
+    return { io: keyed, writes, errs, dir };
+  }
+
+  test("each section is rewritten and the fenced block survives", async () => {
+    // THE MESSAGE INSTRUCTION WOULD GUT A DOCUMENT: it caps prose at 300 words and
+    // asks the model to drop reasoning, and a design document carries 4000 words of
+    // reasoning by design. This path reads its own instruction and sends one
+    // section per call.
+    const { io, writes, errs, dir } = docIo("doc-ok", (body) =>
+      body.includes("## Section")
+        ? "## Section\n```bash\necho hi\n```\nThe install writes the committed tree of HEAD into a directory named by its commit."
+        : "# Title\n\nThe agent receives a mention from the listener, and the sweep drains the channel into the same inbox ledger every fifteen minutes.",
+    );
+    expect(await main(["rewrite", "--document", join(dir, "doc.md")], io)).toBe(0);
+    const out = writes.join("\n");
+    expect(out).toContain("The agent receives a mention from the listener");
+    expect(out).toContain("```bash\necho hi\n```");
+    expect(errs.join("\n")).toContain("2 section(s), 2 rewritten, 0 kept as written");
+  });
+
+  test("A SECTION THE GUARDS REFUSE KEEPS ITS ORIGINAL TEXT and says so", async () => {
+    // A pass that dropped a section it could not rewrite would hand back a shorter
+    // document that reads as finished.
+    const { io, writes, errs, dir } = docIo("doc-refused", () => "a replacement that carries none of the input");
+    expect(await main(["rewrite", "--document", join(dir, "doc.md")], io)).toBe(0);
+    expect(writes.join("\n")).toContain("echo hi");
+    expect(writes.join("\n")).toContain("The listener delivers a mention to the agent");
+    const said = errs.join("\n");
+    expect(said).toContain("kept its original text");
+    expect(said).toContain("kept as written");
+  });
+
+  test("a missing instruction file is a reason, and so is a missing key", async () => {
+    const dir = scratchDir("doc-noprompt");
+    writeFileSync(join(dir, "doc.md"), DOC);
+    const { io, errs } = stubIo(dir, async () => new Response("{}", { status: 200 }));
+    io.moduleDir = () => dir;
+    const keyed: Io = { ...io, env: (n) => (n === "SCRAMBLE_REWRITE_KEY" ? "k" : undefined) };
+    expect(await main(["rewrite", "--document", join(dir, "doc.md")], keyed)).toBe(1);
+    expect(errs.join(" ")).toContain("document rewrite instruction");
+
+    const withPrompt = docIo("doc-nokey", () => "x");
+    const noKey: Io = { ...withPrompt.io, env: () => undefined };
+    expect(await main(["rewrite", "--document", join(withPrompt.dir, "doc.md")], noKey)).toBe(1);
+    expect(withPrompt.errs.join(" ")).toContain("no model is configured");
+  });
+});
+
 describe("`scramble version`: which copy is running", () => {
   // A peer agent: "My scramble executes your working tree. bun link points at
   // the maintainer's checkout and runs src directly... if you save halfway

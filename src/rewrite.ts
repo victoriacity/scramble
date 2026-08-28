@@ -24,6 +24,10 @@
 import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { lengthRefusal, lintLanguage, proseOf } from "./language";
+// The duplicate guard's text comparison, reused here so a document rewrite is
+// measured the same way a repeated message is. `slack-backend` and `language` are
+// the only files inbox reaches, and neither reaches back here.
+import { allWords, contentOf, wordOverlap } from "./inbox";
 
 /** Which service answers. Gemini has its own request shape; Fireworks and
  *  LiteLLM both speak the OpenAI chat-completions shape, so they are one code
@@ -619,12 +623,58 @@ export type RewriteChoice =
   | { send: string; note: string }
   | { refuse: string; why: string; attempt?: string; retry?: string };
 
+/** Every fenced block in a text, fence lines included.
+ *
+ *  A DOCUMENT'S BLOCKS ARE ITS COMMANDS AND ITS OUTPUT, and the message guards
+ *  never looked at them: a stub answer that dropped a whole `bash` block passed
+ *  every check, because the block held no id, no mention and no connective. In a
+ *  message a lost block is a lost line; in a document it is the part the reader
+ *  runs. */
+export function fencedBlocks(text: string): string[] {
+  const out: string[] = [];
+  let current: string[] | undefined;
+  for (const line of text.split("\n")) {
+    if (/^\s*```/.test(line)) {
+      if (current === undefined) {
+        current = [line];
+      } else {
+        current.push(line);
+        out.push(current.join("\n"));
+        current = undefined;
+      }
+      continue;
+    }
+    if (current !== undefined) current.push(line);
+  }
+  // An unclosed fence is still content the rewrite has to carry.
+  if (current !== undefined) out.push(current.join("\n"));
+  return out;
+}
+
+/** How much of a section's subject a rewrite has to carry, measured as the share
+ *  of the original's content words that survive.
+ *
+ *  MEASURED ON A REAL PAIR: the rewritten opening of OPERATING.md keeps every noun
+ *  the original names and reads as a different sentence. A replacement that shares
+ *  nothing scores 0. The floor sits at half, which leaves room for a heavy
+ *  rewording and refuses a substitution. */
+export const DOCUMENT_SUBJECT_FLOOR = 0.5;
+
 export function chooseText(
   original: string,
   rewritten: { ok: true; text: string } | { ok: false; why: string },
   /** The instruction the model was given, with the author's draft left out. An
    *  answer that repeats a span of it is quoting its own orders. */
   instruction?: string,
+  /** A REPOSITORY DOCUMENT is judged by all of these guards except two.
+   *
+   *  The 300-word cap belongs to a Slack message, and a design document carries
+   *  4000 words by design. The first-person guard refuses a rewrite that dropped
+   *  the author's "I", which is right in a message written by one agent and
+   *  backwards in a document: the document instruction tells the model to take the
+   *  editor out of the text. Every other guard applies unchanged, so a document
+   *  cannot lose a fact, a link between two facts, or a claim's strength. */
+  opts?: { document?: boolean },
 ): RewriteChoice {
   if (!rewritten.ok) {
     return {
@@ -650,7 +700,39 @@ export function chooseText(
       return refusal(`the rewrite copied its own instruction into the message ("${echoed.trim()}")`, rewritten.text);
     }
   }
-  const over = lengthRefusal(rewritten.text);
+  // A SECTION KEEPS ITS SUBJECT. A stub answer of unrelated prose passed every
+  // guard on a section holding no id, no mention and no connective: nothing
+  // compared what the answer was ABOUT to what the input was about. The duplicate
+  // guard already measures that, so the same containment runs here, and the floor
+  // is low enough that a heavy rewording passes.
+  if (opts?.document === true) {
+    const mineWords = contentOf(allWords(proseOf(original)));
+    if (mineWords.length >= 8) {
+      const kept = wordOverlap(mineWords, contentOf(allWords(proseOf(rewritten.text))));
+      if (kept < DOCUMENT_SUBJECT_FLOOR) {
+        return {
+          refuse:
+            `document REFUSED: the rewrite kept ${(kept * 100).toFixed(0)}% of what the section was about, ` +
+            `and the floor is ${(DOCUMENT_SUBJECT_FLOOR * 100).toFixed(0)}%.`,
+          why: `the rewrite kept ${(kept * 100).toFixed(0)}% of the section's subject`,
+          retry: `Your previous attempt replaced the section instead of rewriting it. Carry every fact from the input across.`,
+        };
+      }
+    }
+  }
+  // A FENCED BLOCK COMES BACK WHOLE, in a document.
+  if (opts?.document === true) {
+    const lostBlocks = fencedBlocks(original).filter((b) => !rewritten.text.includes(b.trim()));
+    if (lostBlocks.length > 0) {
+      const first = (lostBlocks[0] ?? "").split("\n").slice(0, 3).join(" / ");
+      return {
+        refuse: `document REFUSED: the rewrite dropped or altered ${lostBlocks.length} fenced block(s), starting with: ${first}`,
+        why: `the rewrite dropped ${lostBlocks.length} fenced block(s)`,
+        retry: `Your previous attempt lost a fenced block. Return every fenced block byte for byte, fences included.`,
+      };
+    }
+  }
+  const over = opts?.document === true ? "" : lengthRefusal(rewritten.text);
   if (over !== "") {
     return refusal("the rewrite ran over the word limit", rewritten.text);
   }
@@ -695,7 +777,7 @@ export function chooseText(
   // commit to hold steady", and a first-person report turned into a description
   // with nobody in it. Who did a thing is part of the claim.
   const firstPerson = /\b(I|I'm|I've|my|me|we|we're|we've|our)\b/i;
-  if (firstPerson.test(proseOf(original)) && !firstPerson.test(proseOf(rewritten.text))) {
+  if (opts?.document !== true && firstPerson.test(proseOf(original)) && !firstPerson.test(proseOf(rewritten.text))) {
     return refusal(
       `the rewrite removed the first person from a message that had it, so who did the thing is gone`,
       rewritten.text,

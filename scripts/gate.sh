@@ -233,7 +233,7 @@ USER_NAME="sy""zs"
 PRIVATE="$(git -C "$REPO" grep -IniE "example|muse[_-]|$HOME_DIRS|$USER_NAME|4090" -- . ':(exclude)scripts/gate.sh' 2>/dev/null || true)"
 # A REAL SLACK ACCOUNT ID identifies a person, and the fixtures now carry ids with
 # EXAMPLE in them so the shape stays testable.
-IDS="$(git -C "$REPO" grep -InE '\b(U0|T0|E0|B0)[0-9A-Z]{8,}' -- . ':(exclude)scripts/gate.sh' 2>/dev/null | grep -vE 'EXAMPLE|0{6,}' || true)"
+IDS="$(git -C "$REPO" grep -InE '\b(U0|T0|E0|B0|A0|W0)[0-9A-Z]{8,}' -- . ':(exclude)scripts/gate.sh' 2>/dev/null | grep -vE 'EXAMPLE|0{6,}' || true)"
 if [ -n "$PRIVATE" ] || [ -n "$IDS" ]; then
   echo "GATE FAIL: a tracked file names the private workspace or a real Slack account:"
   [ -n "$PRIVATE" ] && echo "$PRIVATE"

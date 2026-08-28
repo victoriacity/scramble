@@ -14,6 +14,7 @@ const scratch = (): string => mkdtempSync(join(tmpdir(), "scramble-prompt-"));
 import {
   DEFAULT_MODEL,
   documentPromptPath,
+  fencedBlocks,
   readDocumentTemplate,
   splitSections,
   DEFAULT_TIMEOUT_MS,
@@ -719,5 +720,30 @@ describe("a document is rewritten by its sections", () => {
     // A document with no `##` heading is one piece, and an empty one is no pieces.
     expect(splitSections("# Only a title\nbody")).toHaveLength(1);
     expect(splitSections("   \n\n")).toEqual([]);
+  });
+});
+
+describe("a document keeps its fenced blocks", () => {
+  test("every block is found, and a dropped one refuses the rewrite", () => {
+    // A STUB ANSWER THAT DROPPED A WHOLE BASH BLOCK PASSED EVERY MESSAGE GUARD,
+    // because the block held no id, no mention and no connective. In a document the
+    // block is the part the reader runs.
+    const doc = ["intro", "```bash", "echo hi", "```", "middle", "```", "plain", "```", "end"].join("\n");
+    const blocks = fencedBlocks(doc);
+    expect(blocks).toHaveLength(2);
+    expect(blocks[0]).toBe("```bash\necho hi\n```");
+    expect(blocks[1]).toBe("```\nplain\n```");
+    // An unclosed fence is content too, so the caller sees it and can carry it.
+    expect(fencedBlocks("a\n```bash\nunclosed")).toHaveLength(1);
+    expect(fencedBlocks("no fences here")).toEqual([]);
+
+    const dropped = chooseText(doc, { ok: true, text: "intro rewritten\nmiddle rewritten\nend rewritten" }, undefined, { document: true });
+    expect("refuse" in dropped).toBe(true);
+    expect("refuse" in dropped && dropped.refuse).toContain("dropped or altered 2 fenced block(s)");
+    expect("refuse" in dropped && dropped.retry).toContain("byte for byte");
+    // Blocks carried through pass, and the same answer in a MESSAGE stays subject to
+    // the message guards.
+    const kept = chooseText(doc, { ok: true, text: "intro rewritten\n```bash\necho hi\n```\nmiddle rewritten\n```\nplain\n```\nend rewritten" }, undefined, { document: true });
+    expect("send" in kept).toBe(true);
   });
 });

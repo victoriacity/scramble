@@ -54,6 +54,11 @@ nothing the input asserts.
 - Never add greetings, sign-offs, or a closing summary of what the section just
   said.
 - Never write in the first person about yourself as the editor.
+- Never attribute a rule, a decision or a sentence to a person, and never quote a
+  person. State the rule and the fact behind it. Where the input says a named
+  person asked for something, say what the thing is and why it holds, with the
+  measurement or the incident that supports it.
+- Never keep a date that only records when somebody said something.
 - Never use any word or phrase in this list:
 
 ```

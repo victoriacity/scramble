@@ -80,6 +80,8 @@ import {
   chooseText,
   composePrompt,
   citedTimestamps,
+  readDocumentTemplate,
+  splitSections,
   critiquePrompt,
   readTierBlock,
   mentionsIn,
@@ -263,6 +265,7 @@ interface Parsed {
 const BOOLEAN_FLAGS = new Set([
   "again",
   "comments",
+  "document",
   "calibrate",
   "dates",
   "json",
@@ -2378,8 +2381,67 @@ async function cmdLint(argv: string[], io: Io): Promise<number> {
  *
  *  This writes no row to the ledger. That file counts sends that met the
  *  rewriter, and a preview is not a send. */
+/** Rewrite one repository document for an outside reader, one section per model
+ *  call, and print the assembled document.
+ *
+ *  A SECTION THE GUARDS REFUSE KEEPS ITS ORIGINAL TEXT, and the refusal prints on
+ *  stderr naming the heading. A pass that silently dropped a section it could not
+ *  rewrite would hand back a shorter document that reads as finished. */
+async function cmdRewriteDocument(text: string, name: string, io: Io): Promise<number> {
+  const dir = io.moduleDir ? io.moduleDir() : "src";
+  const template = readDocumentTemplate(dir);
+  if (!template.ok) {
+    io.writeErr(`document: ${template.why}`);
+    return 1;
+  }
+  // ONE INSTRUCTION FILE, AND NO CHANNEL REGISTER. The first version appended the
+  // external register block, which describes a Slack channel's audience: "holds
+  // people who do not read this repository, including cross-functional
+  // stakeholders". The model wrote that description into the document, the
+  // instruction-echo guard caught it, and every section of the first run came back
+  // refused. The rules an outside reader needs live in prompts/document.md.
+  const cfg = rewriteConfig(io.env);
+  if (cfg.key === undefined) {
+    io.writeErr(`document: no model is configured; set SCRAMBLE_REWRITE_KEY to turn it on.`);
+    return 1;
+  }
+  const sections = splitSections(text);
+  const out: string[] = [];
+  let refused = 0;
+  for (const [i, section] of sections.entries()) {
+    const heading = (section.split("\n", 1)[0] ?? "").slice(0, 70);
+    const said = await rewriteWith(io.fetch, cfg, composePrompt(template.text, section));
+    let chosen = chooseText(section, said, instructionOf(template.text), { document: true });
+    // ONE MORE ASK, CARRYING WHAT THE GUARD SAW. Every guard here fires on
+    // something the MODEL did, so the model is the party that can fix it. The
+    // message path has asked twice since two agents watched the rewriter reinsert a
+    // banned form and lost the send for it.
+    if ("refuse" in chosen && chosen.retry !== undefined) {
+      const again = await rewriteWith(io.fetch, cfg, `${composePrompt(template.text, section)}\n\n${chosen.retry}`);
+      chosen = chooseText(section, again, instructionOf(template.text), { document: true });
+    }
+    if ("refuse" in chosen) {
+      refused += 1;
+      io.writeErr(`document: section ${i + 1} of ${sections.length} kept its original text (${chosen.why}): ${heading}`);
+      out.push(section);
+      continue;
+    }
+    io.writeErr(`document: section ${i + 1} of ${sections.length} rewritten: ${heading}`);
+    out.push(chosen.send.trim());
+  }
+  io.write(out.join("\n\n"));
+  io.writeErr(
+    `document: ${name}, ${sections.length} section(s), ${sections.length - refused} rewritten, ${refused} kept as written.`,
+  );
+  return 0;
+}
+
 async function cmdRewrite(argv: string[], io: Io): Promise<number> {
-  const file = argv.find((a) => !a.startsWith("--"));
+  // THE PARSER KNOWS WHICH FLAGS TAKE A VALUE, and a hand-rolled "first argument
+  // without dashes" read `--tier external` as the file name and tried to open a
+  // file called external.
+  const parsed = parseArgs(argv);
+  const file = parsed.positionals[0];
   let text: string;
   try {
     text =
@@ -2409,6 +2471,13 @@ async function cmdRewrite(argv: string[], io: Io): Promise<number> {
     }
     io.write(said.text.endsWith("\n") ? said.text : `${said.text}\n`);
     return 0;
+  }
+  // `--document` REWRITES A REPOSITORY DOCUMENT, section by section. The message
+  // instruction caps prose at 300 words and asks for a Slack message, so pointing
+  // it at a design document would delete most of the document. This path reads
+  // prompts/document.md, adds the register block, and sends one section per call.
+  if (argv.includes("--document")) {
+    return cmdRewriteDocument(text, file ?? "stdin", io);
   }
   const { chosen, retried, configured } = await attemptRewrite(text, io);
   if (!configured) {
