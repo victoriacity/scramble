@@ -1225,10 +1225,12 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     // readers. The table held my synthetic pair labelled as the founding incident
     // for an hour, and any number of agreeing readers would have reproduced that.
     const cwd = scratchDir("calibrate");
+    // THE ROWS NAME THEIR OWN CHANNELS, so the config has to map them for the
+    // read to resolve at all.
     writeSlackConfig(cwd, {
       appToken: "xapp-1",
       token: "xoxb-1",
-      channels: { general: "C1" },
+      channels: { general: "C1", "scramble-dev": "C2", "scramble-partner-dev": "C3" },
       agents: { dev: { token: "T", handle: "dev" } },
     });
     // Slack answers with two messages that score nothing like the recorded rows,
@@ -1241,19 +1243,29 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
         );
       return new Response(JSON.stringify({ ok: true, messages: [] }), { status: 200 });
     });
-    expect(
-      await main(["rewrites", "--calibrate", "--target", "general", "--as", "dev", "--backend", "slack"], io),
-    ).toBe(1);
+    expect(await main(["rewrites", "--calibrate", "--as", "dev", "--backend", "slack"], io)).toBe(1);
     const rows = writes.map((l) => JSON.parse(l) as { calibrate: string });
     expect(rows.length).toBeGreaterThan(0);
-    expect(rows.every((r) => r.calibrate === "drifted" || r.calibrate === "unreadable")).toBe(true);
+    // A ROW WHOSE MESSAGES ARE GONE reports as gone, and never as drift: the
+    // first message of one pair was deleted after the report that named it, and
+    // calling that drift would cry wolf on every run from here on.
+    expect(rows.some((r) => r.calibrate === "gone")).toBe(true);
+    expect(rows.every((r) => ["drifted", "unreadable", "gone"].includes(r.calibrate))).toBe(true);
     expect(errs.join(" ")).toContain("score something else now");
 
-    // WITHOUT A CHANNEL there is nothing to read: a ts is unique inside one
-    // conversation.
+    // EACH ROW NAMES ITS OWN CHANNEL, so the command runs without `--target` and
+    // reports which channel it searched. A ts is unique inside one conversation,
+    // and a search in the wrong channel answers "no such message" for a message
+    // that exists.
     const bare = stubIo(cwd, async () => new Response(JSON.stringify({ ok: true, messages: [] }), { status: 200 }));
-    expect(await main(["rewrites", "--calibrate", "--as", "dev", "--backend", "slack"], bare.io)).toBe(1);
-    expect(bare.errs.join(" ")).toContain("needs --target");
+    await main(["rewrites", "--calibrate", "--as", "dev", "--backend", "slack"], bare.io);
+    const named = bare.writes.map((l) => JSON.parse(l) as { calibrate: string; channel?: string });
+    expect(named.length).toBeGreaterThan(0);
+    // The gone row carries no channel read, since nothing is fetched for it.
+    const read = named.filter((r) => r.calibrate === "unreadable");
+    expect(read.length).toBeGreaterThan(0);
+    expect(read.every((r) => typeof r.channel === "string")).toBe(true);
+    expect(named.every((r) => r.calibrate === "unreadable" || r.calibrate === "gone")).toBe(true);
 
     // A ROW SLACK WILL NOT SHOW READS AS UNREADABLE, and never as agreement. The
     // pairs sit in channels this agent may not be in, and a silent skip would
@@ -1264,10 +1276,14 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     ).toBe(0);
     const unread = blind.writes.map((l) => JSON.parse(l) as { calibrate: string; why?: string });
     expect(unread.length).toBeGreaterThan(0);
-    expect(unread.every((r) => r.calibrate === "unreadable")).toBe(true);
-    expect(unread[0]!.why).toContain("slack has no message");
+    expect(unread.every((r) => r.calibrate === "unreadable" || r.calibrate === "gone")).toBe(true);
+    const missing = unread.filter((r) => r.calibrate === "unreadable");
+    expect(missing.length).toBeGreaterThan(0);
+    expect(missing[0]!.why).toContain("slack has no message");
 
-    // AND WITH NO SLACK CONFIG AT ALL it says so, with no row reported.
+    // AND WITH NO SLACK CONFIG AT ALL it says so, with no row reported. The
+    // backend is what reads Slack, so a missing config stops the run before any
+    // row is fetched.
     const noCfg = stubIo(scratchDir("calibrate-noconfig"), async () => new Response("{}", { status: 200 }));
     expect(
       await main(["rewrites", "--calibrate", "--target", "general", "--as", "dev", "--backend", "slack"], noCfg.io),

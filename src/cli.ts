@@ -2341,26 +2341,35 @@ async function cmdRewrites(argv: string[], io: Io): Promise<number> {
       io.writeErr(s.error ?? "slack unavailable");
       return 1;
     }
-    const channel = flags.get("target");
-    if (channel === undefined) {
-      io.writeErr(
-        "rewrites --calibrate needs --target <channel>: a ts is unique inside one conversation, so the " +
-          "row's two messages are read from the channel they were sent in.",
-      );
-      return 1;
-    }
+    // EACH ROW NAMES ITS OWN CHANNEL, so this verb takes no target. `--target`
+    // was the fallback while rows carried only timestamps, and a test requires
+    // every measured row to carry a channel, which left the fallback and its
+    // refusal unreachable. A ts is unique inside one conversation, so the channel
+    // belongs to the row.
     let drifted = 0;
     for (const row of CALIBRATION) {
       if (row.source !== "measured" || row.ts === undefined) continue;
+      // A ROW WHOSE MESSAGES ARE GONE IS NOT A FAILURE. The first message of the
+      // 0.968 pair was deleted after the duplicate report that named it, so the
+      // row stands on the reading taken while both messages lived, and a run that
+      // called that drift would cry wolf on every future run.
+      if (row.gone === true) {
+        io.write(JSON.stringify({ calibrate: "gone", score: row.score, ts: row.ts, what: row.what }));
+        continue;
+      }
+      const channel = row.channel!;
       const [a, b] = row.ts;
-      const first = await s.backend.storedMessage(channel, a, who);
-      const second = await s.backend.storedMessage(channel, b, who);
+      // THE THREAD ROOT COMES WITH THE ROW, since `conversations.history` omits
+      // replies and a reply read without its root answers "no such message".
+      const first = await s.backend.storedMessage(channel, a, who, row.threads?.[0]);
+      const second = await s.backend.storedMessage(channel, b, who, row.threads?.[1]);
       if (!first.ok || !second.ok) {
         io.write(
           JSON.stringify({
             calibrate: "unreadable",
             score: row.score,
             ts: row.ts,
+            channel,
             why: first.ok ? (second as { error: string }).error : first.error,
           }),
         );

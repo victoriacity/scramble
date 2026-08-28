@@ -461,6 +461,11 @@ export const CALIBRATION: Array<{
   scale: "content" | "short";
   score: number;
   label: "duplicate" | "wanted";
+  /** The channel the two messages were sent in. A ts is unique inside one
+   *  conversation, so a row without it can only be re-measured by guessing where
+   *  to look, and `--calibrate` cannot tell "this agent is not in that channel"
+   *  apart from "Slack has no such message". */
+  channel?: string;
   /** `measured` means the pair is two messages somebody sent. `synthetic` means
    *  somebody wrote it by hand, and it decides no threshold.
    *
@@ -468,6 +473,17 @@ export const CALIBRATION: Array<{
    *  recorded ts as hand-made: the install report at 0.800 came out of another
    *  agent's real sends and counted as synthetic. Provenance is its own field. */
   source: "measured" | "synthetic";
+  /** The thread root each message sits under, when it is a reply.
+   *
+   *  `conversations.history` OMITS THREAD REPLIES. The install pair is two replies
+   *  under two different roots, so a read of the channel's history answered "no
+   *  such message" for messages that are there. One page of 100 roots in that
+   *  channel hides 219 replies behind 43 of them. */
+  threads?: [string, string];
+  /** The messages no longer exist. The first message of the 0.968 pair was
+   *  deleted after the duplicate report that named it, so that row can never be
+   *  re-measured: it stands on the reading taken while both messages lived. */
+  gone?: true;
   ts?: [string, string];
 }> = [
   {
@@ -482,6 +498,12 @@ export const CALIBRATION: Array<{
     scale: "content",
     score: 0.968,
     label: "duplicate",
+    channel: "scramble-partner-dev",
+    gone: true,
+    // THE FIRST MESSAGE IS GONE FROM SLACK. An agent read the span around it and
+    // found 35 lines with that ts absent while its neighbour is present, so this
+    // row can never be re-measured: the 0.968 stands on their reading of it while
+    // it existed.
     ts: ["1787904164.508349", "1787904291.555039"],
   },
   {
@@ -491,6 +513,8 @@ export const CALIBRATION: Array<{
     scale: "content",
     score: 0.8,
     label: "wanted",
+    channel: "scramble-dev",
+    threads: ["1787660956.066699", "1787661139.135859"],
     ts: ["1787661004.777419", "1787661164.217229"],
   },
   {
@@ -519,6 +543,7 @@ export const CALIBRATION: Array<{
     scale: "content",
     score: 0.285,
     label: "wanted",
+    channel: "scramble-dev",
     ts: ["1787722977.171239", "1787723056.620949"],
   },
 ];
