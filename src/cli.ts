@@ -657,7 +657,7 @@ async function postText(
   text = chosen.send;
   const thread = flags.get("thread") ?? undefined;
   const status = statusTracker(io, backend, nameFor(flags, io));
-  await settleStatus(status?.clearExpired(), io);
+  await settleStatus(status?.clearExpired());
   if (backend === "slack") {
     const from = nameFor(flags, io);
     const s = slackBackend(io);
@@ -781,7 +781,7 @@ async function postText(
       channel,
       at: new Date().toISOString(),
     });
-    if (status !== undefined) await settleStatus(replyStatus(status, channel, from), io);
+    if (status !== undefined) await settleStatus(replyStatus(status, channel, from));
     // AND LAST, because a pipe cuts from the end. Three agents independently
     // ran this output through `tail -4`, `tail -3` and `tail -2`, each losing
     // the `posted:` line, and two of them sent the message again. The same ts,
@@ -791,7 +791,7 @@ async function postText(
   }
   const code = await postLocalCore(channel, text, flags, io, files, thread);
   if (code === 0 && status !== undefined)
-    await settleStatus(replyStatus(status, channel, nameFor(flags, io)), io);
+    await settleStatus(replyStatus(status, channel, nameFor(flags, io)));
   return code;
 }
 
@@ -888,7 +888,7 @@ async function cmdNext(argv: string[], io: Io): Promise<number> {
   const deadline = Date.now() + timeoutSec * 1000;
   const urls = streamUrls(url, name, channels, 0);
   const status = statusTracker(io, "local");
-  await settleStatus(status?.clearExpired(), io);
+  await settleStatus(status?.clearExpired());
   const responses: Response[] = [];
   const states = await Promise.all(
     urls.map(async (u) => {
@@ -932,7 +932,7 @@ async function cmdNext(argv: string[], io: Io): Promise<number> {
       await io.sleep(Math.min(remain, 100));
       const found = states.find((s) => s?.done && s.line);
       if (found?.line !== undefined) {
-        if (status !== undefined) await settleStatus(deliverStatus(status, found.line, name), io);
+        if (status !== undefined) await settleStatus(deliverStatus(status, found.line, name));
         emitDelivery(io, name, found.line as unknown as Record<string, unknown>);
         exitCode = 0;
         resolved = true;
@@ -1380,18 +1380,18 @@ function replyStatus(status: StatusManager, channel: string, agent: string): Pro
   return status.clearOn(channel, agent);
 }
 
-/** Await a status call, swallowing a failure so it can never fail the work that
- *  brackets it. The StatusManager already reports its own Slack failures on
- *  stderr; this catches an unexpected throw on top. A short-lived verb awaits
- *  every status call it fired, so ledger writes (delivery set / reply clear /
- *  expiry sweep) finish before the process exits. */
-async function settleStatus(p: Promise<unknown> | undefined, io: Io): Promise<void> {
+/** Await a status call, so a short-lived verb finishes the ledger write it fired
+ *  (delivery set, reply clear, expiry sweep) before the process exits.
+ *
+ *  THE MANAGER OWNS "A STATUS NEVER FAILS THE WORK". It reports its Slack
+ *  failures and its ledger-write failures on stderr and returns. A catch here
+ *  used to sit on top of that promise, and once the manager kept its own promise
+ *  the catch became unreachable: two guards for one failure, with the outer one
+ *  positioned to hide a regression in the inner one. A rejection here now takes
+ *  the verb down loudly, which names the owner that broke. */
+async function settleStatus(p: Promise<unknown> | undefined): Promise<void> {
   if (p === undefined) return;
-  try {
-    await p;
-  } catch (e) {
-    io.writeErr(`status: ${e instanceof Error ? e.message : String(e)}`);
-  }
+  await p;
 }
 
 /** The living-status message ts for a run, read from the status ledger by the
@@ -1474,7 +1474,7 @@ async function slackCmdNext(argv: string[], io: Io): Promise<number> {
   const name = nameFor(flags, io);
   const timeoutSec = intFlag(flags, "timeout", 300);
   const status = statusTracker(io, "slack", name);
-  await settleStatus(status?.clearExpired(), io);
+  await settleStatus(status?.clearExpired());
   const s = slackBackend(io);
   if (s.error !== undefined || s.backend === undefined) {
     io.writeErr(s.error ?? "slack unavailable");
@@ -1487,7 +1487,7 @@ async function slackCmdNext(argv: string[], io: Io): Promise<number> {
   // that a harness never mistakes for a quiet channel.
   if (r.code === 1) return 1;
   if (r.line !== undefined) {
-    if (status !== undefined) await settleStatus(deliverStatus(status, r.line, name), io);
+    if (status !== undefined) await settleStatus(deliverStatus(status, r.line, name));
     emitDelivery(io, name, r.line as unknown as Record<string, unknown>);
   }
   return 0;
@@ -1537,7 +1537,7 @@ async function slackCmdListen(argv: string[], io: Io): Promise<number> {
 async function messageCheckLocal(flags: Map<string, string>, io: Io): Promise<number> {
   const name = nameFor(flags, io);
   const status = statusTracker(io, "local");
-  await settleStatus(status?.clearExpired(), io);
+  await settleStatus(status?.clearExpired());
   const cursor = readCursor(io, name);
   const { url, token } = resolveConfig(flags, io);
   const res = await io.fetch(`${url}/agents/${encodeURIComponent(name)}/pending?since=${cursor}`, {
@@ -1549,7 +1549,7 @@ async function messageCheckLocal(flags: Map<string, string>, io: Io): Promise<nu
   }
   const deliveries = (await res.json()) as Array<{ seq: number; channel?: string; mentioned?: unknown }>;
   for (const d of deliveries) {
-    if (status !== undefined) await settleStatus(deliverStatus(status, d, name), io);
+    if (status !== undefined) await settleStatus(deliverStatus(status, d, name));
     emitDelivery(io, name, d as unknown as Record<string, unknown>);
   }
   if (deliveries.length) {
@@ -1581,7 +1581,7 @@ async function messageCheckSlack(flags: Map<string, string>, io: Io): Promise<nu
 
   const name = nameFor(flags, io);
   const status = statusTracker(io, "slack", name);
-  await settleStatus(status?.clearExpired(), io);
+  await settleStatus(status?.clearExpired());
   const cfg = loadSlackConfig(io);
   if (cfg === null) {
     io.writeErr(`${slackConfigPath(io)} is missing or malformed`);
@@ -1691,7 +1691,7 @@ async function messageCheckSlack(flags: Map<string, string>, io: Io): Promise<nu
         }
         continue;
       }
-      if (status !== undefined) await settleStatus(deliverStatus(status, line, name), io);
+      if (status !== undefined) await settleStatus(deliverStatus(status, line, name));
       emitDelivery(io, name, line as unknown as Record<string, unknown>);
     }
     if (newest !== undefined) next[channel] = newest;
@@ -3561,7 +3561,7 @@ export async function main(argv: string[], io: Io): Promise<number> {
   // whatever verb it is. Awaited (not fire-and-forget) so a short-lived verb
   // finishes the expiry sweep's ledger write before the process exits.
   // SCRAMBLE_STATUS=off makes this a no-op.
-  await settleStatus(statusTracker(io, backend, nameFor(parseArgs(argv.slice(1)).flags, io))?.clearExpired(), io);
+  await settleStatus(statusTracker(io, backend, nameFor(parseArgs(argv.slice(1)).flags, io))?.clearExpired());
   switch (argv[0]) {
     case "post":
       return cmdPost(argv.slice(1), io);

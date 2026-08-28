@@ -144,6 +144,31 @@ describe("status ledger", () => {
     expect(readRecords(statusPath(dir))).toEqual([{ channel: "general", agent: "ana", expiresAt: 123 }]);
   });
 
+  test("A LEDGER WRITE THAT FAILS IS REPORTED, and the caller carries on", async () => {
+    // `save` called mkdirSync and writeFileSync with nothing around them, and
+    // `withFileLock` calls mkdirSync before either, while the class comment
+    // promised that a failed status never fails the work it describes. On a host
+    // whose writes returned EIO that throw left `startExpiryTicker` holding a
+    // rejected promise nobody awaits, which takes a listener down. An agent read
+    // the source and reported it against the comment.
+    const dir = scratch("ledger-unwritable");
+    const errs: string[] = [];
+    const mgr = new StatusManager({
+      file: statusPath(dir),
+      backend: "local",
+      now: () => 0,
+      ttlMs: 10_000,
+      writeErr: (l) => errs.push(l),
+      fetch: async () => new Response(JSON.stringify({ ok: true }), { status: 200 }),
+    });
+    // A FILE where the `.scramble` directory belongs: every write under it throws.
+    writeFileSync(join(dir, ".scramble"), "this is a file");
+    await mgr.setOn("general", "ana");
+    await mgr.clearOn("general", "ana");
+    expect(await mgr.clearExpired()).toBe(0);
+    expect(errs.join(" ")).toContain("the status ledger could not be written");
+  });
+
   test("readRecords on a missing or corrupt file returns [] and never throws", () => {
     const dir = scratch("ledger-missing");
     expect(readRecords(join(dir, "nope.json"))).toEqual([]);

@@ -137,17 +137,32 @@ export class StatusManager {
    *  the shared file lock. The Slack call stays OUTSIDE it: holding a lock
    *  across a network request would stall every other process for as long as
    *  Slack takes. */
-  private locked<T>(change: (records: StatusRecord[]) => T): T {
-    return withFileLock(
-      this.cfg.file,
-      () => {
-        const records = this.load();
-        const out = change(records);
-        this.save(records);
-        return out;
-      },
-      (note) => this.report(note),
-    );
+  private locked<T>(change: (records: StatusRecord[]) => T, onFailure: T): T {
+    // A LEDGER WRITE THAT FAILS IS REPORTED, and it never reaches the caller.
+    // The class above promises exactly that and this did not keep it: `save`
+    // calls `mkdirSync` and `writeFileSync` with nothing around them, and
+    // `withFileLock` calls `mkdirSync` before either. On a host whose writes
+    // returned EIO that throw left `startExpiryTicker` holding a rejected
+    // promise nobody awaits, which takes the listener down. An agent read the
+    // source and reported it against the comment.
+    //
+    // The change is lost when the write fails, which is right for accounting: a
+    // status is a courtesy to the room, and the work it describes carries on.
+    try {
+      return withFileLock(
+        this.cfg.file,
+        () => {
+          const records = this.load();
+          const out = change(records);
+          this.save(records);
+          return out;
+        },
+        (note) => this.report(note),
+      );
+    } catch (e) {
+      this.report(`the status ledger could not be written: ${e instanceof Error ? e.message : String(e)}`);
+      return onFailure;
+    }
   }
 
   private async channelId(channel: string): Promise<string | undefined> {
@@ -255,7 +270,7 @@ export class StatusManager {
         return;
       }
       records.push({ channel, agent, expiresAt, ...(took && thread !== undefined ? { thread } : {}) });
-    });
+    }, undefined);
   }
 
   /** Clear the status OFF for a channel by deleting (or replacing the text of)
@@ -275,7 +290,7 @@ export class StatusManager {
     this.locked((records) => {
       const idx = records.findIndex((r) => r.channel === channel && r.agent === agent);
       if (idx >= 0) records.splice(idx, 1);
-    });
+    }, undefined);
   }
 
   // livingTs and livingTts are GONE with the living message. They existed so a
@@ -323,7 +338,7 @@ export class StatusManager {
         }
       }
       return dropped;
-    });
+    }, 0);
   }
 
   /** Long-lived listeners clear on expiry while they run: a ticker that calls
