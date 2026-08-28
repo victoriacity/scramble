@@ -1,10 +1,13 @@
-// src/server.ts: the HTTP surface over the store.
+// `src/server.ts` provides the HTTP interface over the store.
 import { DEFAULTS, type Attachment, type Message, type PostResult, type ServerOptions } from "./types";
 import type { ChannelStore } from "./store";
 
-/** serve() merges the server-only knobs (hostname/port) onto the shared ones.
- *  Typed fields only: the CLI owns --bind string parsing and hands serve() a
- *  concrete hostname and/or port, so there is exactly one interpretation site. */
+/**
+ *  The `serve()` function merges server-only settings for hostname and port onto
+ *  the shared options. The function accepts typed fields only. The CLI parses the
+ *  `--bind` string and passes a concrete hostname and/or port to `serve()`, so
+ *  there is exactly one interpretation site.
+ */
 export interface ServeOptions extends ServerOptions {
   port?: number;
   hostname?: string;
@@ -30,9 +33,10 @@ export function createHandler(store: ChannelStore, opts: ServerOptions = {}) {
   const repeatWindowMs = opts.repeatWindowMs ?? DEFAULTS.repeatWindowMs;
   const requireAuth = opts.token !== undefined;
 
-  // Guard bookkeeping. `joined` records who went through POST /agents/:name,
-  // which means "joined as an agent". Everyone else is treated as a human and never
-  // rate-limited, exactly as DESIGN.md says.
+  // The guard maintains its internal bookkeeping. The `joined` set records who
+  // called POST /agents/:name, which means the caller joined as an agent. The guard
+  // treats everyone else as a human and never rate-limits them, exactly as
+  // DESIGN.md says.
   const joined = new Set<string>();
   const rates = new Map<string, { times: number[]; lastText: string; lastTs: number }>();
   const encoder = new TextEncoder();
@@ -64,7 +68,8 @@ export function createHandler(store: ChannelStore, opts: ServerOptions = {}) {
     rec.lastTs = now;
   }
 
-  // A newline-delimited JSON stream: snapshot first, then live subscription.
+  // The newline-delimited JSON stream sends a snapshot first, followed by the
+  // live subscription.
   function lineStream(
     initial: Message[],
     matches: (m: Message) => boolean,
@@ -174,10 +179,12 @@ export function createHandler(store: ChannelStore, opts: ServerOptions = {}) {
     );
   }
 
-  /** A FINITE snapshot of what is pending for an agent at a cursor: the same
-   *  set the agent stream would have delivered first, as an array. `message
-   *  check` needs a bounded non-blocking read, so the store's client holds the
-   *  per-agent cursor and asks for everything after it. */
+  /**
+   *  The operation returns a finite snapshot of pending items for an agent at a
+   *  cursor as an array, containing the same set that the agent stream would have
+   *  delivered first. Because `message check` needs a bounded, non-blocking read, the
+   *  store's client holds the per-agent cursor and asks for everything after it.
+   */
   function agentPending(name: string, url: URL): Response {
     const msgs = store.readAll(sinceNum(url)).filter(
       (m) => m.from !== name && store.channelsFor(name).includes(m.channel),

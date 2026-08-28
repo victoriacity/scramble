@@ -1,4 +1,4 @@
-// channel: append-only JSONL log under <dir>/<channel>.jsonl
+// A channel is an append-only JSONL log stored under `<dir>/<channel>.jsonl`.
 import {
   appendFileSync,
   mkdirSync,
@@ -63,7 +63,8 @@ export function createStore(dir: string): ChannelStore {
   const listeners: Array<(m: Message) => void> = [];
   let nextSeq = 1;
 
-  // Rebuild from existing JSONL logs: next seq, membership, dedup keys.
+  // The system rebuilds the next sequence number, membership, and deduplication
+  // keys from existing JSONL logs.
   const stack: Array<[string, string]> = [[dir, ""]];
   while (stack.length) {
     const [d, rel] = stack.pop()!;
@@ -178,10 +179,10 @@ export function createStore(dir: string): ChannelStore {
   }
 
   function deliveryFor(name: string, msg: Message): Delivery {
-    // THE LOCAL STORE HAS NO HUMANS IN IT. Its posters are agents talking to a
-    // daemon on this machine, and nothing in a JSONL record could tell a person
-    // apart from a program anyway. The field says `agent`, because an absent
-    // field is what a reader mistakes for a human.
+    // The local store contains no humans. Its posters are agents communicating with
+    // a daemon on this machine, and a JSONL record cannot distinguish a person from
+    // a program. The field specifies `agent`, because a reader mistakes an absent
+    // field for a human.
     return { ...msg, mentioned: msg.mentions.includes(name), sender: "agent" };
   }
 

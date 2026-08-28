@@ -1,23 +1,27 @@
-/** WHAT A SCRAMBLE AGENT'S SLACK APP MUST DECLARE. One source, imported by both
- *  readers: `scripts/onboard-agent.ts` builds the manifest from it, and `doctor`
- *  compares a live app against it.
+/**
+ *  A single source defines what a scramble agent's Slack application must
+ *  declare, and two readers import it: `scripts/onboard-agent.ts` builds the
+ *  manifest from it, and `doctor` compares a live application against it.
  *
- * It is one list because it was two. The scopes lived here as `REQUIRED_SCOPES`
- * and again in the onboarding script, under a comment saying the duplication
- * was deliberate and that "`doctor` compares them so a drift between the two is
- * reported". That comparison was never written, and the two lists had already
- * diverged: the script asked for `reactions:write` and `reactions:read` and
- * this copy did not, so an agent could react and doctor would not have noticed
- * if it could not. The events had no second copy at all, which is worse: doctor
- * could not check a subscription it did not know about, and
- * `member_joined_channel` was added to the script while every app created
- * before it stayed subscribed to three events, silently, with an invite
- * delivering nothing (operator: "invited but inbox does not fire").
+ *  A single list exists because two lists existed previously. The required scopes
+ *  lived in this file as `REQUIRED_SCOPES` and appeared again in the onboarding
+ *  script under a comment stating that the duplication was deliberate so that
+ *  `doctor` would compare the two and report any drift. That comparison was never
+ *  written, and the two lists had already diverged: the script requested
+ *  `reactions:write` and `reactions:read` while this copy omitted them, so an
+ *  agent could react and `doctor` would not have noticed if the agent could not.
+ *  The events had no second copy at all, which caused a worse issue because
+ *  `doctor` could not check a subscription it did not know about. When the
+ *  script added `member_joined_channel`, every application created before that
+ *  change remained subscribed to three events, so invites silently delivered
+ *  nothing and the inbox did not fire.
  */
 
-/** Each scope with the capability that needs it. The reason travels with the
- *  name, so `--print-manifest` and every later reader get the why along with
- *  the what. */
+/**
+ *  Pair each scope with the capability that needs it. The reason travels with the
+ *  name, so `--print-manifest` and every later reader get the purpose along with
+ *  the name.
+ */
 export const SCOPES: Array<[string, string]> = [
   ["chat:write", "post a message, a threaded reply, and the living status message"],
   ["channels:history", "read a public channel"],
@@ -47,27 +51,33 @@ export const SCOPES: Array<[string, string]> = [
   ["assistant:write", "the automatic working status on an assistant thread"],
 ];
 
-/** Each event with what stops arriving without it. AN EVENT THE APP DOES NOT
- *  SUBSCRIBE TO IS NOT DELIVERED AND NOTHING REPORTS THAT: the socket opens, says
- *  hello, and stays quiet, which is indistinguishable from a channel where
- *  nobody is talking. */
-/** THE TWO LISTS COST DIFFERENT AMOUNTS TO CHANGE, and the difference decides
- *  how a manifest change is rolled out.
+/**
+ *  Each event is listed with what stops arriving without it. The system does not
+ *  deliver an event that the application does not subscribe to, and nothing
+ *  reports that. The socket opens, says hello, and stays quiet, which is
+ *  indistinguishable from a channel where nobody is talking.
+ */
+/**
+ *  The two lists require different operational effort to change, and this
+ *  difference determines how an operator rolls out a manifest update.
  *
- *  Adding a SCOPE needs `developerInstall`, which returns a NEW bot token and
- *  leaves every config holding a dead one, so a scope change is a rotation
- *  across every agent.
+ *  Adding a scope requires `developerInstall`. The call returns a new bot token
+ *  and invalidates the token in every configuration, so a scope change requires
+ *  a token rotation across every agent.
  *
- * Adding an EVENT is a manifest write and nothing else. Measured end to end on
- * a live app: `apps.manifest.update` with `reaction_added` added, no
- * `developerInstall` call, bot token sha256 `c34fc7458ffc` before and after,
- * `auth.test` ok on the same token, and `doctor --wake` delivered afterwards.
- * Everything keeps running while you do it.
+ *  Adding an event requires only a manifest write. An end-to-end measurement on
+ *  a live application confirmed this process: running `apps.manifest.update` with
+ *  `reaction_added` added required no `developerInstall` call, retained the bot
+ *  token sha256 `c34fc7458ffc` before and after, returned ok on `auth.test` using
+ *  the same token, and delivered `doctor --wake` afterward. Everything continues
+ *  running throughout the change.
  *
- *  What that measurement does NOT cover: whether a frame for a newly subscribed
- *  event ARRIVES at all. `toDelivery` returns nothing for any type that is not
- *  `message` or `app_mention`, so a subscription this list does not serve is
- *  inert, and its delivery is unproven until something reads it. */
+ *  That measurement does not determine whether the application receives frames for
+ *  a newly subscribed event. The `toDelivery` function returns values only for
+ *  `message` and `app_mention` types, so a subscription that this list does not
+ *  serve remains inert, and its delivery remains unproven until a component reads
+ *  it.
+ */
 export const BOT_EVENTS: Array<[string, string]> = [
   ["message.channels", "a message in a public channel"],
   ["message.groups", "a message in a private channel"],
@@ -80,3 +90,4 @@ export const BOT_EVENTS: Array<[string, string]> = [
 
 export const SCOPE_NAMES = SCOPES.map(([s]) => s);
 export const BOT_EVENT_NAMES = BOT_EVENTS.map(([e]) => e);
+

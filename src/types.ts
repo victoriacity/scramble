@@ -1,24 +1,39 @@
-// The seams every module shares. Hand-authored contract: modules are written in
-// parallel against THIS file, so it is the one place a shape is declared.
+// The seams every module shares are defined here. Modules are written in parallel
+// against this hand-authored contract, and every shape is declared in one place.
 
-/** One channel message. `seq` is global across all channels (one total order).
- *  `id` is the client-supplied dedup key; `mentions` is computed at append
- *  time so no reader parses text to learn who was addressed. `files` is present
- *  ONLY when the message carries attachments; when a message has no file, the
- *  field is ABSENT so every existing line shape is unchanged. Each entry's
- *  `path` is a local file a session can read (an attachment a human dropped in
- *  Slack, fetched onto disk). */
+/**
+ *  This represents a single channel message. The `seq` field provides a single
+ *  total order across all channels. Clients supply `id` as a deduplication key.
+ *  The system computes `mentions` at append time, so readers do not parse text
+ *  to determine who was addressed. The `files` field appears only when the
+ *  message carries attachments; when a message has no files, the field is absent
+ *  so existing line structures remain unchanged. For each entry, `path` points
+ *  to a local file that a session can read, containing an attachment fetched onto
+ *  disk after a user dropped it into Slack.
+ */
 export interface Attachment {
-  /** file id as the backend names it (Slack's file id, or a local ledger id). */
+  /**
+   *  The backend names the file id, which represents Slack's file id or a local
+   *  ledger id.
+   */
   id: string;
-  /** the original file name. */
+  /**
+   *  The file retains its original name.
+   */
   name: string;
-  /** the mime type of the bytes. */
+  /**
+   *  The field specifies the MIME type of the bytes.
+   */
   mime: string;
-  /** byte size when the source reports one. */
+  /**
+   *  The output includes the byte size when the source reports one.
+   */
   size?: number;
-  /** absolute path of a LOCAL copy a session can read; absent when the fetch
-   *  failed or the backend holds the file remote-only. */
+  /**
+   *  The value provides the absolute path of a local copy a session can read. The
+   *  value is absent when the fetch failed or the backend holds the file
+   *  remote-only.
+   */
   path?: string;
 }
 
@@ -28,72 +43,91 @@ export interface Message {
   channel: string;
   from: string;
   text: string;
-  /** Slack's own bytes for this message, present only when they differ from
-   *  `text`.
+  /**
+   *  This field stores Slack's own bytes for this message, and it appears only when
+   *  they differ from `text`.
    *
-   *  `text` IS DERIVED AND THE DERIVATION CHANGES. It renders `<@U…>` as a name
-   *  and undoes Slack's `&lt;`/`&gt;`/`&amp;`, and the unescape half was added
-   *  after listeners had already archived thousands of messages. Three agents then
-   *  spent an hour reconciling three hashes of one message: Slack's bytes, an old
-   *  build's rendering held in a wake file, and today's rendering. Slack loses
-   *  messages (four of the five behind the calibration table are gone), so the
-   *  wake file is the archive, and an archive holding only a derived form can no
-   *  longer be checked once the deriving function moves.
+   *  The system derives `text`, and the derivation changes. The derivation renders
+   *  `<@U…>` as a name and undoes Slack's `&lt;`/`&gt;`/`&amp;`. The unescape
+   *  component was added after listeners had already archived thousands of messages.
+   *  Three agents then spent an hour reconciling three hashes of one message: Slack's
+   *  bytes, an old build's rendering held in a wake file, and today's rendering.
+   *  Slack loses messages (four of the five behind the calibration table are gone),
+   *  so the wake file is the archive, and an archive holding only a derived form can
+   *  no longer be checked once the deriving function moves.
    *
-   *  Absent means `text` is already byte-exact, which is most messages. */
+   *  When this field is omitted, `text` is already byte-exact, which applies to most
+   *  messages.
+   */
   raw?: string;
   id: string;
   mentions: string[];
   files?: Attachment[];
-  /** present ONLY on a REPLY inside a thread: the id of the thread's root
-   *  message. A line carrying `thread` is a reply; a line without
-   *  it is top-level. Absent-when-unset like `files`, so the two optional
-   *  fields read as one design. */
+  /**
+   *  The `thread` field appears only on a reply inside a thread, containing the id
+   *  of the thread's root message. A line carrying `thread` is a reply, and a line
+   *  without it is top-level. The field is absent when unset, like `files`, so the
+   *  two optional fields read as one design.
+   */
   thread?: string;
 }
 
-/** A message as delivered to a subscriber: the record plus whether THIS
- *  subscriber was addressed (channel mention, or any message in a dm/ channel). */
+/**
+ *  When a subscriber receives a message, the delivery includes the record and
+ *  specifies whether that subscriber was addressed through a channel mention or
+ *  any message in a dm/ channel.
+ */
 export interface Delivery extends Message {
   mentioned: boolean;
-  /** WHO said it, on every line: `agent` is another app, and `operator`,
-   * `teammate` and `human` are people. Slack's own `bot_id` decides the
-   * human-versus-agent half, so that half is never unknown (operator: "Scramble
-   * should very clearly indicating whether the speaker is a HUMAN or an
-   * AGENT"). `operator` is the person who authorized this session, `teammate`
-   * is another person, and `human` is a person on a host whose config records
-   * no `humanUserId` to tell those two apart.
+  /**
+   *  Every line records who spoke: `agent` is another app, while `operator`,
+   *  `teammate` and `human` are people. Slack's own `bot_id` decides whether the
+   *  speaker is a human or an agent, so that distinction is never unknown, and
+   *  Scramble clearly indicates whether the speaker is a human or an agent. The
+   *  `operator` is the person who authorized this session, `teammate` is another
+   *  person, and `human` is a person on a host whose config records no `humanUserId`
+   *  to tell those two apart.
    *
-   *  One field, never a flag per kind: a boolean `operator` would have
-   *  needed a second flag the first time human-versus-agent mattered, and a
-   *  `human` boolean beside this would be the same fact written twice. */
+   *  A single field stores the speaker type. A boolean `operator` would have needed
+   *  a second flag the first time human-versus-agent mattered, and a `human` boolean
+   *  beside this would record the same fact twice.
+   */
   sender: "operator" | "teammate" | "human" | "agent";
-  /** WHERE the sender is running: hostname, working directory, scramble commit.
-   *  Published by the sender on the message itself, so it is a claim about its
-   *  own process and the only party that can know it. Absent when the sender
-   *  runs a build that does not stamp it. */
+  /**
+   *  The sender records where it is running: its hostname, working directory, and
+   *  scramble commit. The sender publishes this metadata on the message itself,
+   *  so the field is a claim about its own process and the sender is the only party
+   *  that can know it. The field is absent when the sender runs a build that does
+   *  not stamp it.
+   */
   origin?: { host: string; dir: string; commit?: string };
 }
 
-/** A joined participant. `persona` is the 2-4 sentence goal+lens text read
- *  from the workspace's .scramble/persona.md. */
+/**
+ *  The participant has joined the workspace. The `persona` field holds the 2-4
+ *  sentence goal and lens text read from the workspace's `.scramble/persona.md`.
+ */
 export interface Agent {
   name: string;
   persona: string;
   channels: string[];
 }
 
-/** Result of a post: the new seq plus the messages that arrived in the same
- *  channel between the sender's last-seen seq and this one (the crossings), so a
- *  sender learns what it raced with at the moment it speaks. */
+/**
+ *  A post returns the new sequence number and the messages that arrived in the
+ *  same channel between the sender's last-seen sequence number and this one (the
+ *  crossings), so a sender learns what it raced with at the moment it speaks.
+ */
 export interface PostResult {
   seq: number;
   crossings: Message[];
 }
 
-/** What a post attempt carries. `lastSeen` drives crossings; `id` drives
- *  dedup of a retried post. `files` (optional) attaches uploaded files so a
- *  sent message arrives carrying them. */
+/**
+ *  A post attempt carries these properties. The `lastSeen` field drives crossings,
+ *  and the `id` field drives deduplication of a retried post. The optional `files`
+ *  field attaches uploaded files so a sent message arrives carrying them.
+ */
 export interface PostInput {
   channel: string;
   from: string;
@@ -101,12 +135,17 @@ export interface PostInput {
   id: string;
   lastSeen?: number;
   files?: Attachment[];
-  /** the thread-root id when this post is the reply inside a thread; absent for
-   *  a top-level message. Mirrors Message.thread. */
+  /**
+   *  This field contains the thread-root ID when this post is a reply inside a
+   *  thread, and is absent for a top-level message. It mirrors Message.thread.
+   */
   thread?: string;
 }
 
-/** Server knobs. `token` unset means no auth check (localhost default). */
+/**
+ *  Server configuration settings. Leaving `token` unset disables authentication
+ *  checks, which is the default behavior on localhost.
+ */
 export interface ServerOptions {
   maxChars?: number;
   token?: string;
@@ -121,5 +160,9 @@ export const DEFAULTS = {
   port: 7737,
 } as const;
 
-/** A channel is a DM iff its name starts with this prefix: `dm/<a>/<b>`. */
+/**
+ *  A channel is a direct message if and only if its name starts with the
+ *  `dm/<a>/<b>` prefix.
+ */
 export const DM_PREFIX = "dm/";
+

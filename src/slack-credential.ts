@@ -1,39 +1,47 @@
-// src/slack-credential.ts: THE SLACK CLI'S APP-CONFIG CREDENTIAL, kept fresh.
+// src/slack-credential.ts: The Slack CLI's app-configuration credential, kept
+// fresh.
 //
-// `doctor` reads an app's manifest to check its scopes and its subscribed
-// events, and that call takes the `xoxe.xoxp` app-config token the Slack CLI
-// writes to ~/.slack/credentials.json. The token lives TWELVE HOURS.
+// `doctor` reads an application manifest to check its scopes and its subscribed
+// events. That call requires the `xoxe.xoxp` app-configuration token that the
+// Slack CLI writes to ~/.slack/credentials.json. The token lives for twelve hours.
 //
-// Nothing on either host rotated it, so doctor lost the manifest check twice a
-// day on every machine, and the fix on offer was a person running `slack login`
-// again. An agent read the expiry out of the file and named the real root: the
-// entry carries a `refresh_token`, and `tooling.tokens.rotate` exchanges it for
-// a fresh pair. A login writes a credential that dies tonight; rotation keeps
-// it alive without anybody.
+// Neither host rotated the token, so `doctor` lost the manifest check twice a day
+// on every machine, and the available fix required a person to run `slack login`
+// again. An agent read the expiration time from the file and identified the
+// underlying cause: the entry carries a `refresh_token`, and
+// `tooling.tokens.rotate` exchanges it for a fresh pair. A login writes a
+// credential that expires tonight, whereas automated rotation keeps it valid
+// without manual intervention.
 
 import { renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 const ROTATE_URL = "https://slack.com/api/tooling.tokens.rotate";
 
-/** Seconds of remaining life below which the token is treated as spent. Slack
- *  gives 12 hours; a minute of slack covers a call that starts just before the
- *  boundary and reaches Slack just after it. */
+/**
+ *  The system treats the token as spent when its remaining life falls below this
+ *  number of seconds. Slack gives 12 hours. A minute of slack covers a call that
+ *  starts just before the boundary and reaches Slack just after it.
+ */
 const MIN_LIFE_SECONDS = 60;
 
 export interface CliCredential {
-  /** The credentials.json key, which is the team or enterprise id. Named in
-   *  every failure so a person knows which entry to look at, and never the
-   *  token itself. */
+  /**
+   *  The key in credentials.json is the team or enterprise id. Every failure names
+   *  this key so a person knows which entry to inspect, and omits the token itself.
+   */
   key: string;
   token: string;
   refreshToken: string;
-  /** Unix seconds. 0 when the file carries no expiry. */
+  /**
+   *  The value is recorded in Unix seconds, and is 0 when the file carries no expiry.
+   */
   exp: number;
 }
 
-/** The first entry carrying a token, which is the entry `declaredManifest` has
- *  always used. */
+/**
+ *  `declaredManifest` has always used the first entry that carries a token.
+ */
 export function firstCredential(fileText: string): { ok: true; cred: CliCredential } | { ok: false; why: string } {
   let parsed: unknown;
   try {
@@ -59,18 +67,22 @@ export function firstCredential(fileText: string): { ok: true; cred: CliCredenti
   return { ok: false, why: "no entry in the credentials file carries a token" };
 }
 
-/** Has this credential got useful life left? An entry with no `exp` is taken at
- *  face value: the file predates the field, and a rotation attempt on a live
- *  token would spend a refresh token for nothing. */
+/**
+ *  The system accepts an entry with no `exp` at face value when evaluating whether
+ *  a credential has useful life left. The file predates the field, and attempting
+ *  rotation on a live token would spend a refresh token for nothing.
+ */
 export function stillGood(cred: CliCredential, nowSeconds: number): boolean {
   return cred.exp === 0 || cred.exp - nowSeconds > MIN_LIFE_SECONDS;
 }
 
-/** The file text with ONE entry's token, refresh token and expiry replaced.
+/**
+ *  The file text replaces the token, refresh token, and expiry of a single entry.
  *
- *  Every other field of that entry and every other entry survive untouched:
- *  this file belongs to the Slack CLI, it holds credentials for whatever else
- *  the login owns, and a rewrite that dropped a key would take those with it. */
+ *  All other fields in that entry and every other entry remain untouched. The
+ *  Slack CLI owns this file, which stores credentials for everything else the
+ *  login owns, so a rewrite that dropped a key would discard those credentials.
+ */
 export function withRotated(
   fileText: string,
   key: string,
@@ -89,7 +101,10 @@ export function withRotated(
   return `${JSON.stringify(parsed, null, 2)}\n`;
 }
 
-/** What Slack returned for a rotate call, read defensively. */
+/**
+ *  The client defensively reads the response that Slack returns for a rotation
+ *  call.
+ */
 export function rotatedFrom(body: unknown): { token: string; refreshToken: string; exp: number } | undefined {
   if (typeof body !== "object" || body === null) return undefined;
   const b = body as { ok?: unknown; token?: unknown; refresh_token?: unknown; exp?: unknown };
@@ -101,13 +116,16 @@ export function credentialsPath(home: string): string {
   return join(home, ".slack", "credentials.json");
 }
 
-/** A usable app-config token, rotating it first when the stored one is spent.
+/**
+ *  The system returns a usable app-config token, rotating it first when the stored
+ *  token is spent.
  *
- *  THE WRITE IS ATOMIC AND IT HAPPENS BEFORE THE TOKEN IS USED. Slack retires
- *  the old refresh token the moment it issues a new pair, so a rotation whose
- *  result never reaches disk destroys the credential. Written to a temporary
- *  file in the same directory and renamed over the original, so a reader sees
- *  the old file or the new one. */
+ *  The write is atomic and occurs before the token is used. Slack retires the old
+ *  refresh token the moment it issues a new pair, so a rotation whose result never
+ *  reaches disk destroys the credential. The process writes the token to a
+ *  temporary file in the same directory and renames that file over the original,
+ *  so a reader sees the old file or the new one.
+ */
 export async function freshCliToken(
   fileText: string,
   path: string,
@@ -156,8 +174,8 @@ export async function freshCliToken(
     writeFileSync(tmp, withRotated(fileText, cred.key, fresh, stampedAt), { mode: 0o600 });
     renameSync(tmp, path);
   } catch (e) {
-    // THE NEW PAIR EXISTS AND THE OLD ONE IS DEAD. Saying so is the whole job of
-    // this branch: a caller that reads "rotated" here and loses the write would
+    // This branch exists entirely to state that the new pair exists and the old pair
+    // is dead. If a caller reads "rotated" here and loses the write, the caller would
     // find the credential gone on the next run with nothing explaining it.
     return {
       ok: false,
@@ -169,3 +187,4 @@ export async function freshCliToken(
   }
   return { ok: true, token: fresh.token, rotated: true };
 }
+
