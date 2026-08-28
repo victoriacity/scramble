@@ -33,8 +33,11 @@ USER_NAME="sy""zs"
 HOME_DIRS="/j""fs/home|/st""orage/home"
 IDS='\b(U0|T0|E0|B0|A0|W0|C0|D0|F0|G0|S0)[0-9A-Z]{8,}'
 
+# `-m` SHOWS THE MERGE DIFFS. Without it `git log -p` prints nothing for a merge
+# commit, and this history carries 41 of them: 4,627,456 bytes of diff text became
+# 6,676,836 with the flag, so 31 percent of the content sat outside the scan.
 DUMP="$WORK/dump.txt"
-{ git log -p --all; git log --all --format='%an <%ae>%n%cn <%ce>%n%B'; } > "$DUMP" 2>&1
+{ git log -p -m --all; git log --all --format='%an <%ae>%n%cn <%ce>%n%B'; } > "$DUMP" 2>&1
 
 # `-a` TREATS THE DUMP AS TEXT. A diff of a binary blob makes grep answer "binary
 # file matches" and stop counting, which reads as one hit whatever the file holds.
