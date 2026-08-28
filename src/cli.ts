@@ -4172,7 +4172,10 @@ export function sweepAgeMinutes(io: Io, agent: string, nowMs = Date.now()): numb
   // Every run writes the cursor file, including a run that delivered nothing, so the
   // mtime moves whenever a sweep completes.
   try {
-    return Math.round((nowMs - statSync(cursorPath(io, agent)).mtimeMs) / 60000);
+    // `Math.round` OF A TINY NEGATIVE IS -0, which fails a comparison against 0. A
+    // file written microseconds ago, or a clock that stepped back, produces it.
+    const minutes = Math.round((nowMs - statSync(cursorPath(io, agent)).mtimeMs) / 60000);
+    return minutes === 0 ? 0 : minutes;
   } catch {
     return undefined;
   }
