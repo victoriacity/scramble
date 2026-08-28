@@ -1455,7 +1455,7 @@ export class SlackBackend {
    */
   private async normalize(token: string, text: string): Promise<string> {
     // A broadcast addresses every agent in the channel, but arrived as raw text that
-    // matched nothing. When the operator wrote `<!channel> ensure everything you write
+    // matched nothing. A broadcast reading `<!channel> ensure everything you write
     // to files are English`, the message reached no agent inbox. The payload arrived
     // with `mentions: []` and `mentioned: false`, so every agent saw the broadcast
     // only during the 15-minute sweep, if at all. Three agents measured this behavior

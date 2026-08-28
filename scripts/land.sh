@@ -145,7 +145,7 @@ if ! "${SCRAMBLE_BUN:-bun}" "$(git rev-parse --show-toplevel)/src/bin.ts" lint "
   fail "the commit message breaks the language rules above. Rewrite it and run again."
 fi
 
-# ONE SENTENCE. The operator: "commit message should be 1 SENTENCE". Every message in this repo's
+# ONE SENTENCE per commit message, which this script enforces. Every message in this repo's
 # history was a subject line plus paragraphs of reasoning, and `git log` is the wrong place for
 # that: the reasoning belongs in the code comment beside the change, where a reader meets it.
 #

@@ -68,8 +68,8 @@ in `src/`; see "wrappers" at the end.
    that: `install.sh` writes to the shared store and repoints the shared
    launcher, whichever checkout it ran from.
 
-   KEEP IT THAT WAY. The operator asked for it directly: "We should have one
-   scramble version per machine so every agent picks up the same update."
+   KEEP IT THAT WAY. One scramble version per machine is the rule, so every agent
+   on a host picks up the same update.
    `SCRAMBLE_BIN` moves the launcher somewhere else, and pointing it at a private
    directory on a shared host splits that machine across versions, which is the
    thing the sentence above rules out. An agent tried a private launcher and

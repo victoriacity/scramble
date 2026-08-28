@@ -880,13 +880,12 @@ export function chooseText(
     };
   }
   if (rewritten.text.trim() === original.trim()) return { send: original, note: "" };
-  // The instruction remains distinct from the message text. On a second attempt,
-  // the model receives the guard's complaint appended to the instruction. One
-  // response included that complaint as a closing paragraph addressed to the
-  // operator: "The reviewer rejected your previous attempt because ... You must
-  // rewrite the message again without that added cause." Sending that reply would
-  // have posted the guard's words to the channel as if the operator had written
-  // them to a peer.
+  // The instruction remains distinct from the message text. On a second attempt the
+  // model receives the guard's complaint appended to the instruction, and one
+  // answer came back carrying that complaint as a closing paragraph addressed to
+  // the author: the reviewer rejected the previous attempt, so rewrite the message
+  // without the added cause. Sending that reply would have posted the guard's own
+  // words to the channel as though a person had written them to a peer.
   //
   // This file defines the retry sentence as fixed text, so the detector is exact.
   if (instruction !== undefined && instruction !== "") {

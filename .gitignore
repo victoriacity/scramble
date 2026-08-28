@@ -28,8 +28,7 @@ slack-auth-ticket.txt
 !*.example.env
 rewrite.env
 
-# THE AGENT'S OWN WORKING STATE STAYS OFF THE PUBLIC REPO (operator: "remove
-# .akari and .scramble from the public github"). Both directories hold how THIS
+# THE AGENT'S OWN WORKING STATE STAYS OFF THE PUBLIC REPO. Both directories hold how THIS
 # host runs the tool: harness reproducers, gate config, hook scripts, room logs
 # and the local persona. The files stay on disk for the agents that use them and
 # leave the published history.
