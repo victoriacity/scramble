@@ -110,8 +110,10 @@ import {
   closeItemById,
   readSent,
   allWords,
+  CALIBRATION,
   closestSaid,
   nearReport,
+  pairScore,
   readSentRows,
   recordSent,
   type SentRow,
@@ -261,6 +263,7 @@ interface Parsed {
 const BOOLEAN_FLAGS = new Set([
   "again",
   "comments",
+  "calibrate",
   "dates",
   "json",
   "near",
@@ -2324,6 +2327,65 @@ async function cmdRewrites(argv: string[], io: Io): Promise<number> {
   // who writes English by the operator's rule cannot produce Chinese samples on
   // request. They said the tool can gather them, so every send records what it
   // measured and this reads the pile back.
+  // `--calibrate` RE-MEASURES EVERY MEASURED ROW FROM SLACK. An agent read the
+  // table, ran the same function I run, and named the flaw: two readers calling
+  // one function on one table measure the readers. The table held my synthetic
+  // pair labelled as the founding incident for an hour, and any number of
+  // agreeing readers would have reproduced that. A row that names its two
+  // messages can be fetched and scored again, which is the only reading that
+  // does not come from me.
+  if (flags.has("calibrate")) {
+    const who = flags.get("as") ?? nameFor(flags, io);
+    const s = slackBackend(io);
+    if (s.error !== undefined || s.backend === undefined) {
+      io.writeErr(s.error ?? "slack unavailable");
+      return 1;
+    }
+    const channel = flags.get("target");
+    if (channel === undefined) {
+      io.writeErr(
+        "rewrites --calibrate needs --target <channel>: a ts is unique inside one conversation, so the " +
+          "row's two messages are read from the channel they were sent in.",
+      );
+      return 1;
+    }
+    let drifted = 0;
+    for (const row of CALIBRATION) {
+      if (row.source !== "measured" || row.ts === undefined) continue;
+      const [a, b] = row.ts;
+      const first = await s.backend.storedMessage(channel, a, who);
+      const second = await s.backend.storedMessage(channel, b, who);
+      if (!first.ok || !second.ok) {
+        io.write(
+          JSON.stringify({
+            calibrate: "unreadable",
+            score: row.score,
+            ts: row.ts,
+            why: first.ok ? (second as { error: string }).error : first.error,
+          }),
+        );
+        continue;
+      }
+      const again = pairScore(allWords(first.text), allWords(second.text));
+      const moved = Math.abs(again.overlap - row.score) > 0.005 || again.scale !== row.scale;
+      if (moved) drifted += 1;
+      io.write(
+        JSON.stringify({
+          calibrate: moved ? "drifted" : "holds",
+          recorded: { score: row.score, scale: row.scale },
+          measured: { score: Number(again.overlap.toFixed(3)), scale: again.scale },
+          ts: row.ts,
+          what: row.what,
+        }),
+      );
+    }
+    io.writeErr(
+      drifted === 0
+        ? "calibrate: every readable row scores what the table records."
+        : `calibrate: ${drifted} row(s) score something else now. The table is wrong, the code changed, or both.`,
+    );
+    return drifted === 0 ? 0 : 1;
+  }
   if (flags.has("near")) {
     const who = flags.get("as") ?? nameFor(flags, io);
     io.write(nearReport(readSentRows(sentPath(slackConfigPath(io), who)), NEAR_DUPLICATE_OVERLAP.content));

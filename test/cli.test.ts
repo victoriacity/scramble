@@ -1219,6 +1219,62 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     expect(some.writes.join(" ")).toContain("0.710  ts 3.3 against 2.2 in general");
   });
 
+  test("`rewrites --calibrate` re-measures every measured row from Slack", async () => {
+    // An agent read the calibration table, ran the same function I run, and named
+    // the flaw: two readers calling one function on one table measure the
+    // readers. The table held my synthetic pair labelled as the founding incident
+    // for an hour, and any number of agreeing readers would have reproduced that.
+    const cwd = scratchDir("calibrate");
+    writeSlackConfig(cwd, {
+      appToken: "xapp-1",
+      token: "xoxb-1",
+      channels: { general: "C1" },
+      agents: { dev: { token: "T", handle: "dev" } },
+    });
+    // Slack answers with two messages that score nothing like the recorded rows,
+    // so every readable row must report as drifted.
+    const { io, writes, errs } = stubIo(cwd, async (u) => {
+      if (String(u).includes("conversations.history"))
+        return new Response(
+          JSON.stringify({ ok: true, messages: [{ ts: new URL(String(u)).searchParams.get("oldest"), text: "one" }] }),
+          { status: 200 },
+        );
+      return new Response(JSON.stringify({ ok: true, messages: [] }), { status: 200 });
+    });
+    expect(
+      await main(["rewrites", "--calibrate", "--target", "general", "--as", "dev", "--backend", "slack"], io),
+    ).toBe(1);
+    const rows = writes.map((l) => JSON.parse(l) as { calibrate: string });
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every((r) => r.calibrate === "drifted" || r.calibrate === "unreadable")).toBe(true);
+    expect(errs.join(" ")).toContain("score something else now");
+
+    // WITHOUT A CHANNEL there is nothing to read: a ts is unique inside one
+    // conversation.
+    const bare = stubIo(cwd, async () => new Response(JSON.stringify({ ok: true, messages: [] }), { status: 200 }));
+    expect(await main(["rewrites", "--calibrate", "--as", "dev", "--backend", "slack"], bare.io)).toBe(1);
+    expect(bare.errs.join(" ")).toContain("needs --target");
+
+    // A ROW SLACK WILL NOT SHOW READS AS UNREADABLE, and never as agreement. The
+    // pairs sit in channels this agent may not be in, and a silent skip would
+    // turn an unread row into a passing one.
+    const blind = stubIo(cwd, async () => new Response(JSON.stringify({ ok: true, messages: [] }), { status: 200 }));
+    expect(
+      await main(["rewrites", "--calibrate", "--target", "general", "--as", "dev", "--backend", "slack"], blind.io),
+    ).toBe(0);
+    const unread = blind.writes.map((l) => JSON.parse(l) as { calibrate: string; why?: string });
+    expect(unread.length).toBeGreaterThan(0);
+    expect(unread.every((r) => r.calibrate === "unreadable")).toBe(true);
+    expect(unread[0]!.why).toContain("slack has no message");
+
+    // AND WITH NO SLACK CONFIG AT ALL it says so, with no row reported.
+    const noCfg = stubIo(scratchDir("calibrate-noconfig"), async () => new Response("{}", { status: 200 }));
+    expect(
+      await main(["rewrites", "--calibrate", "--target", "general", "--as", "dev", "--backend", "slack"], noCfg.io),
+    ).toBe(1);
+    expect(noCfg.errs.join(" ")).toContain("missing or malformed");
+  });
+
   test("an unwritable rewrite record REPORTS itself and the message still goes", async () => {
     // The record is accounting; the message is the point.
     const cwd = scratchDir("rewrites-locked");
