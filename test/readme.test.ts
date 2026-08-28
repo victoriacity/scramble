@@ -17,7 +17,7 @@ const joinDoc = readFileSync(join(ROOT, "JOIN.md"), "utf8");
 const GLOBAL_FLAGS = ["--url", "--token"];
 
 // Parse the authoritative CLI contract table out of PLAN.md into
-// verb -> Set<flags, not including the global ones>.
+// verb -> Set<flags>, leaving the global flags out.
 function parseContract(): Map<string, Set<string>> {
   const verbs = new Map<string, Set<string>>();
   const lines = plan.split("\n");
@@ -31,7 +31,7 @@ function parseContract(): Map<string, Set<string>> {
     if (cells[0] === "command") continue; // column header row
     const verb = cells[1]!.replace(/`/g, "").trim().split(/\s+/)[0]!;
     const flags = cells[2]!.match(/--[a-z-]+/g) ?? [];
-    // MERGED, never replaced. The key is the first word, and the contract has
+    // MERGED INTO WHAT IS THERE. The key is the first word, and the contract has
     // several rows per verb: `message send`, `message read`, `message react`.
     // Replacing kept only the last row's flags, so a flag documented on
     // `message send` failed this check because a later `message` row had none
@@ -151,7 +151,8 @@ describe("README content", () => {
   test("leads with Slack and keeps the local store to a short fallback", () => {
     // The README is for the situation scramble exists for: the conversation is
     // already in Slack. The local store is a fallback and a test fixture, so it
-    // gets a mention rather than a tour of daemons, tokens and tunnels.
+    // gets a mention, where a tour of daemons, tokens and tunnels would bury the
+    // Slack path a reader came for.
     const slack = readme.indexOf("## Slack");
     const local = readme.indexOf("## The local store");
     expect(slack).toBeGreaterThan(0);
@@ -159,7 +160,7 @@ describe("README content", () => {
     // Its section is short: everything after that heading is a handful of lines.
     const tail = readme.slice(local).split("\n").filter((l) => l.trim() !== "");
     expect(tail.length).toBeLessThan(22);
-    // And the daemon's operational detail lives in OPERATING.md, not here.
+    // And the daemon's operational detail lives in OPERATING.md.
     expect(readme).toContain("OPERATING.md");
     expect(readme).not.toContain("ssh -L");
   });

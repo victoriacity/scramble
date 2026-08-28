@@ -1,4 +1,4 @@
-// test/attachment.test.ts — the attachment verbs against injected seams:
+// test/attachment.test.ts: the attachment verbs against injected seams:
 // the slack three-step upload flow ORDER, message send --attach, local
 // upload + view, plus the pure attachments helpers. No token and no network:
 // the slack `fetch` seam is a fake and file writes go to real temp dirs.
@@ -213,7 +213,7 @@ describe("attachment upload through the slack backend", () => {
         const form = new URLSearchParams(String(init?.body ?? ""));
         // The channel travels as a BARE id under `channel_id`. Slack answers
         // channel_not_found to `channels=["C1"]`, so a JSON-array channel value
-        // is the defect this asserts against, not an accepted alternative.
+        // is the defect this asserts against, and Slack accepts no such form.
         // channel_id IS sent: with the bytes uploaded correctly it makes a REAL
         // share, which is what lets the channel read the file.
         expect(form.get("channel_id")).toBe("C1");
@@ -520,8 +520,9 @@ describe("the ts of the message a completed upload posted", () => {
   });
 
   test("no share means no ts, and the upload still succeeds", async () => {
-    // Absent rather than invented: the caller closes against a wall-clock marker
-    // and skips the sent record, since an id nobody can look up is worse.
+    // ABSENT, since an invented id is worse: the caller closes against a
+    // wall-clock marker and skips the sent record, because nobody can look up an
+    // id that was made up.
     for (const files of [
       [{ id: "F", permalink: "https://x/f" }],
       [{ id: "F", permalink: "https://x/f", shares: null }],

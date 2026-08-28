@@ -8,9 +8,9 @@ REPO="$(pwd)"
 
 # bun resolution, widest first. An akari worker runs with a different HOME than
 # the lead (uid 0, full rootfs), so $HOME/.bun is not a safe single answer. A
-# host whose bun is somewhere else sets SCRAMBLE_BUN rather than editing this
-# file: an absolute path from one machine does not belong in a shared repo. On failure print EVERY candidate
-# tried, not a summary.
+# host whose bun is somewhere else sets SCRAMBLE_BUN, since an absolute path from
+# one machine does not belong in a shared repo. On failure print EVERY candidate
+# tried, and never a summary.
 BUN=""
 for cand in "$(command -v bun 2>/dev/null)" "${SCRAMBLE_BUN:-}" \
             "$HOME/.bun/bin/bun" /usr/local/bin/bun; do
@@ -103,7 +103,7 @@ python3 - <<'LANGEOF'
 import re, subprocess, sys
 # The operator to every agent in the channel: "ensure everything you write to files are English
 # unless it is explicitly requested as another language". This repo is public and several agents
-# commit to it, so the rule holds here rather than in each agent's memory.
+# commit to it, so the rule holds here, where each agent's memory would hold it unevenly.
 #
 # CJK, Hiragana, Katakana, Hangul, Cyrillic, Arabic, Hebrew, Thai, Devanagari.
 # Latin-1 punctuation is NOT flagged: an em dash is typography, and the language
@@ -140,7 +140,7 @@ lang_rc=$?
 # after the communication skill shipped, and it belongs in the gate because a
 # rule anybody has to remember is one that holds until they are busy.
 echo "== every tracked markdown file passes the language check =="
-# EVERY TRACKED MARKDOWN FILE, which is the whole repo an outsider reads: the
+# EVERY TRACKED MARKDOWN FILE, covering the repo an outsider reads: the
 # README first, the skills, the joining instructions, the design and plan
 # documents, this agent's published persona.
 #
@@ -204,7 +204,7 @@ tsc_rc=$?
 # it in silence. src/rewrite.ts shipped that way for an hour: 189 lines, no test, and a green gate.
 # NO CREDENTIAL-SHAPED STRING IN A TRACKED FILE. This repo is PUBLIC and five agents commit to it,
 # and a key was about to be placed in the checkout by hand. The cost of a leak is a rotation across
-# every agent on two hosts, so this runs on every gate rather than on anyone's memory.
+# every agent on two hosts, so this runs on every gate, where memory would hold it unevenly.
 echo "== no credential-shaped string in a tracked file =="
 # A PLACEHOLDER IS NOT A LEAK. The setup document shows the shape of a config
 # with `xapp-1-A0EXAMPLE001-...` in it, and a scan that cannot tell that from a

@@ -1,4 +1,4 @@
-// test/status.test.ts — the AUTOMATIC working-status surface. Status is set by
+// test/status.test.ts: the AUTOMATIC working-status surface. Status is set by
 // delivery of an addressed message and cleared by a reply, has a TTL, records to
 // .scramble/status.json, and talks to Slack through an injected fetch seam so no
 // token and no network are needed. Status is never a message and SCRAMBLE_STATUS=off
@@ -234,7 +234,7 @@ describe("status local backend", () => {
 // --- slack backend ------------------------------------------------------
 
 describe("status slack backend", () => {
-  // A status is SLACK'S OWN status on a thread, not a message. Posting a
+  // A status is SLACK'S OWN status on a thread. Posting a
   // `working` line into the channel was the wrong shape, and setStatus works on
   // an ordinary channel thread, which is what makes the message unnecessary.
   test("a status on a thread is Slack's own status, and NO message is posted", async () => {
@@ -490,7 +490,7 @@ describe("status through the CLI", () => {
     await main(["message", "check", "--as", "ana"], ioCheck);
     expect(recorded(dir)).toHaveLength(1); // a status EXISTS in the ledger
 
-    // history: only the one real message, never a status line.
+    // history: the one real message alone, with no status line in it.
     const { io, writes } = await mainIo(dir, (u, init) => handler(new Request(u, init)), { SCRAMBLE_STATUS: "off" });
     const code = await main(["history", "general"], io);
     expect(code).toBe(0);
