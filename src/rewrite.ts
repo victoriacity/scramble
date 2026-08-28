@@ -44,10 +44,19 @@ export interface RewriteConfig {
   timeoutMs: number;
 }
 
-/** MEASURED, from this host against the configured LiteLLM: a cold call on a
- *  1293-character draft took 12282 ms, and the two calls after it returned in 92
- *  and 47 ms from the service's cache. Five seconds refused the send on any draft
- *  the model had not seen, and the refusal read as an endpoint failure. */
+/** MEASURED, from this host against the configured LiteLLM. Five cold calls on a
+ *  6674-character prompt, each worded differently to miss the service's cache:
+ *  6914, 15189, 7931, 10217 and 9937 ms. A cached repeat returns in 47 to 92 ms.
+ *
+ *  THE TAIL IS WHAT THIS NUMBER IS FOR. One send in the same window passed 60002
+ *  ms on a prompt of that size and its retry answered normally, so the stall sits
+ *  outside the generation time the five calls measure. A ceiling is a bet on that
+ *  tail either way: the send asks twice, and the refusal names the ceiling, the
+ *  elapsed time and the prompt size, so a host that keeps hitting it can raise
+ *  SCRAMBLE_REWRITE_TIMEOUT_MS from its own numbers.
+ *
+ *  Five seconds refused the send on any draft the model had not seen, and that
+ *  refusal read as an endpoint failure. */
 export const DEFAULT_TIMEOUT_MS = 60000;
 const GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta";
 const FIREWORKS_BASE = "https://api.fireworks.ai/inference/v1";
