@@ -1,8 +1,10 @@
 # scramble: implementation plan (akari-worker execution)
 
-Date:. Companion to DESIGN.md (the contract; workers cite it, never re-derive
-it). Stack: TypeScript on bun (typed, `bun test`, no build step, matches the
-existing TS toolchain). Single package, no framework: `Bun.serve` + `fetch`.
+This document serves as a companion to DESIGN.md, which defines the contract
+that workers cite and never re-derive. The stack uses TypeScript on Bun, which
+provides types, `bun test`, and no build step, matching the existing
+TypeScript toolchain. The project is a single package with no framework, using
+`Bun.serve` and `fetch`.
 
 ## Repo layout (fixed by the lead in phase 0, workers fill it)
 
@@ -27,11 +29,13 @@ existing TS toolchain). Single package, no framework: `Bun.serve` + `fetch`.
 
 ## Phase 0: lead hand-work (leverage: spec + trust-root infra, ~30 min)
 
-1. `git init` the repo, bun scaffold, `scripts/gate.sh`, empty module
-   files with exported type signatures for the seams (Message, Store interface,
-   daemon route table) so parallel units compose without negotiation.
-2. `.akari/` scaffold on the scramble repo so lanes/fleets target it.
-3. File the epic + the unit tasks below in tt (dispatch is automatic).
+1. Initialize the repository with `git init`, create the Bun scaffold, add
+   `scripts/gate.sh`, and create empty module files with exported type
+   signatures for the seams (Message, Store interface, daemon route table) so
+   parallel units compose without negotiation.
+2. Create the `.akari/` scaffold on the scramble repository so lanes and
+   fleets target it.
+3. File the epic and the unit tasks below in tt (dispatch is automatic).
 
 ## Dispatch (how the units run)
 
@@ -87,6 +91,7 @@ role: bun resolution handles a worker's HOME and PATH, verified with every check
 To adopt it later, the missing piece is making typescript available in the
 overlay (vendor it, or split a `gate.sh --tests-only` step that skips tsc).
 
+
 ## The CLI contract (authoritative; every unit codes against THIS)
 
 `src/cli.ts` exports `main(argv: string[], io): Promise<number>`. This surface is
@@ -135,12 +140,13 @@ command accepts `--url` / `--token` as the highest-precedence override.
 `next` is the harness-agnostic floor: it is how an agent with nothing but a
 shell (a codex session) participates. It is NOT optional.
 
+
 ## The raft-mirrored surface (one grammar for both tools)
 
-Agents already learn raft's CLI. scramble therefore mirrors raft's noun-verb
-grammar, so a session that knows one knows the other, and the two skills teach
-the same commands against different stores. The current verbs stay as aliases so
-nothing breaks.
+Agents already learn raft's CLI. scramble therefore mirrors the noun-verb
+grammar of raft, so a session that knows one tool knows the other, and the two
+skills teach the same commands against different data stores. The current verbs
+remain as aliases so existing workflows do not break.
 
 | raft | scramble (mirrored) | scramble (alias, kept) |
 |---|---|---|
@@ -152,28 +158,31 @@ nothing breaks.
 | `raft channel join` | `scramble channel join --target '<channel>'` | `scramble join <channel>` |
 | `raft agent bridge --json` (wake stream) | `scramble listen` | unchanged |
 
-Three differences that stay, because they are properties of the stores rather
-than of the grammar:
+Three differences remain because they reflect the storage properties of each
+system:
 
-- **`--target` takes a channel name**, with no `#`. A scramble channel name may
-  contain `/`, which is how `dm/<a>/<b>` works, so a sigil would be ambiguous.
-- **`message check` needs a cursor.** raft's server tracks per-agent delivery;
-  scramble's store does not, so `check` keeps the cursor in
-  `.scramble/cursor.json` per agent and advances it on drain. Same behavior,
+- **`--target` takes a channel name**, without a `#` prefix. A scramble channel
+  name may contain `/`, which enables direct messaging paths like `dm/<a>/<b>`,
+  so a sigil introduces ambiguity.
+- **`message check` needs a cursor.** The raft server tracks delivery per
+  agent. Because scramble leaves delivery tracking out of the central store,
+  `check` records each agent's cursor in `.scramble/cursor.json` and advances
+  that cursor during a drain. This produces identical behavior through
   client-side state.
-- **`--after` and `--since` are the same argument.** scramble's `seq` is global
-  across channels; raft's is per target. The mirrored verb accepts `--after` and
-  the alias keeps `--since`.
+- **`--after` and `--since` are the same argument.** scramble assigns a global
+  `seq` across channels, whereas raft scopes `seq` per target. The mirrored
+  verb accepts `--after`, and the alias continues to support `--since`.
 
 ## Rename: a room becomes a channel
 
-"Room" is scramble's own word for a thing both backends already name. Slack calls
-it a channel, raft calls it a channel, and the mirrored CLI addresses one with
-`--target`. Keeping a third word costs every reader a translation, so the noun
-becomes CHANNEL everywhere and `--target` stays the flag that names one.
+Scramble uses "room" for an entity that both backends already identify. Slack
+names it a channel, raft names it a channel, and the mirrored CLI addresses one
+with `--target`. Retaining a third term forces every reader to perform a
+translation, so the noun becomes CHANNEL everywhere and `--target` remains the
+flag that specifies one.
 
-What moves, and it moves in ONE change or not at all, since a half-applied
-rename is worse than the old word:
+The rename executes as a single change, because a partial rename causes more
+confusion than retaining the original term:
 
 | Now | After |
 |---|---|
@@ -187,10 +196,11 @@ rename is worse than the old word:
 | `.scramble/rooms/` on disk | `.scramble/channels/` |
 | "room" in DESIGN.md, PLAN.md, README.md, JOIN.md, the skill, the hooks | "channel" |
 
-Two things that do NOT change. The wire shape stays one JSON line per message,
-so the hooks and the skill keep reading the same fields, with `room` renamed to
-`channel`. And the CLI keeps `--target` over `--channel`, matching raft,
-because a target may be a channel or a DM and the flag names either.
+Two behaviors do not change. The wire format maintains one JSON line per
+message, so hooks and the skill continue reading the identical fields, with
+`room` renamed to `channel`. The CLI also retains `--target` to match raft,
+leaving `--channel` unused, because a target may designate a channel or a DM and
+the flag identifies either.
 
 ## Coverage rules (read before writing any module)
 
@@ -213,6 +223,7 @@ structure a module:
 `coverageThreshold` MUST stay the scalar form: bun 1.3.14 silently ignores the
 inline-table form and exits 0 at partial coverage (verified 57% -> rc=1 scalar,
 rc=0 table).
+
 
 ## Units (akari AGENT tasks: goal + deliverable + invariants, with no steps)
 
@@ -318,31 +329,37 @@ concurrently; same-file overlap is acceptable, the lead merges.
   setup (SCRAMBLE_URL, token, ssh -L alternative), codex sections. Gate:
   every command in the README runs against the built tree (doc-test script).
 
+
 ## Lead milestones (falsifiable, each closes on a captured live record)
 
-- **M1** after U3+U7: two live Claude sessions + the web page converse in one
-  channel on this machine; transcript of both sessions' turns + the channel JSONL
-  cited.
-- **M2** after M1: a Claude session on a second machine joins via
-  `SCRAMBLE_URL` and exchanges mentions with a local one; channel JSONL cited.
-- **M3** after U5: Slack channel live: operator creates the one bridge app
-  (10-15 min, manifest from U9), personas converse, one agent promoted to a
-  real bot user and DM'd; Slack permalinks cited.
-- **M4** after U6: a codex participant answers a mention in the channel.
+- **M1** after U3+U7: Two live Claude sessions and the web page converse in one
+  channel on this machine. The milestone cites transcripts of turns from both
+  sessions and the channel JSONL.
+- **M2** after M1: A Claude session on a second machine joins through
+  `SCRAMBLE_URL` and exchanges mentions with a local session. The milestone
+  cites the channel JSONL.
+- **M3** after U5: A Slack channel goes live. The operator creates the single
+  bridge app in 10-15 min using the manifest from U9, personas converse, and
+  one agent is promoted to a real bot user and receives direct messages. The
+  milestone cites Slack permalinks.
+- **M4** after U6: A codex participant answers a mention in the channel.
 
 ## Estimate
 
-9 units, max width 4, all within the lane pool. At agent speed: round 1+2
-~40 min, round 3 in parallel ~1 h, rounds 4-5 + merges + M1/M2 demos ~1 h.
-Roughly 3 hours wall-clock to M2; M3 gated on the operator's one Slack app
-install; M4 same session if a codex login exists on this host.
+The work spans 9 units with a maximum width of 4, all within the lane pool.
+Running at agent speed, rounds 1 and 2 take ~40 min, round 3 runs in parallel
+in ~1 h, and rounds 4-5 with merges and M1/M2 demos take ~1 h.
+
+Reaching M2 takes roughly 3 hours of wall-clock time. Milestone M3 depends on
+the operator installing one Slack app, and M4 finishes in the same session if a
+codex login exists on this host.
 
 ## Risks
 
-- Monitor-wake latency/coalescing on rapid message bursts → the listener's
-  line-buffered output plus `since` catch-up makes bursts safe; e2e (U8) covers
-  the kill/resume path.
-- Slack cannot be gate-verified by workers → mocked transport + dry-run in U5,
-  live verification is the M3 lead step by design.
-- codex CLI flag drift (fast-moving) → U6 pins the tested codex version in its
-  stub and README notes the verified version.
+- Rapid message bursts risk monitor-wake latency and coalescing. The listener's
+  line-buffered output and `since` catch-up make bursts safe, and the U8
+  end-to-end test covers the kill and resume path.
+- Workers cannot gate-verify Slack. Test U5 provides a mocked transport and a
+  dry run, while live verification serves as the M3 lead step by design.
+- The fast-moving codex CLI flags can drift. Test U6 pins the tested codex
+  version in its stub, and the README notes the verified version.
