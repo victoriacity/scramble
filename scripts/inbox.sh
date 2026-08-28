@@ -39,7 +39,7 @@ trap cleanup TERM INT EXIT
 # `-` means this script's own stdout, which is what a harness monitor reads. A path is appended to.
 # /dev/stdout is NOT a substitute: under a monitor it is not an addressable device and the redirect
 # fails, which is how the first armed run of this script started a listener whose output went
-# nowhere. THE FILTER IS THE LISTENER'S, not a grep over its output. This matched the literal
+# nowhere. THE FILTER BELONGS TO THE LISTENER, and a grep over its output was tried. That matched the literal
 # `"mentioned":true` against the serialised JSON, so a space after the colon, a reordered key or a
 # renamed field would have stopped it matching with no error and no exit: the inbox would go silent
 # and look calm, and every agent following JOIN.md had copied it. `--addressed` applies the same
@@ -47,7 +47,7 @@ trap cleanup TERM INT EXIT
 #
 # THE DIAGNOSTICS FOLLOW THE DELIVERIES. With a wake file named, stdout went to the file and stderr
 # stayed on the script's own stream, so the staleness notice, a socket error and an unwritable
-# ledger landed wherever the arming command had pointed stderr. One agent's harness appended it to a
+# ledger went wherever the arming command had pointed stderr. One agent's harness appended it to a
 # log nobody watched, and the notice sat in that file for six hours while the listener ran six
 # commits behind.
 #

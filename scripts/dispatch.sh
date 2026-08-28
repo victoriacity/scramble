@@ -3,14 +3,14 @@
 # own preconditions: a `source` of the systemd-format akari-fix.env failed mid-line, the `nohup
 # akari run` after it STILL fired, and the retry left two clients running the same 8-unit workflow
 # (postmortem: `log/postmortems/-duplicate-dispatch-survived-a-failed-source.md` in the akrust
-# repo). Every precondition below is a REFUSAL, not a warning.
+# repo). Every precondition below REFUSES the run. A warning would be ignored.
 #
 # usage: scripts/dispatch.sh [<workflow.ts>]   (default: scramble.workflow.ts)
 set -uo pipefail
 cd "$(dirname "$0")/.."
 REPO="$(pwd)"
 WORKFLOW="${1:-$REPO/scramble.workflow.ts}"
-# WHERE AKARI LIVES IS THIS MACHINE'S BUSINESS, not the repo's. Both paths come
+# WHERE AKARI LIVES IS THIS MACHINE'S BUSINESS, and the repo holds no path. Both paths come
 # from the environment, and an unset one is a refusal naming the variable, so no
 # checkout carries one developer's directory layout.
 ENV_FILE="${AKARI_FIX_ENV:-}"
@@ -23,7 +23,7 @@ fail() { echo "dispatch: REFUSED — $*"; exit 1; }
 #    clients running the SAME workflow file, which duplicates every unit. A run
 #    of a DIFFERENT workflow is parallelism, which is wanted: units with no
 #    dependency on each other should be in flight at the same time, bounded by
-#    the lane pool, not by this script.
+#    the lane pool, which owns that number.
 same=$(ps ax -o args= | grep "dispatch/src/cli.ts run" | grep -v grep | grep -c -- "$WORKFLOW")
 [ "$same" -eq 0 ] || {
   echo "dispatch: this workflow is ALREADY live ($same client(s)):"

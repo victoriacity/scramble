@@ -58,8 +58,9 @@ mkdir -p "$BIN" || fail "cannot create $BIN"
 # it had never installed.
 #
 # The launcher cannot be per-agent without changing the command everyone types,
-# so the change is ANNOUNCED instead of hidden: what it pointed at, what it will
-# point at, and which running listeners belong to other agents.
+# so the change is ANNOUNCED: what it pointed at, what it will point at, and
+# which running listeners belong to other agents. A hidden change moves somebody
+# else's version with no word to them.
 PREV_SHA=""
 if [ -e "$BIN/scramble" ]; then
   PREV_SHA="$(sed -n 's|.*/scramble/\([0-9a-f]\{7,\}\)/src/bin\.ts.*|\1|p' "$BIN/scramble" 2>/dev/null | head -1)"

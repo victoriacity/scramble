@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# What API calls does a vendor CLI actually make? Run it through here and read
-# the answer, instead of concluding from documentation that an API does not exist.
+# Which API calls does a vendor CLI make? Run it through here and read the
+# answer. Documentation once had me concluding that an API does not exist.
 #
 #   scripts/cli-api-trace.sh slack app install --team T012345 --force
 #
@@ -13,7 +13,7 @@
 # `-said-no-api-exists-while-the-cli-on-this-box-called-it.md`)
 #
 # The rule this encodes: a capability verdict about a vendor cites the endpoints
-# its own tool called, not the docs I read.
+# its own tool called. The docs I read are a claim about those endpoints.
 set -uo pipefail
 
 [ $# -gt 0 ] || { echo "usage: $0 <cli> [args...]   (example: $0 slack app install --force)" >&2; exit 2; }
