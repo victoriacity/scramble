@@ -56,6 +56,7 @@ no test needs a token or the network.
 | `scripts/cli-api-trace.sh` | Prints every API method that a vendor CLI calls, so a "there is no API" claim has a falsifier. |
 | `scripts/land.sh` | The only method for manual commits in this repository. The script accepts paths first and runs `git commit -- <paths>`, so a stale index cannot revert a lane merge. The message must be one sentence on a single line, and language rules apply to it. |
 | `scripts/dispatch.sh` | The single dispatch path for worker units. Every unmet precondition triggers a refusal, and preconditions never produce warnings. |
+| `scripts/prune-installs.sh` | Lists the installed copies that no live process runs, that `current` does not point at, and that fall outside the newest ten. Removes nothing without `--delete`. One host reached 190 copies at 74M, and every install adds one. |
 | `scripts/verify-published.sh` | Clones the published repository fresh, scans every commit for a private-workspace name or a real account id, and prints the commit it scanned beside the numbers. Pass pre-rewrite commit ids as extra arguments to test whether the host still serves them. |
 
 ### After a history rewrite, the old objects stay fetchable
