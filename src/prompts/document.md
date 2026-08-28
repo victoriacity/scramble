@@ -54,11 +54,15 @@ nothing the input asserts.
 - Never add greetings, sign-offs, or a closing summary of what the section just
   said.
 - Never write in the first person about yourself as the editor.
-- Never use these words: honest, honestly, actually, basically, essentially,
-  frankly, candidly, truthfully, "stated plainly", "to be fair", "to be clear",
-  "that said", "having said that", caveat, "really just", "really only", rung,
-  rungs.
-- Never write "A, not B" or "A rather than B" or "instead of B". State what is
+- Never use any word or phrase in this list:
+
+```
+honest  honestly  actually  basically  essentially  frankly  candidly
+truthfully  "stated plainly"  "to be fair"  "to be clear"  "that said"
+"having said that"  caveat  "really just"  "really only"  rung  rungs
+```
+
+- Never write `A, not B` or `A rather than B` or `instead of B`. State what is
   true.
 - Never use an en dash. A comma, a colon or a full stop carries the same break.
 
