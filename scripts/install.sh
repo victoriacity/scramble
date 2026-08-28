@@ -68,6 +68,22 @@ fi
 if [ -n "$PREV_SHA" ] && [ "$PREV_SHA" != "$SHA" ]; then
   echo "install: $BIN/scramble pointed at $PREV_SHA and now points at $SHA."
   echo "install: every agent sharing $BIN uses the new version on their next call."
+  # WHAT CHANGED, DERIVED FROM GIT. An install moves every agent on this HOME, and
+  # nothing told them what moved: a heartbeat line added to `message check` broke
+  # the output guard on two hosts at once, and both agents debugged their own
+  # watcher before either knew a line had been added. The subjects come from the
+  # commit log between the two installed commits, so there is no second list to
+  # maintain and no way for it to disagree with the code.
+  if git cat-file -e "$PREV_SHA^{commit}" 2>/dev/null; then
+    COUNT="$(git rev-list --count "$PREV_SHA..$SHA" 2>/dev/null || echo 0)"
+    if [ "$COUNT" != "0" ]; then
+      echo "install: $COUNT commit(s) between them, oldest first:"
+      git log --reverse --format='install:   %h %s' "$PREV_SHA..$SHA"
+      echo "install: a line added to any command's output can break a guard you wrote against it."
+    fi
+  else
+    echo "install: $PREV_SHA is not a commit in this checkout, so what changed cannot be listed here."
+  fi
   OTHERS="$(ps -eo args= 2>/dev/null | grep -F 'bin.ts listen' | grep -v grep | sed -n 's|.*--as \([^ ]*\).*|\1|p' | sort -u | tr '\n' ' ')"
   [ -n "$OTHERS" ] && echo "install: running listeners belong to: $OTHERS"
   # THE SHARED LAUNCHER IS THE INTENT, so this line no longer offers a private
