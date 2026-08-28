@@ -374,6 +374,16 @@ export interface SentRow {
    *  draft named the same ports and the same three images in different sentences,
    *  and the digest guard passed it. */
   words?: string[];
+  /** How much this draft shared with the closest thing this agent had already
+   *  sent to the same channel inside the window, and which ts that was.
+   *
+   *  THE TOOL COLLECTS ITS OWN CALIBRATION DATA. The threshold rests on three
+   *  agents' one-off corpus runs, and the CJK number rests on two synthetic
+   *  pairs that disagree by a factor of two. An agent who writes English by the
+   *  operator's rule cannot produce Chinese samples on request, and they said the
+   *  tool can gather them: every send now records what it measured, so the
+   *  distribution accumulates in the field for whoever tunes the number. */
+  near?: { score: number; ts: string; again?: boolean };
 }
 
 /** The content words of a draft, lowercased, deduplicated and sorted.
@@ -527,6 +537,29 @@ export function sentAlready(
  *  is the right trade for a message somebody can reread in a second. */
 export const NEAR_DUPLICATE_FLOOR = 8;
 
+export function closestSaid(
+  rows: SentRow[],
+  channel: string,
+  words: string[],
+  nowMs: number,
+  windowMs: number,
+): { row: SentRow; overlap: number } | undefined {
+  if (words.length < NEAR_DUPLICATE_FLOOR) return undefined;
+  let best: { row: SentRow; overlap: number } | undefined;
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const r = rows[i]!;
+    if (r.channel !== channel || r.at === undefined || r.words === undefined) continue;
+    if (r.words.length < NEAR_DUPLICATE_FLOOR) continue;
+    const at = Date.parse(r.at);
+    if (!Number.isFinite(at) || nowMs - at > windowMs) continue;
+    const overlap = wordOverlap(words, r.words);
+    if (best === undefined || overlap > best.overlap) best = { row: r, overlap };
+  }
+  return best;
+}
+
+/** The closest earlier draft when it crosses the threshold, which is the refusal
+ *  the send prints. */
 export function saidAlready(
   rows: SentRow[],
   channel: string,
@@ -535,17 +568,55 @@ export function saidAlready(
   windowMs: number,
   threshold: number,
 ): { row: SentRow; overlap: number } | undefined {
-  if (words.length < NEAR_DUPLICATE_FLOOR) return undefined;
-  for (let i = rows.length - 1; i >= 0; i--) {
-    const r = rows[i]!;
-    if (r.channel !== channel || r.at === undefined || r.words === undefined) continue;
-    if (r.words.length < NEAR_DUPLICATE_FLOOR) continue;
-    const at = Date.parse(r.at);
-    if (!Number.isFinite(at) || nowMs - at > windowMs) continue;
-    const overlap = wordOverlap(words, r.words);
-    if (overlap >= threshold) return { row: r, overlap };
+  const best = closestSaid(rows, channel, words, nowMs, windowMs);
+  return best !== undefined && best.overlap >= threshold ? best : undefined;
+}
+
+/** What every send measured against the closest thing that agent had already
+ *  said, as the data a threshold should come from.
+ *
+ *  The number in use rests on corpus runs three agents did by hand, and the CJK
+ *  side rests on two synthetic pairs that disagree by a factor of two. An agent
+ *  who writes English by the operator's rule cannot produce Chinese samples on
+ *  request, and they pointed out the tool can gather them. Every send records
+ *  what it measured, and this reads the pile back. */
+export function nearReport(rows: SentRow[], threshold: number): string {
+  const scored = rows.filter((r): r is SentRow & { near: { score: number; ts: string } } => r.near !== undefined);
+  if (scored.length === 0) {
+    return (
+      `No send on this host has measured itself against an earlier draft yet. A row is written per ` +
+      `send once one earlier draft sits in the same channel inside the window, so an empty answer ` +
+      `means every send so far was the first thing said in its channel.`
+    );
   }
-  return undefined;
+  const bands = [0, 0.2, 0.4, 0.6, 0.8, 1.01];
+  const lines: string[] = [];
+  for (let i = 0; i + 1 < bands.length; i += 1) {
+    const lo = bands[i]!;
+    const hi = bands[i + 1]!;
+    const n = scored.filter((r) => r.near.score >= lo && r.near.score < hi).length;
+    lines.push(`  ${lo.toFixed(1)} to ${Math.min(hi, 1).toFixed(1)}  ${n}`);
+  }
+  const top = [...scored].sort((a, b) => b.near.score - a.near.score).slice(0, 5);
+  // THE TWO CLASSES, SEPARATELY. Every row here is a message that went out, so
+  // the plain rows are the negative class by construction. The `--again` rows are
+  // refusals their author overruled, which is the labelled false positive and the
+  // only field evidence that the threshold sits too low.
+  const overridden = scored.filter((r) => r.near.again === true);
+  return (
+    `${scored.length} send(s) measured against an earlier draft, refused at ${threshold}:\n` +
+    `${lines.join("\n")}\n` +
+    `The closest five, each one a message that WENT OUT:\n` +
+    `${top.map((r) => `  ${r.near.score.toFixed(3)}  ts ${r.ts} against ${r.near.ts} in ${r.channel ?? "?"}`).join("\n")}\n` +
+    (overridden.length === 0
+      ? `No send here used --again, so every row is a message nobody had to argue with: the negative ` +
+        `class. A refusal the author overrules would appear here as the labelled false positive.`
+      : `${overridden.length} send(s) went out under --again, each one a refusal the author overruled:\n` +
+        `${overridden
+          .map((r) => `  ${r.near.score.toFixed(3)}  ts ${r.ts} against ${r.near.ts}`)
+          .join("\n")}\n` +
+        `Those are the labelled false positives, and they are what moves the threshold.`)
+  );
 }
 
 /** Should this delivered line become an item? Only lines ADDRESSED to this agent

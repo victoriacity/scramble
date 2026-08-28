@@ -10,6 +10,8 @@ import {
   pendingInbox,
   pendingReport,
   closeItemById,
+  closestSaid,
+  nearReport,
   readInbox,
   readSent,
   readSentRows,
@@ -24,6 +26,7 @@ import {
   recordInboxItem,
   traceReport,
   type InboxItem,
+  type SentRow,
 } from "../src/inbox";
 
 const scratch = (): string => mkdtempSync(join(tmpdir(), "scramble-inbox-"));
@@ -631,6 +634,42 @@ describe("the record of what this agent said", () => {
       "On ports 3005 and 8600 the end-to-end run completed, and the judge scored " +
       "the three assets mushroom_shaman, blueberry_pie and copper_kettle, with no fallback taken.";
     expect(wordOverlap(contentWords(retryA), contentWords(retryB))).toBeGreaterThan(0.8);
+  });
+
+  test("EVERY SEND RECORDS WHAT IT MEASURED, so the threshold gets real data", () => {
+    // The number in use rests on corpus runs three agents did by hand, and the
+    // CJK side rests on two synthetic pairs that disagree by a factor of two. An
+    // agent who writes English by the operator's rule cannot produce Chinese
+    // samples on request, and they said the tool can gather them.
+    const rows: SentRow[] = [
+      { ts: "1.1", channel: "general", at: "t", words: ["a"], near: { score: 0.12, ts: "0.9" } },
+      { ts: "2.2", channel: "general", at: "t", words: ["a"], near: { score: 0.44, ts: "1.1" } },
+      { ts: "3.3", channel: "general", at: "t", words: ["a"], near: { score: 0.79, ts: "2.2" } },
+      { ts: "4.4", channel: "general", at: "t", words: ["a"] },
+    ];
+    const said = nearReport(rows, 0.8);
+    expect(said).toContain("3 send(s) measured against an earlier draft, refused at 0.8");
+    // The band under the threshold is where a real duplicate shows up first.
+    expect(said).toContain("0.6 to 0.8  1");
+    expect(said).toContain("0.790  ts 3.3 against 2.2 in general");
+    // A send with nothing earlier to compare against carries no score.
+    expect(said).not.toContain("ts 4.4");
+    // AN EMPTY PILE SAYS WHY IT IS EMPTY, so nobody reads silence as zero
+    // duplicates.
+    expect(nearReport([{ ts: "1.1" }], 0.8)).toContain("has measured itself against an earlier draft yet");
+    // WITHOUT AN OVERRIDE the report says every row is the negative class, since
+    // each one is a message that went out.
+    expect(said).toContain("No send here used --again");
+    // AN OVERRIDE IS THE LABELLED FALSE POSITIVE, and it is what moves the
+    // threshold: a refusal the author overruled.
+    const withOverride: SentRow[] = [
+      ...rows,
+      { ts: "5.5", channel: "general", at: "t", words: ["a"], near: { score: 0.91, ts: "3.3", again: true } },
+    ];
+    const argued = nearReport(withOverride, 0.8);
+    expect(argued).toContain("1 send(s) went out under --again");
+    expect(argued).toContain("0.910  ts 5.5 against 3.3");
+    expect(argued).toContain("labelled false positives");
   });
 
   test("a malformed row reads as an empty ts, never taking the file down", () => {

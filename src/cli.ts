@@ -92,10 +92,12 @@ import {
   closeInboxItems,
   closeItemById,
   readSent,
+  closestSaid,
   contentWords,
+  nearReport,
   readSentRows,
   recordSent,
-  saidAlready,
+  type SentRow,
   sentAlready,
   sentPath,
   inboxPath,
@@ -244,6 +246,7 @@ const BOOLEAN_FLAGS = new Set([
   "comments",
   "dates",
   "json",
+  "near",
   // `--why` is NOT here: `inbox close --why <text>` takes the reason it stores
   // on every row. `scramble rewrite --why` reads its own argv, so both work.
   "verify",
@@ -634,6 +637,22 @@ async function postText(
   // it anyway, for the case where saying the same thing twice is the intent.
   const sender = nameFor(flags, io);
   const digest = createHash("sha256").update(draft).digest("hex").slice(0, 16);
+  // WHAT THIS SEND MEASURED, recorded whether or not it crossed the threshold, so
+  // the distribution accumulates in the field. The number this guard uses rests
+  // on corpus runs three agents did by hand.
+  let closest: { row: SentRow; overlap: number } | undefined;
+  // MEASURED ON EVERY SEND, `--again` included. Recording only what went out
+  // records the negative class alone: every row is a message the author meant to
+  // send. The `--again` re-sends are the labelled FALSE POSITIVES, the one class
+  // that says where the threshold is wrong, and an agent named the gap the hour
+  // this shipped.
+  closest = closestSaid(
+    readSentRows(sentPath(slackConfigPath(io), sender)),
+    channel,
+    contentWords(draft),
+    Date.now(),
+    DUPLICATE_WINDOW_MS,
+  );
   if (!flags.has("again")) {
     const already = sentAlready(
       readSentRows(sentPath(slackConfigPath(io), sender)),
@@ -651,19 +670,12 @@ async function postText(
       return 1;
     }
     // ONE THING SAID TWICE UNDER DIFFERENT WORDING is the duplicate the digest
-    // misses. An agent
-    // reported one end-to-end run twice, 127 seconds apart, naming the same ports
-    // and the same three images in different sentences: 0.970 word overlap, and
-    // the digest passed it because no two bytes lined up. A reader of the channel
-    // sees two reports of one run either way.
-    const said = saidAlready(
-      readSentRows(sentPath(slackConfigPath(io), sender)),
-      channel,
-      contentWords(draft),
-      Date.now(),
-      DUPLICATE_WINDOW_MS,
-      NEAR_DUPLICATE_OVERLAP,
-    );
+    // misses. An agent reported one end-to-end run twice, 127 seconds apart,
+    // naming the same ports and the same three images in different sentences:
+    // 0.970 word overlap by their measure, and the digest passed it because no
+    // two bytes lined up. A reader of the channel sees two reports of one run
+    // either way.
+    const said = closest !== undefined && closest.overlap >= NEAR_DUPLICATE_OVERLAP ? closest : undefined;
     if (said !== undefined) {
       io.writeErr(
         `message send REFUSED: this says what you already sent to ${channel} at ts ${said.row.ts} ` +
@@ -888,6 +900,18 @@ async function postText(
       // THE WORDS THE DRAFT WAS ABOUT, so the next send can see a rewording of
       // it. The digest alone catches a byte-identical resend and nothing else.
       words: contentWords(draft),
+      ...(closest === undefined
+        ? {}
+        : {
+            near: {
+              score: Number(closest.overlap.toFixed(3)),
+              ts: closest.row.ts,
+              // THE OVERRIDE IS THE LABEL. A send that went out under `--again`
+              // above the threshold is a refusal the author overruled, which is
+              // the only field evidence that the number is too low.
+              ...(flags.has("again") ? { again: true } : {}),
+            },
+          }),
     });
     if (status !== undefined) await settleStatus(replyStatus(status, channel, from));
     // AND LAST, because a pipe cuts from the end. Three agents independently
@@ -2252,6 +2276,16 @@ async function cmdRewrites(argv: string[], io: Io): Promise<number> {
   // counted, with their names on the first line, because the file is shared and
   // an unnamed count reads as the reader's own.
   const { flags } = parseArgs(argv);
+  // `--near` READS THE DUPLICATE SCORES this agent's sends measured. The
+  // threshold in use rests on corpus runs three agents did by hand, and an agent
+  // who writes English by the operator's rule cannot produce Chinese samples on
+  // request. They said the tool can gather them, so every send records what it
+  // measured and this reads the pile back.
+  if (flags.has("near")) {
+    const who = flags.get("as") ?? nameFor(flags, io);
+    io.write(nearReport(readSentRows(sentPath(slackConfigPath(io), who)), NEAR_DUPLICATE_OVERLAP));
+    return 0;
+  }
   io.write(rewritesReport(readRewrites(rewritesPath(slackConfigPath(io))), flags.get("as")));
   return 0;
 }
@@ -2443,7 +2477,13 @@ async function settleSend(
   from: string,
   ts: string | undefined,
   thread: string | undefined,
-  draft?: { hash: string; channel: string; at: string; words?: string[] },
+  draft?: {
+    hash: string;
+    channel: string;
+    at: string;
+    words?: string[];
+    near?: { score: number; ts: string; again?: boolean };
+  },
 ): Promise<void> {
   const s = slackBackend(io);
   // THE SEND IS THE OTHER PATH EVERY AGENT RUNS. An agent that speaks without

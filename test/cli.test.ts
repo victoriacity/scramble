@@ -1195,6 +1195,30 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     expect(scoped.writes.join(" ")).toContain("No sends from someone-else");
   });
 
+  test("`rewrites --near` reads the duplicate scores this agent's sends measured", async () => {
+    // The threshold rests on corpus runs three agents did by hand, and an agent
+    // who writes English by the operator's rule cannot produce Chinese samples on
+    // request. They said the tool can gather them, so every send records what it
+    // measured and this reads the pile back.
+    const cwd = scratchDir("rewrites-near");
+    const bare = stubIo(cwd, async () => new Response("{}", { status: 200 }));
+    expect(await main(["rewrites", "--near", "--as", "dev"], bare.io)).toBe(0);
+    expect(bare.writes.join(" ")).toContain("has measured itself against an earlier draft yet");
+
+    mkdirSync(join(cwd, ".scramble", "sent"), { recursive: true });
+    writeFileSync(
+      join(cwd, ".scramble", "sent", "dev.jsonl"),
+      [
+        JSON.stringify({ ts: "2.2", channel: "general", at: "t", words: ["a"], near: { score: 0.44, ts: "1.1" } }),
+        JSON.stringify({ ts: "3.3", channel: "general", at: "t", words: ["a"], near: { score: 0.71, ts: "2.2" } }),
+      ].join("\n") + "\n",
+    );
+    const some = stubIo(cwd, async () => new Response("{}", { status: 200 }));
+    expect(await main(["rewrites", "--near", "--as", "dev"], some.io)).toBe(0);
+    expect(some.writes.join(" ")).toContain("2 send(s) measured against an earlier draft");
+    expect(some.writes.join(" ")).toContain("0.710  ts 3.3 against 2.2 in general");
+  });
+
   test("an unwritable rewrite record REPORTS itself and the message still goes", async () => {
     // The record is accounting; the message is the point.
     const cwd = scratchDir("rewrites-locked");
