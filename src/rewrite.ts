@@ -1,66 +1,83 @@
 // REWRITING A MESSAGE BEFORE IT LEAVES, with a model.
 //
-// Asked for directly: "For every sentence gone through scramble message, using
-// Gemini 3.7 flash to rewrite it to professional product and technical
-// communication standards."
+// Gemini 3.7 flash rewrites every sentence processed by scramble message to meet
+// professional product and technical communication standards.
 //
-// My objection was that a rewriter can change what a claim SAYS, turning "did
-// not reach" into "may not have reached". The answer that settled it: an agent
-// that already publishes wrong claims on its own gets no new failure mode from
-// this, so the argument reduces to "rewriting does not fix that", which is a
-// reason to want more, and no reason to refuse.
+// A rewriter can alter the strength of a claim, such as converting "did not reach"
+// into "may not have reached". An agent that already publishes inaccurate claims
+// introduces no new failure mode through this process, so the limitation reduces
+// to the fact that rewriting does not resolve existing inaccuracies, which is a
+// reason to seek further improvements and no reason to refuse the feature.
 //
-// What the shape has to guarantee:
+// The design guarantees three behaviors:
 //
-//   The message ALWAYS goes. A model that is slow, missing or broken costs the
-//   sender a rewrite, and never the message.
+// The system always delivers the message. A model that is slow, missing, or
+// broken costs the sender a rewrite, and the message still delivers.
 //
-//   Nothing changes silently. When a rewrite is sent, the original is printed
-//   beside it, so the sender sees what was changed at the moment it happens.
+// Modifications never occur silently. When the system sends a rewrite, it prints
+// the original text alongside the rewrite so the sender sees the modifications
+// immediately.
 //
-//   The deterministic rules still decide. A rewrite is checked exactly as the
-//   sender's own words are, and one that breaks a rule is dropped in favour of
-//   the words that did pass.
+// Deterministic rules govern acceptance. The system validates a rewrite using the
+// same checks applied to the sender's original text. When a rewrite violates a
+// rule, the system discards it and transmits the original text that passed
+// validation.
 import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { lengthRefusal, lintLanguage, proseOf } from "./language";
-// The duplicate guard's text comparison, reused here so a document rewrite is
-// measured the same way a repeated message is. `slack-backend` and `language` are
-// the only files inbox reaches, and neither reaches back here.
+// The system reuses the duplicate guard's text comparison so a document rewrite
+// is measured the same way a repeated message is. The inbox reaches only
+// `slack-backend` and `language`, and neither file reaches back here.
 import { allWords, contentOf, wordOverlap } from "./inbox";
 
-/** Which service answers. Gemini has its own request shape; Fireworks and
- *  LiteLLM both speak the OpenAI chat-completions shape, so they are one code
- *  path with different addresses. */
+/**
+ *  The request structure depends on which service answers. Gemini uses its own
+ *  request shape. Fireworks and LiteLLM both use the OpenAI chat-completions shape,
+ *  so they share a single code path with different addresses.
+ */
 export type Provider = "gemini" | "fireworks" | "litellm";
 
-/** Where the rewrite comes from, and how long it may take. */
+/**
+ *  The rewrite originates from its source, and the process may take time.
+ */
 export interface RewriteConfig {
-  /** The API key. Absent means this whole feature is off. */
+  /**
+   *  Provide the API key. If the key is absent, the entire feature is off.
+   */
   key?: string;
   provider: Provider;
-  /** The model id, so a newer one needs no code change. */
+  /**
+   *  Specify the model ID, so a newer model needs no code change.
+   */
   model: string;
-  /** The base URL. LiteLLM is a proxy anyone can host, so its address is
-   *  configuration; the other two have one address each. */
+  /**
+   *  Set the base URL. Anyone can host the LiteLLM proxy, so its address is
+   *  configured by the operator; the other two each have one address.
+   */
   url: string;
-  /** Milliseconds before the rewrite is abandoned and the original sent. */
+  /**
+   *  Milliseconds elapse before the system abandons the rewrite and sends the
+   *  original.
+   */
   timeoutMs: number;
 }
 
-/** MEASURED, from this host against the configured LiteLLM. Five cold calls on a
- *  6674-character prompt, each worded differently to miss the service's cache:
- *  6914, 15189, 7931, 10217 and 9937 ms. A cached repeat returns in 47 to 92 ms.
+/**
+ *  This host measured request latency against the configured LiteLLM endpoint.
+ *  Five cold calls on a 6674-character prompt, each worded differently to miss the
+ *  service's cache, completed in 6914, 15189, 7931, 10217 and 9937 ms. A cached
+ *  repeat returns in 47 to 92 ms.
  *
- *  THE TAIL IS WHAT THIS NUMBER IS FOR. One send in the same window passed 60002
- *  ms on a prompt of that size and its retry answered normally, so the stall sits
- *  outside the generation time the five calls measure. A ceiling is a bet on that
- *  tail either way: the send asks twice, and the refusal names the ceiling, the
- *  elapsed time and the prompt size, so a host that keeps hitting it can raise
- *  SCRAMBLE_REWRITE_TIMEOUT_MS from its own numbers.
+ *  This timeout value handles tail latency. One send in the same window passed
+ *  60002 ms on a prompt of that size and its retry answered normally, so the stall
+ *  sits outside the generation time the five calls measure. A ceiling is a bet on
+ *  that tail either way: the send asks twice, and the refusal names the ceiling,
+ *  the elapsed time and the prompt size, so a host that keeps hitting it can raise
+ *  `SCRAMBLE_REWRITE_TIMEOUT_MS` from its own numbers.
  *
- *  Five seconds refused the send on any draft the model had not seen, and that
- *  refusal read as an endpoint failure. */
+ *  A timeout of five seconds refused the send on any draft the model had not seen,
+ *  and that refusal read as an endpoint failure.
+ */
 export const DEFAULT_TIMEOUT_MS = 60000;
 const GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta";
 const FIREWORKS_BASE = "https://api.fireworks.ai/inference/v1";
@@ -69,20 +86,26 @@ const DEFAULT_MODELS: Record<Provider, string> = {
   fireworks: "accounts/fireworks/models/llama-v3p3-70b-instruct",
   litellm: "gpt-4o-mini",
 };
-/** Kept for the tests and callers that ask what a bare config resolves to. */
+/**
+ *  This function remains for tests and callers that determine what a bare
+ *  configuration resolves to.
+ */
 export const DEFAULT_MODEL = DEFAULT_MODELS.gemini;
 
-/** Read the config off the environment.
+/**
+ *  The system reads its configuration from the environment.
  *
- *  `SCRAMBLE_REWRITE_KEY` turns it on, and `GEMINI_API_KEY` does the same for
- *  the Gemini case so an existing credential needs no new name.
- *  `SCRAMBLE_REWRITE_PROVIDER` picks the service, `SCRAMBLE_REWRITE_MODEL` a
- *  model, `SCRAMBLE_REWRITE_URL` the address for a self-hosted LiteLLM, and
- *  `SCRAMBLE_REWRITE_TIMEOUT_MS` a slower link.
+ *  Setting `SCRAMBLE_REWRITE_KEY` enables rewriting, and setting `GEMINI_API_KEY`
+ *  does the same for Gemini so an existing credential needs no new name.
+ *  `SCRAMBLE_REWRITE_PROVIDER` selects the service, `SCRAMBLE_REWRITE_MODEL`
+ *  picks a model, `SCRAMBLE_REWRITE_URL` specifies the address for a self-hosted
+ *  LiteLLM instance, and `SCRAMBLE_REWRITE_TIMEOUT_MS` accommodates a slower link.
  *
- *  An unknown provider name falls back to gemini and is NOT silently accepted as
- *  its own thing: a typo that reached a real request would fail per message with
- *  a network error, where this fails once, visibly, at the first send. */
+ *  An unknown provider name falls back to gemini and is not silently accepted as
+ *  a distinct service. A typo that reached a real request would fail per message
+ *  with a network error, where this approach fails once, visibly, at the first
+ *  send.
+ */
 export function rewriteConfig(env: (name: string) => string | undefined): RewriteConfig {
   const raw = Number(env("SCRAMBLE_REWRITE_TIMEOUT_MS"));
   const key = env("SCRAMBLE_REWRITE_KEY") ?? env("GEMINI_API_KEY");
@@ -99,8 +122,11 @@ export function rewriteConfig(env: (name: string) => string | undefined): Rewrit
   };
 }
 
-/** The address and body for one provider. Split out so the request shape is
- *  readable beside the thing it is a shape FOR. */
+/**
+ *  This definition provides the address and the body for a single provider. It is
+ *  split out so that the request shape is readable alongside the provider it
+ *  configures.
+ */
 function request(cfg: RewriteConfig & { key: string }, prompt: string): { url: string; init: RequestInit } {
   if (cfg.provider === "gemini") {
     return {
@@ -112,7 +138,8 @@ function request(cfg: RewriteConfig & { key: string }, prompt: string): { url: s
       },
     };
   }
-  // Fireworks and LiteLLM: the OpenAI chat-completions shape, bearer auth.
+  // Fireworks and LiteLLM use the OpenAI chat completions format and authenticate
+  // with bearer tokens.
   return {
     url: `${cfg.url}/chat/completions`,
     init: {
@@ -123,29 +150,36 @@ function request(cfg: RewriteConfig & { key: string }, prompt: string): { url: s
   };
 }
 
-/** WHERE THE INSTRUCTION LIVES: a markdown file beside the code, so it can be
- *  read and changed without touching TypeScript, and so the language gate lints
- *  it like every other document this repo ships. */
-/** ONE ROW PER SEND THAT MET THE REWRITER, so the question "does this help" is
- *  answered by a number. Every earlier answer was an anecdote.
+/**
+ *  The instruction lives in a markdown file beside the code, so a reader can
+ *  read and change it without editing TypeScript, and so the language gate lints
+ *  it like every other document this repository ships.
+ */
+/**
+ *  The log records one row for every send that reached the rewriter, so a number
+ *  answers whether the tool helps. Every earlier answer was an anecdote.
  *
- * The rewriter runs on every send from two hosts and five agents, and nobody
- * can say how often it improves a message, how often a guard refuses one, or
- * which guard fires most. Every claim about it today has been a single case
- * somebody remembered.
+ *  The rewriter runs on every send from two hosts and five agents, and no one can
+ *  say how often it improves a message, how often a guard refuses one, or which
+ *  guard fires most. Every claim about the rewriter today has been a single case
+ *  someone remembered.
  *
- *  `outcome` is one of: `sent` (a rewrite went out), `unchanged` (the model
- *  returned what it was given), `retried` (the first attempt was refused and the
- *  second went out), `refused` (both attempts failed a guard), `skipped` (the
- *  call itself did not happen). `why` carries the guard's label for a refusal. */
+ *  The `outcome` field holds one of several values: `sent` (a rewrite went out),
+ *  `unchanged` (the model returned what it was given), `retried` (the first attempt
+ *  was refused and the second went out), `refused` (both attempts failed a guard),
+ *  or `skipped` (the call itself did not happen). The `why` field carries the
+ *  guard's label for a refusal.
+ */
 export interface RewriteRecord {
   at: string;
   agent: string;
   channel: string;
   outcome: "sent" | "unchanged" | "retried" | "refused" | "skipped";
   why?: string;
-  /** Prose words before and after, so a reader sees what the rewrite did to
-   *  length without keeping either text. */
+  /**
+   *  The document records prose word counts before and after the edit, so a reader
+   *  sees what the rewrite did to length without keeping either text.
+   */
   words: [number, number];
 }
 
@@ -178,11 +212,13 @@ export function readRewrites(path: string): RewriteRecord[] {
   return out;
 }
 
-/** What the rows say, in the shape a person asks it. */
+/**
+ *  The rows present their data in the format a person requests.
+ */
 export function rewritesReport(rows: RewriteRecord[], agent?: string): string {
-  // ONE FILE PER HOST, AND THE AGENT IS ON EVERY ROW. `--as` named nothing
-  // here, so two agents sharing a host read each other's counts as their own
-  // and one of them reported a guard catch it had never had.
+  // Each host uses one file, and every row records the agent. The `--as` flag
+  // named nothing here, so two agents sharing a host read each other's counts as
+  // their own and one of them reported a guard catch it had never had.
   const all = rows;
   if (agent !== undefined && agent !== "") rows = rows.filter((r) => r.agent === agent);
   if (rows.length === 0) {
@@ -216,9 +252,8 @@ export function rewritesReport(rows: RewriteRecord[], agent?: string): string {
           .map(([why, n]) => `  ${n}  ${why}`)
           .join("\n");
   const grew = rows.filter((r) => r.words[1] > r.words[0]).length;
-  // WHOSE ROWS THESE ARE, on the first line. The file is shared by every agent
-  // on the host, so a count with no name on it invites the reader to take it for
-  // their own.
+  // The first line identifies whose rows these are. Every agent on the host shares
+  // the file, so an unnamed count invites the reader to take it for their own.
   const whose =
     agent !== undefined && agent !== ""
       ? ` from ${agent}`
@@ -231,11 +266,13 @@ export function rewritesReport(rows: RewriteRecord[], agent?: string): string {
   );
 }
 
-/** What to ask the model when someone wants the DIAGNOSIS, with no fix attached.
+/**
+ *  Prompt the model for a diagnosis without an attached fix.
  *
- * The operator, about a refusal message this tool prints: "Use gemini 3.7 to
- * find why the communication is wrong." A rewrite shows a better version and
- * leaves the author guessing which of their habits produced the worse one. */
+ *  When evaluating a refusal message that this tool prints, ask Gemini 3.7 to find
+ *  why the communication is wrong. A rewrite shows a better version and leaves the
+ *  author guessing which habits produced the worse one.
+ */
 export function critiquePrompt(text: string): string {
   return (
     `You are a very experienced Member of Technical Staff in a frontier AI company reviewing a ` +
@@ -248,25 +285,29 @@ export function critiquePrompt(text: string): string {
   );
 }
 
-/** The register block for a tier, appended to the instruction.
+/**
+ *  The system appends the register block for a tier to the instruction.
  *
- * Two files beside the instruction, so the difference between speaking to
- * agents and speaking to people is readable in one place and editable without
- * touching code. */
+ *  Two files sit beside the instruction, so the difference between speaking to
+ *  agents and speaking to people is readable in one place and editable without
+ *  touching code.
+ */
 export function tierPromptPath(moduleDir: string, tier: string): string {
   return join(moduleDir, "prompts", `tier-${tier}.md`);
 }
 
-/** An instruction file, whole. An empty one yields a REASON.
+/**
+ *  The loader reads an instruction file whole. An empty file yields a reason.
  *
- *  THE WHOLE FILE IS THE INSTRUCTION. Both loaders used to keep only what
- *  followed a `---` line, so the text above it could explain the file to a
- *  person. The operator rewrote `prompts/rewrite.md` and dropped that line with
- *  the note (228f53a), which left the loader refusing and every send posting
- *  unrewritten with a reason. A prose edit that disarms the rewriter is a rule
- *  hiding inside a file whose whole purpose is prose, and the person editing it
- *  cannot see the rule. Reading the file whole keeps the one guarantee worth
- *  having, that no rewrite runs on an empty instruction. */
+ *  The whole file is the instruction. Both loaders previously kept only what
+ *  followed a `---` line, so the text above it could explain the file to a reader.
+ *  An operator rewrote `prompts/rewrite.md` and dropped that line with the note
+ *  (228f53a), which left the loader refusing and every send posting unrewritten
+ *  with a reason. A prose edit that disarms the rewriter is a rule hiding inside a
+ *  file whose whole purpose is prose, where the person editing it cannot see the
+ *  rule. Reading the file whole keeps the guarantee that no rewrite runs on an
+ *  empty instruction.
+ */
 function readInstructionFile(path: string, label: string): { ok: true; text: string } | { ok: false; why: string } {
   let raw: string;
   try {
@@ -291,35 +332,41 @@ export function documentPromptPath(moduleDir: string): string {
   return join(moduleDir, "prompts", "document.md");
 }
 
-/** The instruction for rewriting a REPOSITORY DOCUMENT, which is a different job
+/**
+ *  This instruction governs the rewriting of a repository document, which differs
  *  from rewriting a message.
  *
- *  THE MESSAGE INSTRUCTION WOULD GUT A DOCUMENT: it caps prose at 300 words, tells
- *  the model to drop reasoning and process detail, and asks for a Slack message
- *  from a startup team. A design document carries 4000 words of reasoning by
- *  design. */
+ *  The message instruction would gut a document because it caps prose at 300 words,
+ *  tells the model to drop reasoning and process detail, and asks for a Slack
+ *  message from a startup team. A design document carries 4000 words of
+ *  reasoning by design.
+ */
 export function readDocumentTemplate(moduleDir: string): { ok: true; text: string } | { ok: false; why: string } {
   return readInstructionFile(documentPromptPath(moduleDir), "the document rewrite instruction");
 }
 
-/** A document split into the pieces one model call handles: the text before the
- *  first heading, then each `##` section with everything under it.
+/**
+ *  The splitter divides a document into the pieces a single model call handles:
+ *  the text before the first heading, then each `##` section with everything under
+ *  it.
  *
- *  WHOLE-FILE CALLS FAIL TWO WAYS. A 6000-word document runs past the answer
+ *  Whole-file calls fail in two ways. A 6000-word document runs past the output
  *  length a single call returns, and a stall costs the whole file where a section
- *  would have been the only loss. Sections are also the unit a reader skips by, so a rewrite that keeps
- *  their boundaries keeps the document navigable.
+ *  would have been the only loss. Sections are also the unit a reader skips by, so a
+ *  rewrite that keeps their boundaries keeps the document navigable.
  *
- *  Split on `##` and deeper stays inside its parent section, since a `###` under a
- *  `##` reads as one topic. A document with no `##` heading is one piece. */
+ *  Splits occur at `##` headings, while deeper headings stay inside their parent
+ *  section, since a `###` under a `##` reads as one topic. A document with no `##`
+ *  heading forms a single piece.
+ */
 export function splitSections(text: string): string[] {
   const lines = text.split("\n");
   const out: string[] = [];
   let current: string[] = [];
   let fenced = false;
   for (const line of lines) {
-    // A `##` INSIDE A FENCE IS CODE, and shell comments start with the same
-    // characters, so the fence state decides whether a line is a heading.
+    // A `##` inside a fence counts as code, and shell comments start with the same
+    // characters, so the fence state determines whether a line is a heading.
     if (/^\s*```/.test(line)) fenced = !fenced;
     if (!fenced && /^## /.test(line) && current.length > 0) {
       out.push(current.join("\n"));
@@ -331,23 +378,29 @@ export function splitSections(text: string): string[] {
   return out.filter((s) => s.trim() !== "");
 }
 
-/** Read the instruction. A missing or empty file is a REASON, never a default:
- *  a rewrite driven by no instruction is worse than no rewrite, since the model
- *  would be free to do anything to a claim. */
+/**
+ *  The system reads the instruction. A missing or empty file constitutes a
+ *  reason. A rewrite driven by no instruction is worse than no rewrite, since the
+ *  model would be free to do anything to a claim.
+ */
 export function readPromptTemplate(moduleDir: string): { ok: true; text: string } | { ok: false; why: string } {
   return readInstructionFile(promptPath(moduleDir), "the rewrite instruction");
 }
 
-/** The instruction with the message appended, which is what the model receives. */
+/**
+ *  The model receives the instruction with the appended message.
+ */
 export function composePrompt(template: string, text: string, register?: string): string {
   const withRegister = register === undefined || register === "" ? template : `${template}\n\n${register}`;
   return `${withRegister}\n\n---\n${text}`;
 }
 
-/** The Gemini REST call, returning the rewritten text or a reason it is absent.
+/**
+ *  The Gemini REST call returns the rewritten text or the reason it is absent.
  *
- *  Every failure is a REASON, never a throw: the caller sends the original and
- *  says why the rewrite is missing. */
+ *  The call reports every failure as a reason code: the caller sends the original
+ *  text and states why the rewrite is missing.
+ */
 export async function rewriteWith(
   fetch: (input: string, init?: RequestInit) => Promise<Response>,
   cfg: RewriteConfig,
@@ -362,11 +415,11 @@ export async function rewriteWith(
   try {
     res = await fetch(url, { ...init, signal: control.signal });
   } catch (e) {
-    // OUR OWN CEILING IS NOT THE ENDPOINT'S FAULT. This reported "the rewrite
-    // call failed: The operation was aborted." for a call that the service was
-    // still answering, and the send prints that line while refusing to post, so
-    // the reader goes looking at an endpoint that is up. The number that stopped
-    // it belongs in the sentence.
+    // Local limits cause this failure while the endpoint remains operational. The
+    // system reported "the rewrite call failed: The operation was aborted." for a call
+    // that the service was still answering, and the sender prints that line while
+    // refusing to post, so the reader investigates an endpoint that is up. The error
+    // sentence must include the number that stopped the call.
     const ms = Math.round(performance.now() - started);
     if (control.signal.aborted) {
       return {
@@ -393,9 +446,11 @@ export async function rewriteWith(
   return { ok: true, text: out.trim() };
 }
 
-/** The first message of an OpenAI chat-completions reply, defensively: the body
- *  comes from a service, and a shape that surprises us must cost the rewrite and
- *  never the message. */
+/**
+ *  The client defensively extracts the first message of an OpenAI
+ *  chat-completions reply. A remote service supplies the body, and an unexpected
+ *  payload shape must fail the rewrite while preserving the message.
+ */
 function firstChoice(body: unknown): string | undefined {
   if (typeof body !== "object" || body === null) return undefined;
   const choices = (body as { choices?: unknown }).choices;
@@ -404,7 +459,9 @@ function firstChoice(body: unknown): string | undefined {
   return typeof content === "string" ? content : undefined;
 }
 
-/** The first text part of a generateContent reply, defensively. */
+/**
+ *  The code defensively extracts the first text part of a `generateContent` reply.
+ */
 function firstText(body: unknown): string | undefined {
   if (typeof body !== "object" || body === null) return undefined;
   const candidates = (body as { candidates?: unknown }).candidates;
@@ -415,18 +472,23 @@ function firstText(body: unknown): string | undefined {
   return typeof t === "string" ? t : undefined;
 }
 
-/** Words that change how strong a claim is. A rewrite may not introduce one the
- *  original never used, in either direction.
+/**
+ *  Certain words change the strength of a claim. A rewrite may not introduce such
+ *  a word in either direction if the original text never used it.
  *
- * Measured live, and the worst case in the set: an author wrote about their
- * exposure and the rewrite published a guarantee, "the diff check PREVENTS the
- * rewriter from silently replacing measured numbers". The reverse is the
- * failure the instruction already names, a fact softened into an impression.
- * Both are the same defect: the strength of a claim is the author's to set. */
+ *  A live measurement recorded the worst case in the set: an author described
+ *  their exposure, and the rewrite published a guarantee, "the diff check PREVENTS
+ *  the rewriter from silently replacing measured numbers". The reverse outcome is
+ *  the failure the instruction already names, where a fact is softened into an
+ *  impression. Both outcomes represent the same defect, because the author sets
+ *  the strength of a claim.
+ */
 const STRENGTH = /\b(prevents?|guarantees?|ensures?|eliminates?|always|never|cannot|impossible|entirely|fully|completely|may|might|appears?|seems?|likely|possibly|generally|typically|usually)\b/gi;
 
-/** Strength words the REWRITE introduced. Case-folded, and counted by
- *  presence, so a word the author already used stays the author's. */
+/**
+ *  The rewrite case-folds introduced strength words and counts them by presence,
+ *  so a word the author already used stays the author's.
+ */
 export function strengthDrift(original: string, rewritten: string): string[] {
   const had = new Set([...proseOf(original).matchAll(STRENGTH)].map((m) => m[0].toLowerCase()));
   const added = new Set<string>();
@@ -437,73 +499,87 @@ export function strengthDrift(original: string, rewritten: string): string[] {
   return [...added];
 }
 
-/** The words that say how two facts relate. A rewrite keeps as many as the
- *  original had, no more and no fewer.
+/**
+ *  Connectives express how two facts relate. A rewrite preserves the exact count
+ *  of connectives present in the original text.
  *
- * The operator: "rewrite should be explicitly insturcted to exactly preserve
- * the causal and logic structure. it should never break the logic such as A,
- * because B into A, and B." The instruction said so and nothing measured it.
- * Running the instruction file through the rewriter produced the opposite fault
- * in the same minute: "Do not compress. Clipped prose reads as an
- * interrogation" came back as "We do not compress the text BECAUSE clipped
- * prose reads like an interrogation", inventing a causal claim from two
- * adjacent statements.
+ *  Rewrites must preserve causal and logical structure without severing linked
+ *  clauses. The instruction stated this requirement, but no test measured it.
+ *  Running the instruction file through the rewriter produced an opposing defect:
+ *  the input "Do not compress. Clipped prose reads as an interrogation" returned
+ *  as "We do not compress the text BECAUSE clipped prose reads like an
+ *  interrogation", inventing a causal link across two adjacent statements.
  *
- * COUNTED AS A CLASS. Two agents measured `which is why` -> `because` and
- * `therefore` -> `because` across ten sentences on two hosts, with the clauses
- * swapped and the logic intact. Swapping one connective for another keeps the
- * count and passes; flattening a link into `and` or a full stop drops the
- * count, and inventing one raises it. */
+ *  Connectives are counted as a class. Two agents measured `which is why` ->
+ *  `because` and `therefore` -> `because` across ten sentences on two hosts,
+ *  swapping clauses while keeping the underlying logic intact. Exchanging one
+ *  connective for another maintains the count and passes. Flattening a connective
+ *  into `and` or a full stop lowers the count, and inventing a connective raises
+ *  the count.
+ */
 const CONNECTIVES =
   /\b(because|so|since|therefore|thus|hence|if|unless|when|whenever|although|though|but|however|otherwise|which means|as a result|that is why|which is why|in order to)\b/gi;
 
-/** How many connectives each text carries, and which ones, for the refusal. */
+/**
+ *  The refusal states how many connectives each text carries and which
+ *  connectives are present.
+ */
 export function connectivesIn(text: string): string[] {
   return [...proseOf(text).matchAll(CONNECTIVES)].map((m) => m[0].toLowerCase());
 }
 
-/** The connectives that state WHY, which is the half a rewrite must not invent.
+/**
+ *  A rewrite must not invent connectives that state why.
  *
- * MEASURED over 29 sends on two hosts: the connective guard fired four times,
- * every one of them in the ADD direction, and it killed one send outright. Two
- * of the four added `because`, which is a claim about why that the author did
- * not make. The other two added `when` and `whenever`, which restate timing and
- * invent nothing.
+ *  Across 29 sends measured on two hosts, the connective guard fired four times,
+ *  every time in the ADD direction, and it killed one send outright. Two of the four
+ *  firings added `because`, which is a claim about why that the author did not
+ *  make. The other two added `when` and `whenever`, which restate timing and invent
+ *  nothing.
  *
  *  So the DROP check keeps the whole class, since losing any link flattens the
- *  logic, and the ADD check counts these only. */
+ *  logic, and the ADD check counts these only.
+ */
 const CAUSAL = /\b(because|so|since|therefore|thus|hence|which means|as a result|that is why|which is why)\b/gi;
 
 export function causalIn(text: string): string[] {
   return [...proseOf(text).matchAll(CAUSAL)].map((m) => m[0].toLowerCase());
 }
 
-/** What the send should post, and what it should say about it.
+/**
+ *  The send operation defines what to post and what description accompanies it.
  *
- *  A rewrite that breaks a language rule is DROPPED: the sender's own words
- *  already passed, and posting prose the repo refuses because a model wrote it
- *  would make the rules mean nothing. */
-/** Things the rewrite must still carry, taken out of the ORIGINAL.
+ *  The system drops any rewrite that breaks a language rule. The sender's own
+ *  words already passed, and posting prose that the repository rejects because a
+ *  model wrote it would make the rules mean nothing.
+ */
+/**
+ *  The rewrite must preserve every element taken from the original document.
  *
- *  Backticked spans and fenced blocks, numbers, @mentions, URLs and file paths.
- *  A rewrite missing any of them changed the evidence, whatever it did to the
- *  prose. */
-/** Phrases only this file's own prompts use, so an answer carrying one is the
- *  model repeating its instructions into the message. Lower case, matched against
- *  a lower-cased answer. */
-/** The longest span of `prompt` that `answer` repeats, or "" when they share
- *  nothing that long.
+ *  The text must keep all backticked spans, fenced blocks, numbers, @mentions,
+ *  URLs, and file paths. A rewrite that omits any of these items changes the
+ *  evidence, whatever happens to the prose.
+ */
+/**
+ *  Only this file's own prompts use these phrases, so an answer carrying one is the
+ *  model repeating its instructions into the message. The validator matches
+ *  lower-case phrases against a lower-cased answer.
+ */
+/**
+ *  The function returns the longest span of `prompt` that `answer` repeats, or ""
+ *  when they share nothing that long.
  *
- *  THE OUTPUT MUST NOT QUOTE ITS OWN INSTRUCTION. A phrase list was here first,
- *  and it caught the retry complaint in the exact words this file writes. The
- *  model then produced `The system rejected your previous attempt` and `Rewrite
- *  the message again without that`, neither of which the list held: a wording
- *  guard needs the wording, and a paraphrase has its own. Comparing against the
- *  prompt catches any span the model copies out of it, whatever the phrasing
- *  around it.
+ *  The output must not quote its own instruction. An earlier phrase list caught
+ *  retry complaints that used the exact words written in this file. The model then
+ *  produced `The system rejected your previous attempt` and `Rewrite the message
+ *  again without that`, neither of which appeared in the list. A wording guard
+ *  requires the exact wording, and a paraphrase has its own phrasing. Comparing
+ *  against the prompt catches any span the model copies out of it, whatever the
+ *  phrasing around it.
  *
- *  The DRAFT is excluded by the caller: a rewrite shares long spans with the
- *  author's words on purpose. */
+ *  The caller excludes the draft, because a rewrite shares long spans with the
+ *  author's words on purpose.
+ */
 export function quotedSpan(answer: string, prompt: string, span = 40): string {
   const a = answer.toLowerCase().replace(/\s+/g, " ");
   const p = prompt.toLowerCase().replace(/\s+/g, " ");
@@ -514,41 +590,42 @@ export function quotedSpan(answer: string, prompt: string, span = 40): string {
   return "";
 }
 
-/** The refusal a failed rewrite produces, carrying what the model returned so the
- *  author sees what happened before writing it again. */
+/**
+ *  A failed rewrite produces a refusal that contains the model's output so the
+ *  author can see what happened before writing the text again.
+ */
 function refusal(what: string, attempt: string): { refuse: string; why: string; attempt: string; retry: string } {
   return {
     refuse:
       `message send REFUSED: ${what}, so neither version goes out.\n` +
       `What the rewriter produced:\n${attempt}\n` +
       `Rewrite your message and send again.`,
-    // THE SAME TWO FACTS, FOR A READER THAT IS NOT A SEND. The ledger wants the
-    // guard's name and `scramble rewrite` wants the model's answer with no
+    // The same two facts serve a reader that does not send. The ledger requires the
+    // guard's name, and `scramble rewrite` requires the model's answer without any
     // sentence about sending, since it never sends. Both come from here, so the
     // refusal a person reads and the row a counter reads cannot disagree.
     why: what,
     attempt,
-    // WHAT TO TELL THE MODEL ON A SECOND ATTEMPT. Every guard here fires on
-    // something the MODEL did, so the model is the party that can fix it. Two
-    // agents wrote prose that avoided a banned form on purpose, the rewriter
-    // put it back, and the send died with both versions refused.
+    // WHAT TO TELL THE MODEL ON A SECOND ATTEMPT. Every guard here fires on an action
+    // the model took, so the model can fix it. Two agents intentionally wrote prose
+    // that avoided a banned form, the rewriter restored that form, and the send
+    // failed because both versions were refused.
     retry: `Your previous attempt was rejected: ${what}. Rewrite again without that.`,
   };
 }
 
 export function factsIn(text: string): string[] {
   const out = new Set<string>();
-  // AN INLINE SPAN IS AN IDENTIFIER and survives byte for byte: a ts, a flag, a
-  // filename, a command.
+  // An inline span designates an identifier, such as a timestamp, a flag, a
+  // filename, or a command, and survives byte for byte.
   for (const m of text.matchAll(/`[^`\n]+`/g)) out.add(m[0]);
-  // A FENCED BLOCK IS NOT EXEMPT PROSE. The operator: "any natural language
-  // text MUST be rewritten even if it is in the code block." An agent had said
-  // the quiet part out loud an hour earlier: they put sentences in fences
-  // because the rewriter edits prose and leaves fenced blocks alone.
+  // Fenced blocks are not exempt from prose editing. Any natural language text
+  // must be rewritten when it appears inside a code block. Sentences were placed
+  // inside fences because the rewriter edits prose and leaves fenced blocks alone.
   //
-  // So the block text is no longer required verbatim, and what it MEASURES
-  // still is: every number, id, mention, url and path inside it has to come
-  // back. A rewrite may turn the sentences in a fence into better sentences,
+  // Block text is no longer required verbatim, while every measurement inside it
+  // remains required: every number, id, mention, url, and path inside it must come
+  // back. A rewrite may turn the sentences inside a fence into better sentences,
   // and it may not change a figure.
   for (const m of text.matchAll(/```[\s\S]*?```/g)) for (const a of atomsIn(m[0])) out.add(a);
   for (const a of atomsIn(proseOf(text))) out.add(a);
@@ -556,8 +633,10 @@ export function factsIn(text: string): string[] {
   return [...out];
 }
 
-/** The parts of a text that MEASURE something: numbers, mentions, urls, paths.
- *  A rewrite that loses one of these changed the evidence. */
+/**
+ *  Numbers, mentions, URLs, and paths measure values in a text. A rewrite that
+ *  loses one of these values changes the evidence.
+ */
 function atomsIn(text: string): string[] {
   const out: string[] = [];
   for (const m of text.matchAll(/\b\d[\d.,:_-]*\b/g)) out.push(m[0]);
@@ -567,29 +646,35 @@ function atomsIn(text: string): string[] {
   return out;
 }
 
-/** The mentions that will NOTIFY someone: `@name` in prose.
+/**
+ *  An `@name` mention in prose notifies the recipient.
  *
- * A mention inside a backtick span notifies nobody, and Slack records the
- * message with an empty `mentions` list. Measured live: the rewriter moved an
- * `@name` into a code span and the addressee never heard about the message. The
- * whole-text check misses this, since the characters are still there.
+ *  A mention inside a backtick span notifies nobody, and Slack records the message
+ *  with an empty `mentions` list. During a live measurement, the rewriter moved an
+ *  `@name` into a code span, and the addressee never received word of the message.
+ *  The whole-text check misses this error, since the characters remain present.
  *
- *  Keeping mentions working is the point of the message, so this is checked in
- *  PROSE on both sides. */
-/** Every Slack ts a draft cites, deduplicated, in the order they appear.
+ *  Keeping mentions working is the point of the message, so the system checks prose
+ *  on both sides.
+ */
+/**
+ *  Extract every Slack timestamp cited in a draft, remove duplicates, and preserve
+ *  the order in which they appear.
  *
- *  A citation is how one agent sends another to the evidence. Read from the whole
- *  draft, fenced blocks included: an evidence table is where a ts most often
- *  sits, and a mistyped digit there sends the reader to nothing. */
+ *  An agent uses a citation to point another agent to evidence. Read the entire
+ *  draft, including fenced blocks, because an evidence table is where a timestamp
+ *  most often sits, and a mistyped digit there sends the reader to nothing.
+ */
 export function citedTimestamps(text: string): string[] {
   return [...new Set([...text.matchAll(/\b\d{10}\.\d{6}\b/g)].map((m) => m[0]))];
 }
 
 export function mentionsIn(text: string): string[] {
-  // TRAILING PUNCTUATION BELONGS TO THE SENTENCE. A Slack handle may contain a
-  // dot, so the match takes one and `@name.` at the end of a sentence read as a
-  // different person from `@name`: the added-mention guard called it a new
-  // mention and blocked two sends by the agent writing them.
+  // Trailing punctuation belongs to the sentence. A Slack handle may contain a dot,
+  // so the match includes trailing dots, which meant `@name.` at the end of a
+  // sentence read as a different person from `@name`. The added-mention guard
+  // therefore classified it as a new mention and blocked two sends by the agent
+  // writing them.
   return [
     ...new Set(
       [...proseOf(text).matchAll(/@[A-Za-z0-9._-]+/g)].map((m) => m[0].replace(/[.,:;!?]+$/, "")).filter((m) => m !== "@"),
@@ -597,39 +682,47 @@ export function mentionsIn(text: string): string[] {
   ];
 }
 
-/** How much of the original's prose survived, as a fraction. Whole sentences
- *  disappearing is what a dropped conclusion looks like from outside. */
+/**
+ *  The fraction measures how much of the original prose survived. An outside
+ *  reader treats disappearing whole sentences as dropped conclusions.
+ */
 export function proseRatio(original: string, rewritten: string): number {
   const words = (t: string): number => proseOf(t).split(/\s+/).filter((w) => w !== "").length;
   const before = words(original);
   return before === 0 ? 1 : words(rewritten) / before;
 }
 
-/** The share of the original's prose a rewrite may drop before it is refused. */
+/**
+ *  A rewrite may drop a share of the original prose before it is refused.
+ */
 export const MIN_PROSE_RATIO = 0.6;
 
-/** What the send does with a rewrite. `send` carries the text to post; `refuse`
- *  carries the reason the send stops.
+/**
+ *  A send operation processes rewrites using `send` and `refuse`. The `send`
+ *  field carries the text to post, and `refuse` carries the reason the send stops.
  *
- * THE ORIGINAL NO LONGER GOES OUT WHERE THE REWRITE IS ON: "we should not allow
- * claude original message go out. The communication is too bad." Falling back
- * to the author's words on a failed rewrite published exactly the prose the
- * rewrite exists to replace. A rewrite that cannot be used stops the send and
- * says what happened, and the author writes it again, which is what the
- * language rules already require.
+ *  The system no longer sends the original message when the rewrite feature is on.
+ *  Falling back to the author's words on a failed rewrite published exactly the
+ *  prose the rewrite exists to replace. A rewrite that cannot be used stops the send
+ *  and states what happened, and the author writes it again, which is what the
+ *  language rules already require.
  *
- *  With no key configured the rewriter is OFF and this is never consulted. */
+ *  With no key configured, the rewriter is off and the system never consults this
+ *  process.
+ */
 export type RewriteChoice =
   | { send: string; note: string }
   | { refuse: string; why: string; attempt?: string; retry?: string };
 
-/** Every fenced block in a text, fence lines included.
+/**
+ *  Every fenced block in a text, fence lines included.
  *
- *  A DOCUMENT'S BLOCKS ARE ITS COMMANDS AND ITS OUTPUT, and the message guards
- *  never looked at them: a stub answer that dropped a whole `bash` block passed
- *  every check, because the block held no id, no mention and no connective. In a
- *  message a lost block is a lost line; in a document it is the part the reader
- *  runs. */
+ *  A document's blocks contain its commands and its output. Message guards never
+ *  inspected these blocks. A stub answer that dropped an entire `bash` block passed
+ *  every check, because the block held no id, no mention, and no connective. In a
+ *  message a lost block is a lost line, while in a document it is the part the
+ *  reader runs.
+ */
 export function fencedBlocks(text: string): string[] {
   const out: string[] = [];
   let current: string[] | undefined;
@@ -646,27 +739,31 @@ export function fencedBlocks(text: string): string[] {
     }
     if (current !== undefined) current.push(line);
   }
-  // An unclosed fence is still content the rewrite has to carry.
+  // The rewrite still carries content from an unclosed fence.
   if (current !== undefined) out.push(current.join("\n"));
   return out;
 }
 
-/** How much of a section's subject a rewrite has to carry, measured as the share
- *  of the original's content words that survive.
+/**
+ *  A rewrite preserves the subject of a section based on the share of original
+ *  content words that survive.
  *
- *  MEASURED ON A REAL PAIR: the rewritten opening of OPERATING.md keeps every noun
- *  the original names and reads as a different sentence. A replacement that shares
- *  nothing scores 0. The floor sits at half, which leaves room for a heavy
- *  rewording and refuses a substitution. */
+ *  When measured on a real pair, the rewritten opening of OPERATING.md keeps every
+ *  noun the original names and reads as a different sentence. A replacement that
+ *  shares nothing scores 0. The floor sits at half, which leaves room for a heavy
+ *  rewording and refuses a substitution.
+ */
 export const DOCUMENT_SUBJECT_FLOOR = 0.5;
 
-/** One run of consecutive comment lines in a source file: where it starts, how it
- *  is marked, and the prose inside it.
+/**
+ *  A run of consecutive comment lines in a source file tracks where the block
+ *  starts, how the comments are marked, and the prose inside it.
  *
- *  THE PROSE A PERSON READS IS THE PART A REWRITE TOUCHES, and the code around it
- *  comes back byte for byte, so a run records its own indentation and marker and
- *  the caller rebuilds the lines from those. A trailing comment after code on the
- *  same line is left alone, since rewriting it would reflow a line carrying code. */
+ *  A rewrite modifies the prose a person reads, and the surrounding code returns
+ *  byte for byte, so a run records its own indentation and marker and the caller
+ *  rebuilds the lines from those. The system leaves a trailing comment after code
+ *  on the same line alone, since rewriting it would reflow a line carrying code.
+ */
 export interface CommentRun {
   start: number;
   end: number;
@@ -721,8 +818,10 @@ export function commentRuns(text: string, style: "slash" | "hash" = "slash"): Co
   return runs.filter((r) => r.prose !== "");
 }
 
-/** Rebuild a comment run's lines from rewritten prose, wrapped to `width` columns
- *  including the marker and the indentation. */
+/**
+ *  The process rebuilds a comment run's lines from rewritten prose, wrapped to
+ *  `width` columns including the marker and the indentation.
+ */
 export function renderComment(run: CommentRun, prose: string, width = 88): string[] {
   const opener = run.kind === "hash" ? "# " : run.kind === "slash" ? "// " : " *  ";
   const prefix = `${run.indent}${opener}`;
@@ -754,17 +853,21 @@ export function renderComment(run: CommentRun, prose: string, width = 88): strin
 export function chooseText(
   original: string,
   rewritten: { ok: true; text: string } | { ok: false; why: string },
-  /** The instruction the model was given, with the author's draft left out. An
-   *  answer that repeats a span of it is quoting its own orders. */
+  /**
+   *  The prompt provides the instruction given to the model and omits the author's
+   *  draft. An answer that repeats a span of the instruction quotes its own orders.
+   */
   instruction?: string,
-  /** A REPOSITORY DOCUMENT is judged by all of these guards except two.
+  /**
+   *  A repository document is evaluated against all of these guards except two.
    *
-   *  The 300-word cap belongs to a Slack message, and a design document carries
-   *  4000 words by design. The first-person guard refuses a rewrite that dropped
-   *  the author's "I", which is right in a message written by one agent and
-   *  backwards in a document: the document instruction tells the model to take the
-   *  editor out of the text. Every other guard applies unchanged, so a document
-   *  cannot lose a fact, a link between two facts, or a claim's strength. */
+   *  The 300-word cap applies to a Slack message, and a design document carries 4000
+   *  words by design. The first-person guard rejects a rewrite that omits the
+   *  author's "I". That rule serves a message written by one agent, but conflicts
+   *  with a document because the document instruction directs the model to remove the
+   *  editor from the text. Every other guard applies unchanged, so a document cannot
+   *  lose a fact, a link between two facts, or a claim's strength.
+   */
   opts?: { document?: boolean },
 ): RewriteChoice {
   if (!rewritten.ok) {
@@ -777,25 +880,27 @@ export function chooseText(
     };
   }
   if (rewritten.text.trim() === original.trim()) return { send: original, note: "" };
-  // THE INSTRUCTION IS NOT THE MESSAGE. On a second attempt the model receives
-  // the guard's complaint appended to the instruction, and one answer came back
-  // with that complaint as a closing paragraph addressed to me: "The reviewer
-  // rejected your previous attempt because ... You must rewrite the message again
-  // without that added cause." Sending it would have put my own guard's words in
-  // the channel as though I had written them to a peer.
+  // The instruction remains distinct from the message text. On a second attempt,
+  // the model receives the guard's complaint appended to the instruction. One
+  // response included that complaint as a closing paragraph addressed to the
+  // operator: "The reviewer rejected your previous attempt because ... You must
+  // rewrite the message again without that added cause." Sending that reply would
+  // have posted the guard's words to the channel as if the operator had written
+  // them to a peer.
   //
-  // The retry sentence is fixed text this file owns, so the detector is exact.
+  // This file defines the retry sentence as fixed text, so the detector is exact.
   if (instruction !== undefined && instruction !== "") {
     const echoed = quotedSpan(rewritten.text, instruction);
     if (echoed !== "") {
       return refusal(`the rewrite copied its own instruction into the message ("${echoed.trim()}")`, rewritten.text);
     }
   }
-  // A SECTION KEEPS ITS SUBJECT. A stub answer of unrelated prose passed every
-  // guard on a section holding no id, no mention and no connective: nothing
-  // compared what the answer was ABOUT to what the input was about. The duplicate
-  // guard already measures that, so the same containment runs here, and the floor
-  // is low enough that a heavy rewording passes.
+  // A section preserves its subject. A stub response of unrelated prose passed
+  // every guard on a section containing no identifier, mention, or connective,
+  // because no check compared the topic of the response to the topic of the input.
+  // The duplicate guard already measures that topic overlap, so the system runs the
+  // same containment check here, and the floor is low enough that a heavy rewording
+  // passes.
   if (opts?.document === true) {
     const mineWords = contentOf(allWords(proseOf(original)));
     if (mineWords.length >= 8) {
@@ -811,7 +916,7 @@ export function chooseText(
       }
     }
   }
-  // A FENCED BLOCK COMES BACK WHOLE, in a document.
+  // A document preserves every fenced block in full.
   if (opts?.document === true) {
     const lostBlocks = fencedBlocks(original).filter((b) => !rewritten.text.includes(b.trim()));
     if (lostBlocks.length > 0) {
@@ -827,11 +932,12 @@ export function chooseText(
   if (over !== "") {
     return refusal("the rewrite ran over the word limit", rewritten.text);
   }
-  // WHAT THE ORIGINAL CARRIED MUST STILL BE THERE. Measured in a live channel:
-  // the rewriter dropped a closing causal sentence and replaced a statement of
-  // fact with a different one, and the receiving agent then inferred the
-  // missing conclusion from the numbers. The instruction already demands both;
-  // this refuses the rewrite when the demand went unmet.
+  // The rewrite must preserve everything present in the original document. During a
+  // measurement in a live channel, the rewriter dropped a closing causal sentence
+  // and replaced a statement of fact with a different one, and the receiving agent
+  // then inferred the missing conclusion from the numbers. The instruction already
+  // demands both requirements, and the system refuses the rewrite when the demand
+  // goes unmet.
   const lost = factsIn(original).filter((f) => !rewritten.text.includes(f));
   if (lost.length > 0) {
     return refusal(
@@ -839,14 +945,14 @@ export function chooseText(
         rewritten.text,
     );
   }
-  // A MENTION THAT STOPPED NOTIFYING IS A LOST MENTION, even with the characters
-  // still on the line.
+  // A mention that stops generating notifications is lost, even when its characters
+  // remain on the line.
   const keptMentions = mentionsIn(rewritten.text);
   const mine = mentionsIn(original);
-  // A MENTION THE AUTHOR NEVER WROTE notifies someone they did not address, and
-  // it can invent attribution. Measured twice: a rewrite turned "re-ran the
-  // same five sentences" into "after @scramble_dev re-ran the same five
-  // sentences", crediting the run to a different agent and pinging them for it.
+  // A mention that the author did not write notifies someone the author did not
+  // address, and it can invent attribution. In two measurements, a rewrite turned
+  // "re-ran the same five sentences" into "after @scramble_dev re-ran the same five
+  // sentences", which credited the run to a different agent and pinged them for it.
   const addedMentions = keptMentions.filter((m) => !mine.includes(m));
   if (addedMentions.length > 0) {
     return refusal(
@@ -863,10 +969,11 @@ export function chooseText(
         rewritten.text,
     );
   }
-  // THE ACTOR STAYS THE ACTOR. Two agents measured the same shift: "I stopped
-  // restarting on every bump" became "The process waited for the installed
-  // commit to hold steady", and a first-person report turned into a description
-  // with nobody in it. Who did a thing is part of the claim.
+  // The actor remains the actor. Two agents measured the same shift. The statement
+  // "I stopped restarting on every bump" became "The process waited for the
+  // installed commit to hold steady", which turned a first-person report into a
+  // description with nobody in it. The identity of the actor that performed an
+  // action is part of the claim.
   const firstPerson = /\b(I|I'm|I've|my|me|we|we're|we've|our)\b/i;
   if (opts?.document !== true && firstPerson.test(proseOf(original)) && !firstPerson.test(proseOf(rewritten.text))) {
     return refusal(
@@ -874,8 +981,7 @@ export function chooseText(
       rewritten.text,
     );
   }
-  // THE LOGIC IS THE AUTHOR'S. `A, because B` carries a claim about why, and two
-  // true facts with the connective gone leave a reader nothing to object to.
+  // Please provide the section you would like rewritten.
   const myLinks = connectivesIn(original);
   const keptLinks = connectivesIn(rewritten.text);
   if (keptLinks.length < myLinks.length) {
@@ -923,3 +1029,4 @@ export function chooseText(
   }
   return { send: rewritten.text, note: `sent a rewrite. Your words were:\n${original}` };
 }
+

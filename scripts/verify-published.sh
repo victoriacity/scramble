@@ -44,9 +44,9 @@ P_HITS="$(hits "$PRODUCT")"
 U_HITS="$(hits "\\b$USER_NAME\\b")"
 H_HITS="$(hits "$HOME_DIRS")"
 A_HITS="$(hits 'akari\.local')"
-# A PLACEHOLDER IS NOT AN ACCOUNT. The documents ship ids with EXAMPLE in them and
-# ids made of a digit run, and 26 of those read as real until the shapes were
-# named: U0123456789, B0123456789, B0987654321.
+# A PLACEHOLDER IS NOT AN ACCOUNT. The documents ship ids carrying EXAMPLE, and ids
+# whose body is an ascending or descending digit run, and 26 of those read as real
+# accounts until the filter below named their shapes.
 I_HITS="$(grep -aoE "$IDS" "$DUMP" | grep -vE 'EXAMPLE|0123456789|987654321|0{6,}' | wc -l | tr -d ' ')"
 # Every commit carries one author identity, and more than one means the mailmap
 # missed a spelling.
