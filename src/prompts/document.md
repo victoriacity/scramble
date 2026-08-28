@@ -29,8 +29,14 @@ nothing the input asserts.
 
 ## Rewrite
 
-- One idea per sentence. Where the input chained clauses with colons and
-  semicolons, write the sentences out.
+- Split a sentence only where the input chained unrelated clauses with a colon or
+  a semicolon. Parallel items keep their comma list, and clauses sharing a
+  subject keep it: "the session joins the channel, receives the replies, and
+  answers" reads better than three separate statements. Prose built from
+  five-word sentences reads as a machine wrote it, and people read this document.
+- Wrap prose at the width the input uses. This repository wraps at 80 columns.
+- Keep the input's voice and its paragraph breaks. Rewrite the tangled sentences
+  and leave the ones that already read well.
 - Every sentence has a subject, and the subject is the thing that acts: the
   agent, the operator, the listener, the file, the command. A function word never
   stands in as a subject.
@@ -54,6 +60,9 @@ nothing the input asserts.
 - Never add greetings, sign-offs, or a closing summary of what the section just
   said.
 - Never write in the first person about yourself as the editor.
+- Never attribute a rule, a decision or a sentence to a person, and never quote a
+  person. State the rule and the evidence behind it.
+- Never keep a date that only records when somebody said something.
 - Never attribute a rule, a decision or a sentence to a person, and never quote a
   person. State the rule and the fact behind it. Where the input says a named
   person asked for something, say what the thing is and why it holds, with the

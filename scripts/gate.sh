@@ -230,7 +230,12 @@ echo "== no private-workspace reference in a tracked file =="
 # its own, which the paths stage above would flag.
 HOME_DIRS="/j""fs/home|/st""orage/home"
 USER_NAME="sy""zs"
-PRIVATE="$(git -C "$REPO" grep -IniE "example|muse[_-]|$HOME_DIRS|$USER_NAME|4090" -- . ':(exclude)scripts/gate.sh' 2>/dev/null || true)"
+# EVERY NEEDLE IS ASSEMBLED FROM FRAGMENTS, and no literal appears here. The
+# history rewrite replaced the company name inside this very pattern, which left
+# the detector searching for its own replacement and matching every placeholder.
+COMPANY="me""shy"
+PRODUCT="mu""se[_-]"
+PRIVATE="$(git -C "$REPO" grep -IniE "$COMPANY|$PRODUCT|$HOME_DIRS|$USER_NAME|4090" -- . ':(exclude)scripts/gate.sh' 2>/dev/null || true)"
 # A REAL SLACK ACCOUNT ID identifies a person, and the fixtures now carry ids with
 # EXAMPLE in them so the shape stays testable.
 IDS="$(git -C "$REPO" grep -InE '\b(U0|T0|E0|B0|A0|W0)[0-9A-Z]{8,}' -- . ':(exclude)scripts/gate.sh' 2>/dev/null | grep -vE 'EXAMPLE|0{6,}' || true)"

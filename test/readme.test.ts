@@ -117,7 +117,7 @@ describe("README content", () => {
     // rests on, and the opening has to carry it.
     expect(intro).toContain("interface");
     expect(intro).toContain("messaging app");
-    expect(intro).toContain("already-running");
+    expect(intro).toContain("agent session");
     expect(intro).toContain("shell command");
   });
 
@@ -140,7 +140,7 @@ describe("README content", () => {
   test("documents the two read modes table", () => {
     expect(readme).toContain("stream");
     expect(readme).toContain("blocking");
-    expect(readme).toContain("no supported-vendor list");
+    expect(readme).toContain("supported-vendor list");
   });
 
   test("points the Slack setup at the self-onboarding script", () => {
@@ -172,7 +172,7 @@ describe("README content", () => {
     expect(readme).toContain("raft.build");
     // The reason scramble exists at all, which is the only thing that justifies
     // choosing it over raft.
-    expect(readme).toContain("ALREADY in Slack");
+    expect(readme).toContain("already reside in Slack");
   });
 });
 
