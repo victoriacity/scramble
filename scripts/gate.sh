@@ -282,5 +282,11 @@ fi
 # and a push went into one shell command, and the push carried a commit the gate had
 # just failed. The stamp lets the pre-push hook refuse a commit no green run covers,
 # without re-running the suite.
-git -C "$REPO" rev-parse HEAD > "$(git -C "$REPO" rev-parse --git-dir)/last-green-sha" 2>/dev/null || true
+STAMP_PATH="$(git -C "$REPO" rev-parse --git-dir)/last-green-sha"
+if ! git -C "$REPO" rev-parse HEAD > "$STAMP_PATH" 2>/dev/null; then
+  # A SWALLOWED WRITE FAILURE READS AS A GREEN RUN THAT COVERS NOTHING. The push
+  # that follows refuses with "no green gate run is recorded", which sends the
+  # reader to the gate, where the unwritable path is the real cause.
+  echo "gate: the green stamp could not be written to $STAMP_PATH, so a push of this commit will refuse."
+fi
 echo "GATE GREEN"
