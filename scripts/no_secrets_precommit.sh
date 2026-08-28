@@ -1,16 +1,20 @@
-#!/usr/bin/env bash
-# Refuse a commit that stages a live credential. Install as the repo's pre-commit
-# hook (scripts/install_hooks.sh does it, or: ln -s ../../scripts/no_secrets_precommit.sh .git/hooks/pre-commit).
+# This script runs under `/usr/bin/env bash` and refuses any commit that stages
+# a live credential. Install it as the repository pre-commit hook by running
+# `scripts/install_hooks.sh` or by executing
+# `ln -s ../../scripts/no_secrets_precommit.sh .git/hooks/pre-commit`.
 #
-# Exists because I committed a live Slack bot token and app-level token into this repo, which is
-# going open source. The commit was the tip and unpushed, so it could be dropped, but a deletion
-# commit would have left the tokens readable in every clone. Credentials belong outside the repo, at
-# $SCRAMBLE_SLACK_CONFIG (default ~/.config/scramble/slack.json). Postmortem: akrust
-# `log/postmortems/-committed-live-slack-credentials.md`
+# This hook exists because a live Slack bot token and an app-level token were
+# committed into this repository, which is going open source. Because the commit
+# was at the tip and unpushed, it could be dropped, but a deletion commit would
+# have left the tokens readable in every clone. Credentials belong outside the
+# repository at `$SCRAMBLE_SLACK_CONFIG` (default
+# `~/.config/scramble/slack.json`). The postmortem is documented in
+# `log/postmortems/-committed-live-slack-credentials.md`.
 set -uo pipefail
 
-# Live-credential shapes. Each requires enough real-looking payload that the
-# placeholders in docs and tests ("xoxb-123-456", "xoxb-1") do not match.
+# Live credentials follow specific shapes. Each shape requires enough realistic
+# payload so that placeholders in documentation and tests ("xoxb-123-456",
+# "xoxb-1") do not match.
 PATTERNS=(
   'xox[baprs]-[0-9]{9,}-[0-9]{9,}-[A-Za-z0-9]{16,}'   # bot/user/app tokens
   'xapp-[0-9]-[A-Z0-9]{9,}-[0-9]{9,}-[a-f0-9]{32,}'   # app-level tokens
@@ -48,3 +52,4 @@ MSG
   exit 1
 fi
 exit 0
+

@@ -1,19 +1,19 @@
-#!/usr/bin/env bash
-# Which API calls does a vendor CLI make? Run it through here and read the
-# answer. Documentation once had me concluding that an API does not exist.
+# Run a vendor CLI through this script to determine which API calls it makes.
+# Vendor documentation can suggest that an API does not exist.
 #
-#   scripts/cli-api-trace.sh slack app install --team T012345 --force
+# scripts/cli-api-trace.sh slack app install --team T012345 --force
 #
-# Exists because I told the operator that Slack has "no API to create or install an app", so
-# onboarding each agent needed a human in a browser, and wrote that into this repo's docs. The
-# refutation was one command away: the Slack CLI on this same machine creates and installs apps, and
-# its debug log names the endpoints it calls. `apps.manifest.create` and `apps.developerInstall` are
-# public methods, and passing the WORKSPACE team_id to them turns an admin-approval wall into
-# ok:true plus the tokens. (postmortem: akrust log/postmortems/
-# `-said-no-api-exists-while-the-cli-on-this-box-called-it.md`)
+# This tool exists because documentation previously asserted that Slack has "no
+# API to create or install an app", so onboarding each agent required a human in a
+# browser. The Slack CLI creates and installs apps, and its debug log names the
+# endpoints it calls. `apps.manifest.create` and `apps.developerInstall` are
+# public methods, and passing the WORKSPACE team_id to them converts an
+# admin-approval wall into ok:true plus the tokens. (postmortem:
+# `log/postmortems/-said-no-api-exists-while-the-cli-on-this-box-called-it.md`)
 #
-# The rule this encodes: a capability verdict about a vendor cites the endpoints
-# its own tool called. The docs I read are a claim about those endpoints.
+# This encodes the rule that a capability verdict about a vendor cites the
+# endpoints its own tool called. Published documentation is a claim about those
+# endpoints.
 set -uo pipefail
 
 [ $# -gt 0 ] || { echo "usage: $0 <cli> [args...]   (example: $0 slack app install --force)" >&2; exit 2; }
@@ -49,3 +49,4 @@ for line in sys.stdin:
 '
 echo
 echo "trace: a claim that some capability has no API must contradict this list, not the docs."
+

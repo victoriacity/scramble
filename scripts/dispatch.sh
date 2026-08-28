@@ -1,29 +1,33 @@
-#!/usr/bin/env bash
-# The ONE dispatch path for scramble units. Exists because a hand-typed launch line cannot check its
-# own preconditions: a `source` of the systemd-format akari-fix.env failed mid-line, the `nohup
-# akari run` after it STILL fired, and the retry left two clients running the same 8-unit workflow
-# (postmortem: `log/postmortems/-duplicate-dispatch-survived-a-failed-source.md` in the akrust
-# repo). Every precondition below REFUSES the run. A warning would be ignored.
+# #!/usr/bin/env bash
+# This script provides the single dispatch path for scramble units. The script
+# exists because a hand-typed launch line cannot check its own preconditions: a
+# `source` of the systemd-format akari-fix.env failed mid-line, the
+# `nohup akari run` command after it still fired, and the retry left two clients
+# running the same 8-unit workflow (documented in
+# `log/postmortems/-duplicate-dispatch-survived-a-failed-source.md` in the akrust
+# repo). Every precondition below refuses the run, because a warning would be
+# ignored.
 #
-# usage: scripts/dispatch.sh [<workflow.ts>]   (default: workflows/scramble.workflow.ts)
+# Usage: scripts/dispatch.sh [<workflow.ts>] (default: workflows/scramble.workflow.ts)
 set -uo pipefail
 cd "$(dirname "$0")/.."
 REPO="$(pwd)"
 WORKFLOW="${1:-$REPO/workflows/scramble.workflow.ts}"
-# WHERE AKARI LIVES IS THIS MACHINE'S BUSINESS, and the repo holds no path. Both paths come
-# from the environment, and an unset one is a refusal naming the variable, so no
-# checkout carries one developer's directory layout.
+# Each machine determines where Akari lives, and the repository stores no path.
+# Both paths come from the environment, and an unset variable causes a refusal
+# that names the variable, so no checkout carries one developer's directory
+# layout.
 ENV_FILE="${AKARI_FIX_ENV:-}"
 CLI="${AKARI_DISPATCH_CLI:-}"
 BUN="$(command -v bun || echo "$HOME/.bun/bin/bun")"
 
 fail() { echo "dispatch: REFUSED — $*"; exit 1; }
 
-# 1) NO DUPLICATE OF *THIS* WORKFLOW. The defect this script exists for is two
-#    clients running the SAME workflow file, which duplicates every unit. A run
-#    of a DIFFERENT workflow is parallelism, which is wanted: units with no
-#    dependency on each other should be in flight at the same time, bounded by
-#    the lane pool, which owns that number.
+# 1) Do not duplicate this workflow. This script exists to prevent two clients
+# from running the same workflow file, which duplicates every unit. Running a
+# different workflow provides parallelism, which is wanted. Units with no
+# dependency on each other should be in flight at the same time, bounded by the
+# lane pool, which owns that number.
 same=$(ps ax -o args= | grep "dispatch/src/cli.ts run" | grep -v grep | grep -c -- "$WORKFLOW")
 [ "$same" -eq 0 ] || {
   echo "dispatch: this workflow is ALREADY live ($same client(s)):"
@@ -33,30 +37,30 @@ same=$(ps ax -o args= | grep "dispatch/src/cli.ts run" | grep -v grep | grep -c 
 others=$(ps ax -o args= | grep "dispatch/src/cli.ts run" | grep -v grep | grep -vc -- "$WORKFLOW")
 [ "$others" -eq 0 ] && echo "dispatch: no other workflow live" || echo "dispatch: $others other workflow(s) live — running alongside them (intended parallelism)"
 
-# 2) The credential, extracted -- never sourced. The env file is systemd-format:
-#    bash dies on its unquoted AKARI_PROVIDER_CHAIN JSON, and its PATH line drops
-#    the dir holding the `akari` shim.
+# 2) Extract the credential. Never source the environment file. The environment
+# file uses systemd format: bash fails on its unquoted AKARI_PROVIDER_CHAIN
+# JSON, and its PATH line omits the directory holding the `akari` shim.
 [ -n "$ENV_FILE" ] || fail "set AKARI_FIX_ENV to the akari env file holding AKARI_SERVER_CONTROL_TOKEN"
 [ -n "$CLI" ] || fail "set AKARI_DISPATCH_CLI to akari's packages/dispatch/src/cli.ts"
 [ -r "$ENV_FILE" ] || fail "cannot read $ENV_FILE (from AKARI_FIX_ENV)"
 TOKEN="$(grep -m1 '^AKARI_SERVER_CONTROL_TOKEN=' "$ENV_FILE" | cut -d= -f2-)"
 [ -n "$TOKEN" ] || fail "AKARI_SERVER_CONTROL_TOKEN missing from $ENV_FILE (POST /api/projects would 401)"
 
-# 3) Absolute CLI path, so a rewritten PATH cannot substitute a stale copy from
-#    inside a lane worktree, which is what happened.
+# 3) Use an absolute CLI path, so a rewritten PATH cannot substitute a stale copy
+# from inside a lane worktree, which is what happened.
 [ -r "$CLI" ] || fail "dispatch CLI not readable at $CLI"
 [ -x "$BUN" ] || fail "bun not found (tried PATH and \$HOME/.bun/bin/bun)"
 
-# 4) The structural gate needs this repo's new top-level paths declared, or every
-#    worker spends turns teaching the gate about its own deliverable.
+# 4) Declare this repository's new top-level paths in the structural gate, or every
+# worker spends turns teaching the gate about its own deliverable.
 [ -r "$REPO/.akari/gate.toml" ] || fail "$REPO/.akari/gate.toml missing"
 
-# 4b) gate.toml SHAPE. akari's parse_gate_toml
-#     (lane/crates/akari-lane/src/gate_green/extra_steps.rs:169) is LINE-BASED:
-#     it accepts only inline single-line arrays of double-quoted strings. A
-#     multi-line array makes the gate fail with `key must be a string at line 1
-#     column 2`, and the worker then spends its turns reading akari's Rust
-#     parser and never wrote its unit, which happened.
+# 4b) gate.toml SHAPE. The `parse_gate_toml` parser in
+# `lane/crates/akari-lane/src/gate_green/extra_steps.rs:169` processes lines
+# individually and accepts only inline single-line arrays of double-quoted strings.
+# A multi-line array makes the gate fail with `key must be a string at line 1
+# column 2`, so the worker spends its turns reading akari's Rust parser and never
+# writes its unit, which happened.
 python3 - "$REPO/.akari/gate.toml" <<'PYEOF' || fail "see the gate.toml shape error above"
 import json, re, sys
 path = sys.argv[1]
@@ -67,8 +71,8 @@ for i, line in enumerate(lines, 1):
     if not s or s.startswith("[") :
         continue
     if s.startswith("#"):
-        # The parser skips comment lines (extra_steps.rs: `line.starts_with('#')
-        # { continue }`), so a comment is fine. Only the ARRAY shape matters.
+        # The parser skips comment lines in extra_steps.rs (`line.starts_with('#')
+        # { continue }`), so comments are valid. Only the ARRAY shape matters.
         continue
     if "=" not in s:
         bad.append(f"line {i}: not a `key = value` line (a multi-line array continuation?): {s}")
@@ -92,12 +96,14 @@ if bad:
 sys.exit(0)
 PYEOF
 
-# 4c) BACKEND SCOPE. On I built a raft backend inside scramble, 249
-#     lines plus 433 of tests, for a product the operator considers scramble's
-#     parallel alternative; it became deleted work. A boundary that lives only in
-#     my judgment gets crossed again, so DESIGN.md's backend table is the
-#     authority: a workflow naming a backend the table does not list is refused.
-#     Postmortem: akrust `log/postmortems/2026-08-21-built-a-backend-for-a-parallel-product.md`
+# 4c) BACKEND SCOPE. A previous implementation built a raft backend inside
+# scramble, adding 249 lines plus 433 of tests for a product the operator
+# considers scramble's parallel alternative; the repository deleted that work. A
+# boundary that lives only in personal judgment gets crossed again, so
+# DESIGN.md's backend table is the authority: the system refuses a workflow naming
+# a backend the table does not list.
+# Postmortem:
+# `log/postmortems/2026-08-21-built-a-backend-for-a-parallel-product.md`
 python3 - "$WORKFLOW" "$REPO/DESIGN.md" <<'PYEOF' || fail "see the backend-scope error above"
 import re, sys
 wf, design = open(sys.argv[1]).read(), open(sys.argv[2]).read()
@@ -114,24 +120,24 @@ if unlisted:
 sys.exit(0)
 PYEOF
 
-# 4d) CROSS-WORKFLOW FILE CONFLICT. On I ran four units at once. One
-#     deleted src/slack.ts and src/raft.ts while another was writing the thread
-#     feature INTO those files, so the merge cliffed the feature: the spec commits
-#     survived and the implementation did not. Prose in a prompt ("port before
-#     deleting") did not hold. A workflow that DELETES a path may not run while a
-#     live workflow names that same path.
-#     Postmortem: akrust `log/postmortems/2026-08-21-parallel-delete-cliffed-a-feature.md`
+# 4d) CROSS-WORKFLOW FILE CONFLICT. Four units ran at once, and one unit deleted
+# src/slack.ts and src/raft.ts while another unit wrote the thread feature
+# into those files, so the merge dropped the implementation while the spec
+# commits survived. Prompt instructions to "port before deleting" did not
+# hold. A workflow that deletes a path may not run while a live workflow names
+# that same path.
+# Postmortem: `log/postmortems/2026-08-21-parallel-delete-cliffed-a-feature.md`.
 python3 - "$WORKFLOW" <<'PYEOF' || fail "see the cross-workflow conflict above"
 import re, subprocess, sys
 new = open(sys.argv[1]).read()
 def paths(text):
     return set(re.findall(r"src/[A-Za-z0-9_-]+\.ts", text))
 def deleted(text):
-    # A DELETE heading sits on its own line with the paths BELOW it, so a
-    # line-scoped scan found nothing and let a conflicting dispatch through on the
-    # first attempt. Coarse and safe instead: a workflow that speaks of deleting
-    # treats every src path it names as a deletion candidate. A false refusal
-    # costs a wait; a false pass costs another unit's work.
+    # Because a DELETE heading sits on its own line above the paths it affects, a
+    # line-scoped scan found nothing and allowed a conflicting dispatch through on the
+    # first attempt. The runner uses a coarse and safe approach: any workflow that
+    # mentions deletion treats every src path it names as a deletion candidate. A
+    # false refusal costs a wait, while a false pass costs another unit's work.
     return paths(text) if re.search(r"(?i)\bdelet", text) else set()
 ps = subprocess.run(["ps", "ax", "-o", "args="], capture_output=True, text=True).stdout
 live = [ln.split(" run ")[-1].strip() for ln in ps.splitlines()
@@ -157,7 +163,7 @@ PYEOF
 
 [ -r "$WORKFLOW" ] || fail "workflow not readable: $WORKFLOW"
 
-# 5) The daemon must answer before we claim a launch.
+# 5) The daemon must respond before the system reports a launch.
 health=$(curl -s --max-time 5 http://127.0.0.1:8771/api/health)
 case "$health" in
   *'"ok":true'*) : ;;
@@ -167,19 +173,21 @@ esac
 export AKARI_SERVER_CONTROL_TOKEN="$TOKEN"
 export AKARI_WORKSPACE_DIR="$REPO"
 export AKARI_BASE_URL=http://127.0.0.1:8771
-# One log PER WORKFLOW: concurrent runs are intended, and a shared log means two
-# clients interleaving into one file, so a failure record can be clobbered.
+# Use one log per workflow. Concurrent runs are intended, and a shared log means
+# two clients interleave into one file, so a failure record can be clobbered.
 LOG="$REPO/run-$(basename "$WORKFLOW" .workflow.ts).log"
 nohup "$BUN" run "$CLI" run "$WORKFLOW" > "$LOG" 2>&1 &
 pid=$!
 
-# 6) THE LAUNCH ITSELF IS VERIFIED. A workflow whose meta held an
-#    escaped apostrophe ('a peer agent\'s') failed the client's pure-object-literal
-#    parse and the client exited in under a second, while this script had already
-#    printed "launched pid" and "preconditions verified". I read that as a live
-#    unit and dispatched a second one alongside a corpse. A script that claims a
-#    launch must READ the launch: the pid must still be alive and the log must not
-#    hold a client-side refusal.
+# 6) THE LAUNCH ITSELF IS VERIFIED.
+#
+# When workflow metadata contained an escaped apostrophe ('a peer agent\'s'),
+# the client failed its pure-object-literal parse and exited in under a second.
+# Because the script had already printed "launched pid" and
+# "preconditions verified", the system treated the failed process as a live
+# unit and dispatched a second unit alongside it. A script that reports a launch
+# must verify the launch directly: the process id must still be alive, and the
+# log must contain no client-side refusal.
 sleep 3
 if ! kill -0 "$pid" 2>/dev/null; then
   echo "dispatch: the client EXITED within 3s of launch. Its whole log:"
@@ -195,3 +203,4 @@ case "$(cat "$LOG")" in
 esac
 echo "dispatch: launched pid $pid  workflow=$WORKFLOW  log=$LOG"
 echo "dispatch: preconditions verified — single client, credential present, CLI $CLI, gate.toml present, daemon ok, client alive 3s after launch"
+
