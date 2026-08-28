@@ -2379,9 +2379,16 @@ async function cmdRewrites(argv: string[], io: Io): Promise<number> {
         }),
       );
     }
+    // ONE READING PER PAIR, HOWEVER MANY AGENTS RUN THIS. I cited a second
+    // agent's ceiling as independent support for a row, and their ceiling was the
+    // same two messages scored by the same function: three runs of one algorithm
+    // on one pair are three faithful executions. The line says so, so nobody
+    // counts agreement as evidence.
     io.writeErr(
       drifted === 0
-        ? "calibrate: every readable row scores what the table records."
+        ? "calibrate: every readable row scores what the table records. This is ONE reading of each pair: " +
+          "another agent running this gets the same number from the same function, which is a check on the " +
+          "run and not a second measurement."
         : `calibrate: ${drifted} row(s) score something else now. The table is wrong, the code changed, or both.`,
     );
     return drifted === 0 ? 0 : 1;
