@@ -1362,15 +1362,29 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
       const url = String(u);
       asked.push(url);
       if (url.includes("chat.postMessage")) return new Response(JSON.stringify({ ok: true, ts: "99.9", message: {} }), { status: 200 });
-      // The window around 1787656658: Slack holds the ...699 line.
+      // The window around 1787656658: Slack holds the ...699 line, written by a
+      // named user, which the note reports.
       if (url.includes("oldest=1787656658.000000"))
-        return new Response(JSON.stringify({ ok: true, messages: [{ ts: "1787656658.009699" }] }), { status: 200 });
+        return new Response(
+          JSON.stringify({ ok: true, messages: [{ ts: "1787656658.009699", username: "andrew" }] }),
+          { status: 200 },
+        );
+      // And the exact citation in the second window, also with an author.
+      if (url.includes("oldest=1787656659.000000"))
+        return new Response(
+          JSON.stringify({ ok: true, messages: [{ ts: "1787656659.000001", username: "andrew" }] }),
+          { status: 200 },
+        );
       // The window around a ts from some other channel: nothing here.
       if (url.includes("oldest=1700000000.000000")) return new Response(JSON.stringify({ ok: true, messages: [] }), { status: 200 });
       if (url.includes("conversations.history"))
-        return new Response(JSON.stringify({ ok: true, messages: [{ ts: "99.9", text: "see 1787656658.009669 and 1700000000.000001" }] }), {
-          status: 200,
-        });
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            messages: [{ ts: "99.9", text: "see 1787656658.009669 and 1787656658.009699 and 1700000000.000001" }],
+          }),
+          { status: 200 },
+        );
       return new Response(JSON.stringify({ ok: true, messages: [] }), { status: 200 });
     };
     const { io, errs } = stubIo(cwd, async (u) => responder(u));
@@ -1380,10 +1394,13 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
       channels: { general: "C1" },
       agents: { dev: { token: "T", handle: "dev" } },
     });
-    io.readStdin = async () => "see 1787656658.009669 and 1700000000.000001";
+    io.readStdin = async () => "see 1787656658.009669 and 1787656658.009699 and 1700000000.000001";
     expect(await main(["message", "send", "--target", "general", "--as", "dev", "--verify", "--backend", "slack"], io)).toBe(0);
     const said = errs.join("\n");
     expect(said).toContain("cite: general holds no message at 1787656658.009669, and it holds 1787656658.009699");
+    // A CORRECT CITATION NAMES ITS AUTHOR. I attributed an incident to the wrong
+    // agent while pointing at its ts, and the agent I named corrected me.
+    expect(said).toContain("cite: 1787656658.009699 in general was written by");
     // The ts with nothing in its second is a citation from elsewhere, and it is
     // left alone. A check that fires on a correct citation is one agents skip.
     expect(said).not.toContain("1700000000.000001, and it holds");

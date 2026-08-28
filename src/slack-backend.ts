@@ -1045,7 +1045,7 @@ export class SlackBackend {
     channel: string,
     ts: string,
     as: string,
-  ): Promise<{ exact: boolean; near?: string; error?: string }> {
+  ): Promise<{ exact: boolean; near?: string; author?: string; error?: string }> {
     const second = ts.split(".")[0] ?? "";
     if (!/^\d{10}$/.test(second)) return { exact: false, error: `${ts} is not a Slack ts` };
     const resolved = await this.slackChannelFor(this.tokenOrDefault(as), channel);
@@ -1057,14 +1057,29 @@ export class SlackBackend {
       `${HISTORY_URL}?channel=${encodeURIComponent(resolved.id)}` +
       `&oldest=${encodeURIComponent(`${second}.000000`)}&latest=${encodeURIComponent(`${second}.999999`)}` +
       `&inclusive=true&limit=20`;
-    const r = await readOk<{ messages?: Array<{ ts?: string }> }>(this.fetch, url, {
+    const r = await readOk<{ messages?: Array<{ ts?: string; user?: string; username?: string }> }>(this.fetch, url, {
       headers: { authorization: `Bearer ${t.token}` },
     });
     if (!r.ok) return { exact: false, error: r.error };
-    const found = (r.data.messages ?? []).map((m) => m.ts ?? "").filter((x) => x !== "");
-    if (found.includes(ts)) return { exact: true };
-    const near = found[0];
-    return near === undefined ? { exact: false } : { exact: false, near };
+    const rows = (r.data.messages ?? []).filter((m) => (m.ts ?? "") !== "");
+    // WHO WROTE THE MESSAGE, on the note. I attributed an incident to the wrong
+    // agent while citing its ts: the pair belonged to a third agent, and the one
+    // I named had to correct me. A ts is a pointer at an author, and the send
+    // reads the author already.
+    const named = async (row: { user?: string; username?: string }): Promise<string | undefined> => {
+      if (row.username !== undefined && row.username !== "") return row.username;
+      if (row.user === undefined || row.user === "") return undefined;
+      return this.resolveName(t.token, row.user);
+    };
+    const exact = rows.find((m) => m.ts === ts);
+    if (exact !== undefined) {
+      const author = await named(exact);
+      return { exact: true, ...(author === undefined ? {} : { author }) };
+    }
+    const near = rows[0];
+    if (near === undefined) return { exact: false };
+    const author = await named(near);
+    return { exact: false, near: near.ts!, ...(author === undefined ? {} : { author }) };
   }
 
   /** READ ONE MESSAGE BACK FROM SLACK BY ITS ts, as Slack stored it.

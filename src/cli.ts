@@ -55,9 +55,12 @@ const CITED_TS_CAP = 6;
  *    two status reports, different runs  0.429
  *    two unrelated messages              0.000
  *
- *  0.81 sits between the two labelled pairs another agent measured: an install
- *  report at 0.800 that had to go out, and a duplicate at 0.833 that had to stop.
- *  0.8 refused the install report by one hundredth.
+ *  0.81 is the ONLY value that separates every labelled pair, real and hand-made
+ *  alike: the highest pair anybody wanted sent measured 0.800, a hand-made retry
+ *  measured 0.833, and the one confirmed duplicate measured 0.968. A wider margin
+ *  above 0.800 costs the 0.833 case, and whether a real message sits there is
+ *  unanswered. `CALIBRATION` in src/inbox.ts holds every labelled pair with who
+ *  measured it, and a row with no ts is a pair nobody sent.
  *
  *  A SHORT DRAFT IS SCORED ON EVERY TOKEN AT 0.85. It has too few content words
  *  for the other scale, and the real duplicate two agents confirmed, one line
@@ -904,9 +907,18 @@ async function postText(
       }
       for (const cited of cites.slice(0, CITED_TS_CAP)) {
         const look = await s.backend.citedMessage(channel, cited, from);
-        if (look.error !== undefined || look.exact || look.near === undefined) continue;
+        if (look.error !== undefined) continue;
+        // WHO WROTE THE MESSAGE YOU CITED. I attributed an incident to the wrong
+        // agent while pointing at its ts, and the agent I named corrected me. The
+        // author is read on the same call that checks the digits.
+        if (look.exact) {
+          if (look.author !== undefined) io.writeErr(`cite: ${cited} in ${channel} was written by ${look.author}.`);
+          continue;
+        }
+        if (look.near === undefined) continue;
         io.writeErr(
-          `cite: ${channel} holds no message at ${cited}, and it holds ${look.near} in that same second. ` +
+          `cite: ${channel} holds no message at ${cited}, and it holds ${look.near} in that same second` +
+            `${look.author === undefined ? "" : `, written by ${look.author}`}. ` +
             `Check the digits, and read a ts from the delivered line instead of a preview.`,
         );
       }

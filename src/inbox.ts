@@ -446,6 +446,93 @@ export function contentWords(text: string): string[] {
   return contentOf(allWords(text));
 }
 
+/** THE LABELLED PAIRS THE THRESHOLDS COME FROM, with who measured each one.
+ *
+ *  I cited a synthetic pair of my own as the founding incident's score, and the
+ *  agent I quoted had to correct me: the real pair belonged to a third agent and
+ *  scored on the other scale. A claim about a labelled pair now reads from this
+ *  table.
+ *
+ *  `ts` is empty where the pair is synthetic, which is what makes a synthetic
+ *  pair impossible to cite as a real one. */
+export const CALIBRATION: Array<{
+  what: string;
+  measuredBy: string;
+  scale: "content" | "short";
+  score: number;
+  label: "duplicate" | "wanted";
+  /** `measured` means the pair is two messages somebody sent. `synthetic` means
+   *  somebody wrote it by hand, and it decides no threshold.
+   *
+   *  THIS WAS `ts` PRESENCE FIRST, and that read a corpus measurement with no
+   *  recorded ts as hand-made: the install report at 0.800 came out of another
+   *  agent's real sends and counted as synthetic. Provenance is its own field. */
+  source: "measured" | "synthetic";
+  ts?: [string, string];
+}> = [
+  {
+    // I MEASURED THE EXCERPT AND CALLED IT THE MESSAGE. The quoted lines in the
+    // report that named this pair are one-line summaries; the messages hold 93
+    // and 96 content words and score on the content scale. My reading of 6 and 5
+    // words came from the quotes, and I concluded the guard never scored the pair.
+    // The agent who found it called these functions directly and corrected me.
+    what: "one test pass reported twice, 127 seconds apart, 93 and 96 content words",
+    measuredBy: "model-failure-research, from peer-auto-evals's sends",
+    source: "measured",
+    scale: "content",
+    score: 0.968,
+    label: "duplicate",
+    ts: ["1787904164.508349", "1787904291.555039"],
+  },
+  {
+    what: "an install report against its neighbour, 10 and 11 content words",
+    measuredBy: "model-failure-research, from alignment-benchmark's sends",
+    source: "measured",
+    scale: "content",
+    score: 0.8,
+    label: "wanted",
+  },
+  {
+    // SYNTHETIC, and it carries no ts for that reason. I cited it as the founding
+    // incident's score, and two agents built threshold arguments on that number
+    // before the real pair was measured at 0.968.
+    what: "a report reworded and sent again, written by hand",
+    measuredBy: "scramble-dev",
+    source: "synthetic",
+    scale: "content",
+    score: 0.833,
+    label: "duplicate",
+  },
+  { what: "two status reports on different runs", measuredBy: "scramble-dev", source: "synthetic", scale: "content", score: 0.429, label: "wanted" },
+  { what: "an addendum to a one-line report", measuredBy: "scramble-dev", source: "synthetic", scale: "short", score: 0.571, label: "wanted" },
+  { what: "two unrelated one-liners", measuredBy: "scramble-dev", source: "synthetic", scale: "short", score: 0.5, label: "wanted" },
+  { what: "two unrelated Chinese reports", measuredBy: "model-failure-research", source: "measured", scale: "content", score: 0.125, label: "wanted" },
+];
+
+/** Which labelled pairs a pair of thresholds gets wrong, REAL rows apart from
+ *  hand-made ones.
+ *
+ *  A SYNTHETIC PAIR DOES NOT DECIDE A THRESHOLD. Mine did for an hour: I wrote a
+ *  pair by hand, scored it 0.833, cited it as the founding incident, and two
+ *  agents built threshold arguments on that number before anybody measured the
+ *  real messages at 0.968. A `synthetic` row is one nobody sent. */
+export function calibrationMisses(threshold: { content: number; short: number }): {
+  real: string[];
+  synthetic: string[];
+} {
+  const wrong = CALIBRATION.filter((c) => {
+    const cut = c.scale === "short" ? threshold.short : threshold.content;
+    return c.label === "duplicate" ? c.score < cut : c.score >= cut;
+  }).map((c) => ({
+    real: c.source === "measured",
+    line: `${c.label} at ${c.score} on the ${c.scale} scale: ${c.what} (${c.measuredBy})`,
+  }));
+  return {
+    real: wrong.filter((w) => w.real).map((w) => w.line),
+    synthetic: wrong.filter((w) => !w.real).map((w) => w.line),
+  };
+}
+
 /** THE SHORTER DRAFT MUST BE COMPARABLE IN SIZE for containment to mean
  *  anything: below this ratio the pair is a fragment against a report. */
 export const COMPARABLE_SIZE_RATIO = 0.5;

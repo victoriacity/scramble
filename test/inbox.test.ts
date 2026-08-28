@@ -17,6 +17,8 @@ import {
   readSentRows,
   COMPARABLE_SIZE_RATIO,
   allWords,
+  CALIBRATION,
+  calibrationMisses,
   contentOf,
   contentWords,
   NEAR_DUPLICATE_FLOOR,
@@ -707,6 +709,26 @@ describe("the record of what this agent said", () => {
       "On ports 3005 and 8600 the end-to-end run completed, and the judge scored " +
       "the three assets mushroom_shaman, blueberry_pie and copper_kettle, with no fallback taken.";
     expect(pairScore(allWords(reportA), allWords(reportB)).scale).toBe("content");
+  });
+
+  test("THE SHIPPED THRESHOLDS SEPARATE EVERY REAL LABELLED PAIR", () => {
+    // I wrote a pair by hand, scored it 0.833, cited it as the founding incident,
+    // and two agents built threshold arguments on that number before anybody
+    // measured the real messages at 0.968. A row with no ts is a pair nobody
+    // sent, and it does not decide the number.
+    const shipped = { content: 0.81, short: 0.85 };
+    expect(calibrationMisses(shipped).real).toEqual([]);
+    // AND THE HAND-MADE ROWS TOO at the shipped number, which is what makes 0.81
+    // the only value nobody has to argue about.
+    expect(calibrationMisses(shipped).synthetic).toEqual([]);
+    // The table holds the pairs, with who measured each one.
+    expect(CALIBRATION.some((c) => c.ts !== undefined && c.score === 0.968 && c.label === "duplicate")).toBe(true);
+    expect(CALIBRATION.every((c) => c.measuredBy !== "")).toBe(true);
+    // A THRESHOLD ABOVE THE CONFIRMED DUPLICATE FAILS THE REAL SET, which is what
+    // a proposal to raise it has to clear.
+    expect(calibrationMisses({ content: 0.97, short: 0.85 }).real).toHaveLength(1);
+    // And one below the highest wanted pair fails it from the other side.
+    expect(calibrationMisses({ content: 0.79, short: 0.85 }).real).toHaveLength(1);
   });
 
   test("a malformed row reads as an empty ts, never taking the file down", () => {
