@@ -34,7 +34,7 @@ CURRENT="$(readlink -f "$ROOT/current" 2>/dev/null || true)"
 # every root it mentions.
 # A PROCESS THAT EXITS MID-SCAN IS NORMAL, and its vanished cmdline is no error to
 # report: the redirect itself prints "No such file or directory" from the shell, so
-# the read is guarded instead of silenced after the fact.
+# the read is guarded before it happens.
 LIVE="$(
   for d in /proc/[0-9]*; do
     [ -r "$d/cmdline" ] || continue
