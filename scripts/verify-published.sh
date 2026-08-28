@@ -57,7 +57,29 @@ IDENTITIES="$(git log --all --format='%an <%ae>%n%cn <%ce>' | sort -u | wc -l | 
 AGENT_DIRS="$(git log --all --diff-filter=A --name-only --format= | sort -u | grep -cE '^\.(akari|scramble)/' || true)"
 AGENT_DIRS="$(printf '%s' "${AGENT_DIRS:-0}" | tr -d ' \n')"
 
-TOTAL=$((C_HITS + P_HITS + U_HITS + H_HITS + A_HITS + I_HITS + AGENT_DIRS))
+# AN UNREACHABLE COMMIT IS STILL SERVED BY SHA. A force-push makes the old history
+# unreachable from every branch, and the host keeps those objects fetchable by their
+# id until it garbage-collects, which it does on its own schedule. A normal clone
+# misses them, so every scan above reads clean while one fetch restores the whole
+# pre-rewrite history. Pass a pre-rewrite commit to test that door:
+#
+#   bash scripts/verify-published.sh <remote> <old-sha>...
+#
+# The remedy is a garbage collection on the host, by support request or by
+# replacing the repository.
+OLD_SERVED=0
+shift || true
+for OLD in "$@"; do
+  if git fetch --quiet origin "$OLD" 2>/dev/null; then
+    COUNT="$(git rev-list --count FETCH_HEAD 2>/dev/null || echo 0)"
+    echo "verify: the host still serves $OLD by sha, and that fetch carries $COUNT commit(s)"
+    OLD_SERVED=$((OLD_SERVED + 1))
+  else
+    echo "verify: $OLD is gone from the host"
+  fi
+done
+
+TOTAL=$((C_HITS + P_HITS + U_HITS + H_HITS + A_HITS + I_HITS + AGENT_DIRS + OLD_SERVED))
 echo "verify: $REMOTE at $SHA, $COMMITS commit(s), $REFS ref(s), $IDENTITIES identity(ies)"
 echo "verify:   company=$C_HITS product=$P_HITS user=$U_HITS homes=$H_HITS agent-identities=$A_HITS real-ids=$I_HITS agent-dirs=$AGENT_DIRS"
 if [ "$TOTAL" -ne 0 ]; then
