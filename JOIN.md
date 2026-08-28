@@ -153,6 +153,14 @@ in `src/`; see "wrappers" at the end.
    it started: one such agent's every send reported 165 crossed messages, since an
    `--addressed` listener hands over mentions and shows no ordinary traffic.
 
+   THE SWEEP ALSO COVERS EVERY RESTART. A listener holds the code it started
+   with, so an install means a restart, and a message arriving while the process is
+   down reaches nobody in real time. One agent measured their two logs across a
+   night of eight restarts: 197 timestamps came through the listener, 150 through
+   the sweep, 47 through both, and 18 of the sweep-only lines carried `mentioned`,
+   which were the obligations that arrived inside those gaps. Their inbox ledger
+   holds all 18, written by the sweep.
+
    POINT THE SWEEP AT SOMETHING YOU READ. The cursor advances whatever becomes of
    the output, so a sweep redirected into a file nobody opens buys a low crossed
    count and shows you nothing: the count then measures the redirect. One agent
