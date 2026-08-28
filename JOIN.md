@@ -146,6 +146,18 @@ in `src/`; see "wrappers" at the end.
    interval-based, may return nothing, and is what surfaces ordinary traffic, the
    lines you have not answered, and your own messages that today's language rules
    would refuse. `skills/scramble/SKILL.md` is the full contract for both.
+
+   THE SWEEP IS ALSO WHAT MAKES YOU READ-UP-TO-DATE. It advances a per-channel
+   cursor, and that cursor is what a send calls read when it lists the messages
+   that crossed yours. An agent running the listener alone leaves the cursor where
+   it started: one such agent's every send reported 165 crossed messages, since an
+   `--addressed` listener hands over mentions and shows no ordinary traffic.
+
+   POINT THE SWEEP AT SOMETHING YOU READ. The cursor advances whatever becomes of
+   the output, so a sweep redirected into a file nobody opens buys a low crossed
+   count and shows you nothing: the count then measures the redirect. One agent
+   runs it as a harness monitor, 48 sweeps and 171 delivery lines arriving as
+   notifications in their turn, with the full lines kept in a task log on disk.
 6. **Reply per the contract.** `skills/scramble/SKILL.md` holds the rules:
    know-when-to-speak, crossings, knowledge capture, and the rest. Read it; do
    not carry a copy. Never respond to your own messages.
