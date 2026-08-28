@@ -80,6 +80,13 @@ if [ -n "$PREV_SHA" ] && [ "$PREV_SHA" != "$SHA" ]; then
       echo "install: $COUNT commit(s) between them, oldest first:"
       git log --reverse --format='install:   %h %s' "$PREV_SHA..$SHA"
       echo "install: a line added to any command's output can break a guard you wrote against it."
+      # THE OTHER AGENTS ON THIS HOME NEVER SEE THE LINES ABOVE. One launcher serves
+      # them all, so an install by one agent hands the rest a new build, and the only
+      # word they get is a drift advisory carrying two shas. One of them read three
+      # `git log` ranges by hand today to decide whether their listener was running
+      # code that mattered. The subjects go beside COMMIT, where the drift surfaces
+      # read them from the installed copy without a checkout of their own.
+      { printf 'from %s\n' "$PREV_SHA"; git log --reverse --format='%h %s' "$PREV_SHA..$SHA"; } > "$DEST/src/CHANGES"
     fi
   else
     echo "install: $PREV_SHA is not a commit in this checkout, so what changed cannot be listed here."

@@ -6,7 +6,7 @@ import type { ChannelStore } from "../src/store";
 import { createStore } from "../src/store";
 import { createHandler } from "../src/server";
 import { WORD_LIMIT } from "../src/language";
-import { KNOWN_ENV, unknownEnvNote, hashVerdict, textHash, differenceLine, autoKey, main, parseBind, loadSlackConfig, slackConfigPath, staleConfigWarning, staleListeners, pickStale, staleListenerProblem, readProcesses, liveListeners, stillAlive, watchForNewerInstall, listenerCommit, listenersBehind, processesReadable, type Io } from "../src/cli";
+import { KNOWN_ENV, unknownEnvNote, hashVerdict, textHash, differenceLine, autoKey, installedChanges, changeBlock, main, parseBind, loadSlackConfig, slackConfigPath, staleConfigWarning, staleListeners, pickStale, staleListenerProblem, readProcesses, liveListeners, stillAlive, watchForNewerInstall, listenerCommit, listenersBehind, processesReadable, type Io } from "../src/cli";
 import { SCOPE_NAMES, BOT_EVENT_NAMES } from "../src/app-manifest";
 import { readTierBlock } from "../src/rewrite";
 
@@ -1217,6 +1217,40 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     expect(await main(["rewrites", "--near", "--as", "dev"], some.io)).toBe(0);
     expect(some.writes.join(" ")).toContain("2 send(s) measured against an earlier draft");
     expect(some.writes.join(" ")).toContain("0.710  ts 3.3 against 2.2 in general");
+  });
+
+  test("the drift surfaces carry what the last install brought", () => {
+    // THE INSTALLER IS THE ONE AGENT WHO DOES NOT NEED THE LIST. One launcher
+    // serves every agent on a HOME, so an install by any of them moves the rest,
+    // and their only word for it was two shas. An agent read three `git log`
+    // ranges by hand in one day to decide whether a listener was running code that
+    // mattered, and an installed copy has no checkout to read.
+    const root = mkdtempSync(join(tmpdir(), "changes-"));
+    mkdirSync(join(root, "current", "src"), { recursive: true });
+    const bare = async (): Promise<Response> => new Response("{}", { status: 200 });
+    const io = (): Io => ({ ...stubIo(root, bare).io, env: (n) => (n === "SCRAMBLE_HOME" ? root : undefined) });
+    // No file at all reads as nothing recorded, and a throw here would take the
+    // advisory down with it.
+    expect(installedChanges(io())).toBeUndefined();
+    writeFileSync(join(root, "current", "src", "CHANGES"), "from aaa1111\nbbb2222 first thing\nccc3333 second thing\n");
+    expect(installedChanges(io())).toEqual({ from: "aaa1111", lines: ["bbb2222 first thing", "ccc3333 second thing"] });
+    // A HEAD LINE THAT DOES NOT NAME THE START is unusable, since the caller
+    // compares that sha against its own to say whether the list is complete.
+    writeFileSync(join(root, "current", "src", "CHANGES"), "bbb2222 first thing\n");
+    expect(installedChanges(io())).toBeUndefined();
+    // With no root to look in, there is nothing to read.
+    expect(installedChanges({ ...stubIo(root, bare).io, env: () => undefined })).toBeUndefined();
+
+    const changes = { from: "aaa1111", lines: ["bbb2222 first thing", "ccc3333 second thing"] };
+    // A READER AT THE HOP'S START gets the list and no warning.
+    expect(changeBlock("aaa1111", changes)).toContain("2 commit(s) came with it, oldest first: bbb2222 first thing; ccc3333 second thing.");
+    expect(changeBlock("aaa1111", changes)).not.toContain("most recent install");
+    // A READER FURTHER BEHIND is told the list covers one hop.
+    expect(changeBlock("zzz9999", changes)).toContain("covers the most recent install, which started at aaa1111, and you run zzz9999");
+    // Nothing recorded adds nothing to the advisory.
+    expect(changeBlock("aaa1111", undefined)).toBe("");
+    expect(changeBlock("aaa1111", { from: "aaa1111", lines: [] })).toBe("");
+    rmSync(root, { recursive: true, force: true });
   });
 
   test("the emitter keys every line of a multi-line diagnostic", () => {

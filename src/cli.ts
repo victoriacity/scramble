@@ -1392,7 +1392,8 @@ export function watchForNewerInstall(io: Io): { stop: () => void; tick: () => vo
           installed: now,
           text:
             `scramble: this listener runs ${mine} and ${now} is installed now, so a change somebody ` +
-            `made has NOT reached you. Restart the listener to pick it up.`,
+            `made has NOT reached you. Restart the listener to pick it up.` +
+            changeBlock(mine, installedChanges(io)),
         }),
       );
     }
@@ -1400,6 +1401,44 @@ export function watchForNewerInstall(io: Io): { stop: () => void; tick: () => vo
   const timer = setInterval(tick, 30_000);
   (timer as { unref?: () => void }).unref?.();
   return { stop: () => clearInterval(timer), tick };
+}
+
+/** The commit subjects the last install recorded beside the installed copy's
+ *  COMMIT, with the commit that install replaced.
+ *
+ *  THE INSTALLER IS THE ONE AGENT WHO DOES NOT NEED THIS. One launcher serves
+ *  every agent on a HOME, so an install by any of them moves the rest, and their
+ *  only word for it is a drift advisory carrying two shas. An agent read three
+ *  `git log` ranges by hand in one day to decide whether a listener of theirs was
+ *  running code that mattered, and an installed copy has no checkout to read.
+ *
+ *  The file covers the MOST RECENT install only. A reader further behind than that
+ *  hop is told so by the caller, which compares `from` against its own commit. */
+export function installedChanges(io: Io): { from: string; lines: string[] } | undefined {
+  const home = io.env("HOME");
+  const root = io.env("SCRAMBLE_HOME") ?? (home === undefined ? "" : join(home, ".local", "share", "scramble"));
+  if (root === "") return undefined;
+  let raw = "";
+  try {
+    raw = readFileSync(join(root, "current", "src", "CHANGES"), "utf8");
+  } catch {
+    return undefined;
+  }
+  const rows = raw.split("\n").filter((l) => l.trim() !== "");
+  const head = rows[0] ?? "";
+  if (!head.startsWith("from ")) return undefined;
+  return { from: head.slice(5).trim(), lines: rows.slice(1) };
+}
+
+/** What changed, as a printable block for a reader running `mine`, or an empty
+ *  string when the installed copy records nothing. */
+export function changeBlock(mine: string, changes: { from: string; lines: string[] } | undefined): string {
+  if (changes === undefined || changes.lines.length === 0) return "";
+  const partial =
+    changes.from === mine
+      ? ""
+      : ` The list covers the most recent install, which started at ${changes.from}, and you run ${mine}, so there may be more.`;
+  return ` ${changes.lines.length} commit(s) came with it, oldest first: ${changes.lines.join("; ")}.${partial}`;
 }
 
 /** The commit written beside a copy's source, empty when there is none. */
@@ -1979,7 +2018,8 @@ async function cmdMessageCheck(argv: string[], io: Io, backend: "local" | "slack
       io.writeErr(
         `scramble: ${behind.length} listener(s) for ${agentName} run a different commit than the ` +
           `installed ${installed}: ${behind.map((b) => `pid ${b.pid} on ${b.commit}`).join(", ")}. They hold ` +
-          `the code they started with, so a change somebody made has NOT reached you. Restart the listener.`,
+          `the code they started with, so a change somebody made has NOT reached you. Restart the listener.` +
+          changeBlock(behind[0]!.commit, installedChanges(io)),
       );
     }
     // AND WHETHER ANYTHING IS ARMED AT ALL. Zero is the loud case: a listener on
