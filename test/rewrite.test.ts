@@ -1,4 +1,4 @@
-// test/rewrite.test.ts — a model rewriting a message before it leaves.
+// test/rewrite.test.ts: a model rewriting a message before it leaves.
 //
 // The message ALWAYS goes: a missing key, a timeout or a bad answer costs the
 // rewrite. Nothing changes silently: the sender's own words are printed beside a
@@ -66,7 +66,7 @@ describe("the configuration", () => {
     );
     expect(c.model).toBe("gemini-9");
     expect(c.timeoutMs).toBe(250);
-    // A nonsense timeout falls back rather than disabling the call.
+    // A nonsense timeout falls back to the default, which keeps the call alive.
     const d = rewriteConfig((n) => (n === "SCRAMBLE_REWRITE_KEY" ? "k" : n === "SCRAMBLE_REWRITE_TIMEOUT_MS" ? "no" : undefined));
     expect(d.timeoutMs).toBe(DEFAULT_TIMEOUT_MS);
   });

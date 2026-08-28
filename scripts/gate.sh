@@ -178,17 +178,15 @@ else
   comment_rc=0
 fi
 
-# NO DATED LOG LINE ANYWHERE THE REPO SHIPS. The operator ruled the stamps of the
-# form `The operator, 2026-08-27:` out of the code, and they sat thickest in
-# test/cli.test.ts, 66 of them, in a directory the stage above never read. This
-# stage checks the tests, the scripts and the workflow files for that one rule.
-# The prose rules still run over src/ and the markdown alone: over these
-# directories they find 121 older hits, which are their own piece of work.
-echo "== no dated log line in the tests, the scripts or the workflows =="
+# THE SAME RULES OVER THE TESTS, THE SCRIPTS AND THE WORKFLOWS. This stage
+# checked one rule when it was added, since these directories held 121 hits of
+# the others and a red gate teaches nothing while the backlog sits. The backlog
+# is drained, so the stage checks what the source comments are checked for.
+echo "== the tests, the scripts and the workflows pass the language check =="
 DATE_FILES=$(git -C "$REPO" ls-files 'test/*.ts' 'scripts/*.ts' 'scripts/*.sh' '*.workflow.ts')
 if [ -n "$DATE_FILES" ]; then
   # shellcheck disable=SC2086
-  ( cd "$REPO" && "$BUN" src/bin.ts lint --comments --dates $DATE_FILES )
+  ( cd "$REPO" && "$BUN" src/bin.ts lint --comments $DATE_FILES )
   dates_rc=$?
 else
   echo "no test or script files tracked"

@@ -41,7 +41,7 @@ describe("the Slack app-config credential", () => {
       expect(got.cred.exp).toBe(1787402756);
       expect(got.cred.refreshToken).toBe("xoxe-refresh-old");
     }
-    // An entry without a token is skipped, never returned empty.
+    // An entry without a token is skipped. An empty return would name it as usable.
     const skipped = firstCredential(JSON.stringify({ A: { token: "" }, B: { token: "t" } }));
     expect(skipped.ok && skipped.cred.key).toBe("B");
     expect(firstCredential("not json").ok).toBe(false);
@@ -100,7 +100,7 @@ describe("the Slack app-config credential", () => {
 
   test("a spent token is rotated and the new pair reaches disk before it is used", async () => {
     // Slack retires the old refresh token the moment it issues a new pair, so a
-    // rotation whose result never lands destroys the credential.
+    // rotation whose result is never written destroys the credential.
     const home = scratch("rotate");
     const path = credentialsPath(home);
     writeFileSync(path, FILE);

@@ -2836,7 +2836,7 @@ describe("message check under the slack backend", () => {
     const writes: string[] = [];
     const watched: Io = { ...io, writeErr: (l) => errs.push(l), write: (l) => writes.push(l) };
     // A READ-ONLY RECORD DIRECTORY: each writer owns a file inside it now, so the
-    // write fails wherever the peer's name lands, while everything else under
+    // write fails wherever the peer's name goes, while everything else under
     // .scramble stays writable. The test then proves the delivery survives THIS
     // failure and no other one.
     const recordDir = join(cwd, ".scramble", "peers.d");

@@ -1,4 +1,4 @@
-// test/filelock.test.ts — the lock every rewritten ledger holds.
+// test/filelock.test.ts: the lock every rewritten ledger holds.
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";

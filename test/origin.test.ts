@@ -300,7 +300,7 @@ describe("the peers record", () => {
     expect(readPeerFile(p).rows.map((r) => r.agent)).toEqual(["ana", "bo"]);
     // A NAME THAT IS A PATH stays inside the record directory, since an agent name
     // comes from a config a person edits. The property is what matters here: the
-    // file lands in peers.d, its name carries no separator and no leading dot.
+    // file sits in peers.d, its name carries no separator and no leading dot.
     for (const name of ["../../etc/passwd", ".hidden", "", "a/b", "..", "with space"]) {
       const file = peerFileFor(cfg, name);
       expect(dirname(file)).toBe(peersDir(cfg));

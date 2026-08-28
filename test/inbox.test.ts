@@ -63,7 +63,7 @@ describe("the inbox ledger: one row per addressed line, one reply owed", () => {
     expect(closeInboxItems(p, "scramble-dev", "reply-1")).toBe(2);
     expect(pendingInbox(p)).toHaveLength(0);
     // Already answered stays answered: a later reply does not re-close, so the
-    // count of what a reply did is the count of what it actually closed.
+    // count of what a reply did is the count of what it closed.
     recordInboxItem(p, item({ id: "3" }));
     expect(closeInboxItems(p, "scramble-dev", "reply-2")).toBe(1);
     expect(readInbox(p).map((r) => r.answeredBy)).toEqual(["reply-1", "reply-1", "reply-2"]);
@@ -255,7 +255,7 @@ describe("inbox trace: what happened to ONE message, without grepping a text log
     const said = traceReport(readInbox(p), "100.1", "dev", p);
     expect(said).toContain("0 addressed to this agent, 0 delivered without addressing it");
     expect(said).toContain("2 written before the ledger recorded unaddressed deliveries");
-    // And the row itself reports the field as unrecorded, never as a value.
+    // And the row itself reports the field as unrecorded, with no value invented.
     expect(said).toContain("is UNRECORDED: this row predates that field");
   });
 

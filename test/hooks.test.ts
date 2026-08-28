@@ -1,4 +1,4 @@
-// test/hooks.test.ts — positive control for the .scramble/hooks decision logic.
+// test/hooks.test.ts: positive control for the .scramble/hooks decision logic.
 //
 // Each hook's decide function is exercised against known-BAD input (it must
 // BLOCK) and known-GOOD input (it must PASS). The Stop hook's

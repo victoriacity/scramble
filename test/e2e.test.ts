@@ -29,8 +29,8 @@ function runCli(args: string[], cwd: string): Promise<RunResult> {
       // THESE ARE THE LOCAL BACKEND'S e2e, said out loud. With neither a flag
       // nor this variable, scramble follows the config on disk, and the machine
       // running these tests is usually an agent's own machine with a real
-      // ~/.config/scramble/slack.json — so the suite would spawn a CLI that
-      // talks to a live Slack workspace instead of the daemon these tests start.
+      // ~/.config/scramble/slack.json, so the suite would spawn a CLI that talks
+      // to a live Slack workspace while these tests start a daemon of their own.
       env: { ...process.env, SCRAMBLE_BACKEND: "local" },
       stdout: "pipe",
       stderr: "pipe",
