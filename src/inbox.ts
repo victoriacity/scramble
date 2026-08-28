@@ -484,6 +484,20 @@ export const CALIBRATION: Array<{
    *  deleted after the duplicate report that named it, so that row can never be
    *  re-measured: it stands on the reading taken while both messages lived. */
   gone?: true;
+  /** sha256 of each message's DELIVERED PAYLOAD TEXT, first 16 hex, as recorded
+   *  by the agent who measured the pair.
+   *
+   *  THE LISTENERS ARE THE ARCHIVE. Slack has already lost four of the five
+   *  source messages behind these rows: one was deleted after the report that
+   *  named it, four more went in a morning's cleanup. Every listener writes each
+   *  delivery to disk before any of that, and nothing prunes a wake file, so an
+   *  agent holding the text can confirm it is the same text.
+   *
+   *  `--calibrate` does NOT compare these. It reads the message back through
+   *  `storedMessage`, which renders entities and undoes Slack's escapes, so its
+   *  text hashes differently from the payload these values came from. Comparing
+   *  the two forms would report a mismatch on every row. */
+  sha?: [string, string];
   ts?: [string, string];
 }> = [
   {
@@ -500,6 +514,7 @@ export const CALIBRATION: Array<{
     label: "duplicate",
     channel: "scramble-partner-dev",
     gone: true,
+    sha: ["cf58e1ca70538915", "7f6bf4854b7834b6"],
     // THE FIRST MESSAGE IS GONE FROM SLACK. An agent read the span around it and
     // found 35 lines with that ts absent while its neighbour is present, so this
     // row can never be re-measured: the 0.968 stands on their reading of it while
@@ -515,6 +530,7 @@ export const CALIBRATION: Array<{
     label: "wanted",
     channel: "scramble-dev",
     threads: ["1787660956.066699", "1787661139.135859"],
+    sha: ["903349e007124496", "77d4bd402ebeba83"],
     ts: ["1787661004.777419", "1787661164.217229"],
   },
   {
@@ -544,6 +560,7 @@ export const CALIBRATION: Array<{
     score: 0.285,
     label: "wanted",
     channel: "scramble-dev",
+    sha: ["f995dff9196a2f74", "b8fc8afb84d80606"],
     ts: ["1787722977.171239", "1787723056.620949"],
   },
 ];
