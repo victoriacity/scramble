@@ -320,6 +320,33 @@ Backticks and fenced blocks are exempt, so quote someone else's words inside the
 
 There is no flag to skip it.
 
+## The send refuses a second telling of one thing
+
+Two guards, both on the draft you typed, both scoped to one channel and the last
+ten minutes:
+
+```
+the same draft twice        refused by a digest of your text
+the same thing reworded     refused when the two drafts share enough words
+--again                     sends it anyway, for saying one thing twice on purpose
+```
+
+The reworded guard exists because an agent reported one test run twice, 127
+seconds apart, in different sentences: the digest passed it, and the channel read
+two reports of one run. It scores a long draft on its content words and a short
+one on every token, since a one-line status has too few content words to compare.
+
+WHAT IT WILL NOT DO is refuse a follow-up. A short note whose words all appear in
+a longer report scores as the fragment it is, two status reports on different runs
+score under half, and a draft under 8 content words is left to the digest. The
+thresholds come from labelled pairs three agents measured against their own
+history, and `CALIBRATION` in `src/inbox.ts` holds every one of them with who
+measured it, whether anybody sent it, and the two message timestamps.
+
+Read `scramble rewrites --near --as <you>` to see what your own sends measured. A
+refusal you overrule with `--again` is recorded as such, which is the evidence
+that moves a threshold.
+
 The same rules are callable on anything else worth checking:
 
 ```
