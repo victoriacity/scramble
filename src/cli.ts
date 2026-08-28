@@ -2175,6 +2175,27 @@ function cmdVersion(io: Io): number {
  *  Prints `file:line: [label] "match"` and exits 1 when anything hit. */
 /** A source file with everything except its comment lines blanked, keeping
  *  every newline so an offset still names its own line. */
+/** The 16 hex of sha256 that a calibration row records for each of its two
+ *  messages. */
+export function textHash(text: string): string {
+  return createHash("sha256").update(text).digest("hex").slice(0, 16);
+}
+
+/** Whether a re-read pair hashes to what the row recorded.
+ *
+ *  A DIFFERENCE IS NOT DRIFT AND NOT A LIE. The recorded hash is of the payload a
+ *  listener was handed; this reads the message back through `storedMessage`, which
+ *  renders mentions and undoes Slack's escapes. Measured on the live table: both
+ *  messages of one row match, one message of another row matches, and its
+ *  neighbour differs while scoring exactly what it always did. So the verdict is
+ *  reported and never counted as failure. */
+export function hashVerdict(
+  recorded: [string, string] | undefined,
+  read: string[],
+): "matches" | "differs" | undefined {
+  return recorded === undefined ? undefined : recorded[0] === read[0] && recorded[1] === read[1] ? "matches" : "differs";
+}
+
 export function maskToComments(text: string, style: "slash" | "hash" = "slash"): string {
   // `hash` covers the shell scripts. Running that mask over TypeScript would read
   // a private class field as prose, so the caller picks the style by extension.
@@ -2347,6 +2368,7 @@ async function cmdRewrites(argv: string[], io: Io): Promise<number> {
     // refusal unreachable. A ts is unique inside one conversation, so the channel
     // belongs to the row.
     let drifted = 0;
+    let differing = 0;
     for (const row of CALIBRATION) {
       if (row.source !== "measured" || row.ts === undefined) continue;
       // A ROW WHOSE MESSAGES ARE GONE IS NOT A FAILURE. The first message of the
@@ -2378,11 +2400,23 @@ async function cmdRewrites(argv: string[], io: Io): Promise<number> {
       const again = pairScore(allWords(first.text), allWords(second.text));
       const moved = Math.abs(again.overlap - row.score) > 0.005 || again.scale !== row.scale;
       if (moved) drifted += 1;
+      // THE HASH IS CHECKED HERE, and this line is what says which text it is a
+      // hash of. An agent recorded these from their wake files and another agent
+      // read two of them straight off Slack, which left the question open in
+      // prose. A score cannot answer it: an edit that swaps two words for two
+      // others moves no number the guard reads.
+      const read = [first.text, second.text].map(textHash);
+      const hashes = hashVerdict(row.sha, read);
+      if (hashes === "differs") differing += 1;
       io.write(
         JSON.stringify({
           calibrate: moved ? "drifted" : "holds",
           recorded: { score: row.score, scale: row.scale },
           measured: { score: Number(again.overlap.toFixed(3)), scale: again.scale },
+          // BOTH HASHES GO OUT EVERY TIME, matching or not, so a reader compares
+          // them against their own copy without running this again.
+          hashes,
+          sha: { recorded: row.sha, read },
           ts: row.ts,
           what: row.what,
         }),
@@ -2400,6 +2434,17 @@ async function cmdRewrites(argv: string[], io: Io): Promise<number> {
           "run and not a second measurement."
         : `calibrate: ${drifted} row(s) score something else now. The table is wrong, the code changed, or both.`,
     );
+    // A DIFFERING HASH IS NOT DRIFT. The recorded hash comes from the payload a
+    // listener was handed, and this read renders mentions and undoes Slack's
+    // escapes, so a row whose text carries either one hashes differently here
+    // while scoring exactly what it always did. The count says how many, and the
+    // row's own output says which.
+    if (differing > 0) {
+      io.writeErr(
+        `calibrate: ${differing} row(s) read back to a different hash. Compare the recorded hash against a wake ` +
+          `file, which holds the text the hash was taken from.`,
+      );
+    }
     return drifted === 0 ? 0 : 1;
   }
   if (flags.has("near")) {

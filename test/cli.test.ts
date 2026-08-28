@@ -6,7 +6,7 @@ import type { ChannelStore } from "../src/store";
 import { createStore } from "../src/store";
 import { createHandler } from "../src/server";
 import { WORD_LIMIT } from "../src/language";
-import { KNOWN_ENV, unknownEnvNote, main, parseBind, loadSlackConfig, slackConfigPath, staleConfigWarning, staleListeners, pickStale, staleListenerProblem, readProcesses, liveListeners, stillAlive, watchForNewerInstall, listenerCommit, listenersBehind, processesReadable, type Io } from "../src/cli";
+import { KNOWN_ENV, unknownEnvNote, hashVerdict, textHash, main, parseBind, loadSlackConfig, slackConfigPath, staleConfigWarning, staleListeners, pickStale, staleListenerProblem, readProcesses, liveListeners, stillAlive, watchForNewerInstall, listenerCommit, listenersBehind, processesReadable, type Io } from "../src/cli";
 import { SCOPE_NAMES, BOT_EVENT_NAMES } from "../src/app-manifest";
 import { readTierBlock } from "../src/rewrite";
 
@@ -1219,6 +1219,19 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     expect(some.writes.join(" ")).toContain("0.710  ts 3.3 against 2.2 in general");
   });
 
+  test("a recorded hash is compared against the read-back and never called failure", () => {
+    // THE FORMS ARE DIFFERENT AND THE TOOL SAYS SO. I wrote in a channel that a
+    // comparison of the two forms would mismatch on every row, and my own run on
+    // the live table matched three of its four readable messages. The verdict
+    // belongs to a function that reports, since a mismatch means the text was
+    // rendered differently and never that the row is wrong.
+    expect(hashVerdict(["aa", "bb"], ["aa", "bb"])).toBe("matches");
+    expect(hashVerdict(["aa", "bb"], ["aa", "cc"])).toBe("differs");
+    expect(hashVerdict(undefined, ["aa", "bb"])).toBeUndefined();
+    expect(textHash("one")).toMatch(/^[0-9a-f]{16}$/);
+    expect(textHash("one")).not.toBe(textHash("two"));
+  });
+
   test("`rewrites --calibrate` re-measures every measured row from Slack", async () => {
     // An agent read the calibration table, ran the same function I run, and named
     // the flaw: two readers calling one function on one table measure the
@@ -1252,6 +1265,16 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     expect(rows.some((r) => r.calibrate === "gone")).toBe(true);
     expect(rows.every((r) => ["drifted", "unreadable", "gone"].includes(r.calibrate))).toBe(true);
     expect(errs.join(" ")).toContain("score something else now");
+    // AND THE HASHES ARE COMPARED AND PRINTED. Slack has lost four of the five
+    // source messages behind these rows, so the recorded hash is what an agent
+    // holding the delivery checks its copy against.
+    expect(errs.join(" ")).toContain("read back to a different hash");
+    const hashed = writes
+      .map((l) => JSON.parse(l) as { hashes?: string; sha?: { recorded?: string[]; read?: string[] } })
+      .filter((r) => r.hashes !== undefined);
+    expect(hashed.length).toBeGreaterThan(0);
+    expect(hashed.every((r) => r.hashes === "differs")).toBe(true);
+    expect(hashed.every((r) => r.sha?.read?.length === 2 && r.sha?.recorded?.length === 2)).toBe(true);
 
     // EACH ROW NAMES ITS OWN CHANNEL, so the command runs without `--target` and
     // reports which channel it searched. A ts is unique inside one conversation,
