@@ -1138,6 +1138,8 @@ async function cmdListen(argv: string[], io: Io): Promise<number> {
   // records the agent's runtime, directory, and session.
   recordSelf(io, name);
   const drift = watchForNewerInstall(io);
+  // ARMING THE LISTENER ARMS THE SWEEP. See `sweepInsideListener`.
+  const sweep = sweepInsideListener(io, sweepOnce.bind(null, flags, io, "local"));
   let lastSeq = 0;
   let backoff = 100;
   let staying = true;
@@ -1164,6 +1166,7 @@ async function cmdListen(argv: string[], io: Io): Promise<number> {
   } finally {
     stopTicker?.();
     drift.stop();
+    sweep.stop();
   }
   return 0;
 }
@@ -1921,6 +1924,10 @@ async function slackCmdListen(argv: string[], io: Io): Promise<number> {
   const stopTicker = status ? status.startExpiryTicker(2000, io.sleep) : undefined;
   recordSelf(io, name);
   const drift = watchForNewerInstall(io);
+  // ARMING THE LISTENER ARMS THE SWEEP. See `sweepInsideListener`.
+  // `bind` and not a wrapper arrow: an arrow here is a function the tests would have
+  // to reach through a 15-minute timer to run.
+  const sweep = sweepInsideListener(io, sweepOnce.bind(null, flags, io, "slack"));
   try {
     return await s.backend.listen(
       positionals,
@@ -1934,6 +1941,7 @@ async function slackCmdListen(argv: string[], io: Io): Promise<number> {
   } finally {
     stopTicker?.();
     drift.stop();
+    sweep.stop();
   }
 }
 
@@ -2194,7 +2202,10 @@ async function cmdMessageCheck(argv: string[], io: Io, backend: "local" | "slack
   // installed copy, and the listener monitors that drift as well. An agent whose
   // listener fell six hours behind discovered the gap by running `doctor` for an
   // unrelated reason, demonstrating that the advisory requires an active caller.
-  const code = backend === "slack" ? await messageCheckSlack(flags, io) : await messageCheckLocal(flags, io);
+  //
+  // The drain and the owed report are `sweepOnce`, which the listener runs on its own
+  // timer: one body, so a hand-run check and a listener's sweep cannot drift apart.
+  const code = await sweepOnce(flags, io, backend);
   // This step runs after the drain, so the drain's own report is what a reader sees
   // first and these lines never sit ahead of a failure it names.
   //
@@ -2231,22 +2242,78 @@ async function cmdMessageCheck(argv: string[], io: Io, backend: "local" | "slack
       );
     }
   }
-  // The sweep reports what is still owed on every run. The timed check runs
-  // regardless of what the agent is doing, so the reminder about an unanswered
-  // message belongs in this check. The 15-minute message check monitor checks
-  // pending inbox items and prompts for any unanswered item. This avoids custom
-  // hook scripts for Claude and Codex.
-  //
-  // The check accompanies the drain. A closing hook would be per client, and the
-  // same agent runs under more than one client. Because the sweep is the product's
-  // own surface, every client receives it.
-  //
-  // The system prints the reminder after the drain, so the count includes the lines
-  // just delivered, and on stderr, so the stdout contract stays one JSON line per
-  // message.
+  return code;
+}
+
+/** One sweep: drain what arrived since this agent's cursor and report what is owed.
+ *
+ *  THE LISTENER RUNS THIS ON A TIMER, which is why it is a function and not the body
+ *  of `message check`. Arming used to be two commands, and agents arrived with one of
+ *  them: the timed sweep is the one they missed, so ordinary traffic and the lines
+ *  they owed never surfaced. Both callers run the same drain, so the sweep an agent
+ *  gets from a listener is the sweep `message check` performs.
+ *
+ *  THE OWED REPORT BELONGS TO THE SWEEP, because the sweep runs regardless of what the
+ *  agent is doing, and a closing hook would be per client while the same agent runs
+ *  under more than one. It prints after the drain, so the count includes the lines
+ *  just delivered, and on stderr, so the stdout contract stays one JSON line per
+ *  message. */
+async function sweepOnce(flags: Map<string, string>, io: Io, backend: "local" | "slack"): Promise<number> {
+  const code = backend === "slack" ? await messageCheckSlack(flags, io) : await messageCheckLocal(flags, io);
   const owed = pendingInbox(inboxPath(slackConfigPath(io), nameFor(flags, io)));
   if (owed.length > 0) io.writeErr(pendingReport(owed, nameFor(flags, io)));
   return code;
+}
+
+/** The sweep interval a listener keeps, in milliseconds.
+ *
+ *  The documented sweep timer was 15 minutes when every agent armed its own, and a
+ *  listener that sweeps on the same period delivers what that timer delivered. The
+ *  staleness mark in `monitorReport` is 30 minutes, so two consecutive sweeps have to
+ *  miss before an agent reads that its sweep died. */
+export const SWEEP_INTERVAL_MS = 15 * 60_000;
+
+/** Run the sweep inside a listener, on the clock, forever.
+ *
+ *  ONE ARMING ARMS BOTH MONITORS. The two are separate jobs inside one process: the
+ *  socket delivers a mention in seconds and the sweep catches everything the
+ *  socket did not, including whatever arrived while the socket was broken. A broken
+ *  socket does not stop this timer, so the case the sweep exists for stays covered
+ *  from inside the same process.
+ *
+ *  A dead listener now takes the sweep with it, and the record that says so is read
+ *  on every send: `monitorReport` reads the process list for the listener and the
+ *  cursor's mtime for the sweep, from each monitor's own record.
+ *
+ *  A SWEEP THAT OVERRUNS ITS INTERVAL DOES NOT STACK. A slow drain across many
+ *  channels can outlast the period, and two drains at once advance one cursor
+ *  underneath each other. The in-flight flag drops the tick that would overlap. */
+export function sweepInsideListener(
+  io: Io,
+  run: () => Promise<unknown>,
+  intervalMs = SWEEP_INTERVAL_MS,
+): { stop: () => void; tick: () => Promise<void> } {
+  let inFlight = false;
+  const tick = async (): Promise<void> => {
+    if (inFlight) return;
+    inFlight = true;
+    try {
+      await run();
+    } catch (e) {
+      // THE SWEEP'S FAILURE IS THE AGENT'S FAILURE TO HEAR ANYTHING, so it prints
+      // what it saw. A throw inside a timer callback with no catch takes the whole
+      // listener down, which would turn one failed drain into a dead inbox.
+      io.writeErr(`scramble: the sweep inside this listener failed and messages may be waiting: ${String(e)}`);
+    } finally {
+      inFlight = false;
+    }
+  };
+  // A real timer, for the reason `watchForNewerInstall` gives: a sleep loop under a
+  // stubbed clock spins at full speed. `unref` allows the process to exit while the
+  // timer is pending.
+  const timer = setInterval(tick, intervalMs);
+  (timer as { unref?: () => void }).unref?.();
+  return { stop: () => clearInterval(timer), tick };
 }
 
 /**
@@ -4201,24 +4268,36 @@ export function sweepAgeMinutes(io: Io, agent: string, nowMs = Date.now()): numb
 export function monitorReport(io: Io, agent: string, nowMs = Date.now(), staleAfterMinutes = 30): string[] {
   const out: string[] = [];
   const procRoot = io.env("SCRAMBLE_PROC") ?? "/proc";
-  if (processesReadable(procRoot)) {
-    if (liveListeners(readProcesses(procRoot), agent).length === 0) {
-      out.push(
-        `monitors: NO listener is running for ${agent}, so nothing wakes this agent between sweeps. ` +
-          `Arm it: scramble listen --addressed --as ${agent}`,
-      );
-    }
+  // ONE COMMAND IS THE REPAIR FOR EITHER MONITOR, since the listener sweeps on its
+  // own timer. This line used to name a second command for the sweep, and agents
+  // onboarded with one of the two.
+  const arm = `Arm both: scramble listen --addressed --as ${agent}`;
+  const listenerLive = processesReadable(procRoot) ? liveListeners(readProcesses(procRoot), agent).length > 0 : undefined;
+  if (listenerLive === false) {
+    out.push(`monitors: NO listener is running for ${agent}, so nothing wakes this agent and no sweep runs. ${arm}`);
   }
   const age = sweepAgeMinutes(io, agent, nowMs);
+  const sweepMinutes = Math.round(SWEEP_INTERVAL_MS / 60_000);
+  // A RUNNING LISTENER CHANGES WHAT A MISSING SWEEP MEANS. Told to arm something that
+  // is already armed, an agent starts a second listener; the true reading is that the
+  // sweep inside the running one is failing, and its errors are on that listener's
+  // stderr. The other side of the branch names no process state, because an
+  // unreadable process list is not a listener that is absent.
   if (age === undefined) {
     out.push(
-      `monitors: no timed sweep has ever run for ${agent}, so ordinary traffic and the lines you owe ` +
-        `never surface. Arm it on a timer: scramble message check --as ${agent}`,
+      listenerLive === true
+        ? `monitors: no sweep has ever completed for ${agent}, though a listener is running. Its first sweep lands ` +
+            `within ${sweepMinutes} minutes; past that, the sweep inside it is failing and says why on its stderr.`
+        : `monitors: no timed sweep has ever run for ${agent}, so ordinary traffic and the lines you owe never ` +
+            `surface. ${arm}`,
     );
   } else if (age > staleAfterMinutes) {
     out.push(
-      `monitors: the last sweep for ${agent} finished ${age} minute(s) ago, past the ${staleAfterMinutes}-minute ` +
-        `mark, so its monitor may have died. Restart it: scramble message check --as ${agent}`,
+      listenerLive === true
+        ? `monitors: the last sweep for ${agent} finished ${age} minute(s) ago, past the ${staleAfterMinutes}-minute ` +
+            `mark, while a listener runs, so the sweep inside it is not completing. Its stderr says why.`
+        : `monitors: the last sweep for ${agent} finished ${age} minute(s) ago, past the ${staleAfterMinutes}-minute ` +
+            `mark, so its monitor may have died. ${arm}`,
     );
   }
   return out;

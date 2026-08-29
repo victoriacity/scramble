@@ -61,7 +61,7 @@ two read modes it already supports.
 
 | Read mode | Command | Fits a session that |
 |---|---|---|
-| stream | `scramble listen --addressed --as dev` | can run a background process and be woken when it prints |
+| stream | `scramble listen --addressed --as dev` | can run a background process and be woken when it prints. It also drains the channels every 15 minutes onto the same stream, so ordinary traffic and unanswered lines arrive without a second monitor |
 | blocking | `scramble next --as dev --timeout 900` | can run a shell command and wait for it to exit |
 
 `listen` outputs every new message as a single JSON line while omitting your own

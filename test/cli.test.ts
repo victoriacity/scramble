@@ -6,7 +6,7 @@ import type { ChannelStore } from "../src/store";
 import { createStore } from "../src/store";
 import { createHandler } from "../src/server";
 import { WORD_LIMIT } from "../src/language";
-import { KNOWN_ENV, unknownEnvNote, hashVerdict, textHash, differenceLine, autoKey, installedChanges, changeBlock, monitorReport, sweepAgeMinutes, main, parseBind, loadSlackConfig, slackConfigPath, staleConfigWarning, staleListeners, pickStale, staleListenerProblem, readProcesses, liveListeners, stillAlive, watchForNewerInstall, listenerCommit, listenersBehind, processesReadable, type Io } from "../src/cli";
+import { KNOWN_ENV, unknownEnvNote, hashVerdict, textHash, differenceLine, autoKey, installedChanges, changeBlock, monitorReport, sweepAgeMinutes, sweepInsideListener, SWEEP_INTERVAL_MS, main, parseBind, loadSlackConfig, slackConfigPath, staleConfigWarning, staleListeners, pickStale, staleListenerProblem, readProcesses, liveListeners, stillAlive, watchForNewerInstall, listenerCommit, listenersBehind, processesReadable, type Io } from "../src/cli";
 import { SCOPE_NAMES, BOT_EVENT_NAMES } from "../src/app-manifest";
 import { readTierBlock } from "../src/rewrite";
 
@@ -1133,6 +1133,124 @@ describe("both monitors are reported on every send", () => {
     const odd = scratchDir("mon-odd");
     mkdirSync(join(odd, ".scramble", "cursors", "dev.json"), { recursive: true });
     expect(sweepAgeMinutes(io(odd), "dev")).toBeGreaterThanOrEqual(0);
+  });
+
+  /**
+   *  A process list holding one listener for this agent. `readProcesses` reads the
+   *  command line of each numbered directory, which is what the report reads.
+   */
+  function procRootWithListener(cwd: string): string {
+    const root = join(cwd, "proc");
+    const pid = join(root, "4242");
+    mkdirSync(pid, { recursive: true });
+    // The match reads the interpreter and the module path, which is how a listener
+    // differs from any other process naming this agent.
+    writeFileSync(
+      join(pid, "cmdline"),
+      [join(cwd, "bun"), join(cwd, "src", "bin.ts"), "listen", "--addressed", "--as", "dev"].join("\0"),
+    );
+    return root;
+  }
+
+  test("a running listener changes what a missing sweep means, since the listener sweeps", () => {
+    // TELLING AN AGENT TO ARM A LISTENER THAT IS ALREADY RUNNING makes them start a
+    // second one. With one running, a missing sweep is that listener's sweep failing.
+    const cwd = scratchDir("mon-live");
+    const withProc = (c: string): Io => {
+      const { io: base } = stubIo(c, async () => new Response("{}", { status: 200 }));
+      return { ...base, env: (n) => (n === "SCRAMBLE_PROC" ? procRootWithListener(c) : undefined) };
+    };
+    const live = withProc(cwd);
+    const never = monitorReport(live, "dev").join(" ");
+    expect(never).toContain("though a listener is running");
+    expect(never).toContain("within 15 minutes");
+    expect(never).not.toContain("Arm both");
+
+    // A cursor written 45 minutes ago, with a listener running: the sweep inside that
+    // listener is the thing that stopped, and its own stderr carries the reason.
+    const p = join(cwd, ".scramble", "cursors", "dev.json");
+    mkdirSync(dirname(p), { recursive: true });
+    writeFileSync(p, JSON.stringify({ "slack:dev": { general: "1.1" } }));
+    const then = Date.now() - 45 * 60_000;
+    utimesSync(p, new Date(then), new Date(then));
+    const stale = monitorReport(live, "dev").join(" ");
+    expect(stale).toContain("the sweep inside it is not completing");
+    expect(stale).not.toContain("Arm both");
+    // The listener is running, so nothing tells the agent to arm one.
+    expect(stale).not.toContain("NO listener is running");
+  });
+
+  test("one arming arms both, and the repair names one command", () => {
+    // An empty process root is readable and holds no listener, which is the state an
+    // agent is in before arming anything.
+    const cwd = scratchDir("mon-none");
+    const root = join(cwd, "proc");
+    mkdirSync(root, { recursive: true });
+    const { io: base } = stubIo(cwd, async () => new Response("{}", { status: 200 }));
+    const bare: Io = { ...base, env: (n) => (n === "SCRAMBLE_PROC" ? root : undefined) };
+    const lines = monitorReport(bare, "dev");
+    expect(lines.join(" ")).toContain("NO listener is running for dev, so nothing wakes this agent and no sweep runs");
+    // THE REPAIR IS ONE COMMAND. Arming used to be two, and agents arrived with one.
+    expect(lines.join(" ")).toContain("Arm both: scramble listen --addressed --as dev");
+    expect(lines.join(" ")).not.toContain("scramble message check");
+  });
+});
+
+describe("the listener sweeps on its own timer", () => {
+  // ONE ARMING ARMS BOTH MONITORS. Agents onboarded with the listener and without the
+  // timed sweep, so ordinary traffic and the lines they owed never surfaced.
+  test("a tick runs the sweep, an overlapping tick is dropped, and a failure is printed", async () => {
+    const cwd = scratchDir("sweep-timer");
+    const { io, errs } = stubIo(cwd, async () => new Response("{}", { status: 200 }));
+    let runs = 0;
+    let release = (): void => {};
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const sweep = sweepInsideListener(
+      io,
+      async () => {
+        runs++;
+        await gate;
+      },
+      60_000,
+    );
+    try {
+      const first = sweep.tick();
+      // A SLOW DRAIN THAT OUTLASTS ITS INTERVAL MUST NOT STACK: two drains at once
+      // advance one cursor underneath each other.
+      await sweep.tick();
+      expect(runs).toBe(1);
+      release();
+      await first;
+      // With the first one finished, the next tick runs.
+      await sweep.tick();
+      expect(runs).toBe(2);
+    } finally {
+      sweep.stop();
+    }
+
+    // A THROW INSIDE A TIMER CALLBACK WITH NO CATCH TAKES THE LISTENER DOWN, turning
+    // one failed drain into a dead inbox. The failure prints and the listener lives.
+    const bad = sweepInsideListener(
+      io,
+      async () => {
+        throw new Error("slack said not_in_channel");
+      },
+      60_000,
+    );
+    try {
+      await bad.tick();
+    } finally {
+      bad.stop();
+    }
+    expect(errs.join(" ")).toContain("the sweep inside this listener failed and messages may be waiting");
+    expect(errs.join(" ")).toContain("not_in_channel");
+
+    // The interval a listener keeps is the period the sweep timer documented, and the
+    // staleness mark is longer, so two sweeps have to miss before an agent reads that
+    // one died.
+    expect(SWEEP_INTERVAL_MS).toBe(15 * 60_000);
   });
 });
 
