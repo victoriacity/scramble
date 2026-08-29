@@ -160,6 +160,22 @@ export function recordInboxItem(path: string, item: InboxItem): void {
  *  the looser rule a missed nag. The consequence is a dropped question, and the
  *  person who asked it never learns that.
  */
+/** Whether this exact line already reached this agent.
+ *
+ *  THE LEDGER IS THE RECORD OF WHAT WOKE THIS AGENT, so it answers whether a second
+ *  copy of one message is worth a second wake-up. Two delivery paths carry the same
+ *  line: the socket carries it live, and the sweep drains it again from a cursor the
+ *  socket never advances. A reader measured 20 of their 337 messages arriving twice,
+ *  5.9 percent, clustered at listener restarts, and every duplicate costs a turn to
+ *  read a message the agent already answered.
+ *
+ *  The row stays whatever happens; this only decides whether the line goes out on the
+ *  stream again. */
+export function deliveredBefore(path: string, id: string, channel: string): boolean {
+  if (id === "") return false;
+  return readInbox(path).some((r) => r.id === id && r.channel === channel);
+}
+
 export function closeInboxItems(path: string, channel: string, replyId: string, thread?: string): number {
   return withFileLock(path, () => closeInsideLock(path, channel, replyId, thread));
 }

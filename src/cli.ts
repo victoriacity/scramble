@@ -122,6 +122,7 @@ import {
   closeAnsweredBefore,
   closeInboxItems,
   closeItemById,
+  deliveredBefore,
   readSent,
   reopenAnsweredBy,
   allWords,
@@ -2140,8 +2141,9 @@ async function messageCheckSlack(flags: Map<string, string>, io: Io, quietWhenEm
         continue;
       }
       if (status !== undefined) await settleStatus(deliverStatus(status, line, name));
-      emitDelivery(io, name, line as unknown as Record<string, unknown>);
-      delivered += 1;
+      // The count reports what reached the agent, so a line the ledger already held
+      // adds nothing to it and a sweep carrying only those stays silent.
+      if (emitDelivery(io, name, line as unknown as Record<string, unknown>)) delivered += 1;
     }
     if (newest !== undefined) next[channel] = newest;
     if (newestOwn !== undefined) {
@@ -3278,7 +3280,7 @@ async function cmdInbox(argv: string[], io: Io): Promise<number> {
  *  and the ledger is the accounting. The system reports the write, so an inbox that
  *  quietly counts nothing does not read as an inbox with nothing in it.
  */
-function emitDelivery(io: Io, agent: string, line: Record<string, unknown>, addressedOnly = false): void {
+function emitDelivery(io: Io, agent: string, line: Record<string, unknown>, addressedOnly = false): boolean {
   // This agent uses two identities: its scramble name and the Slack handle that a
   // mention resolves to, which differ (`scramble-dev` is mentioned as
   // `scramble_dev`). Comparing against the scramble name alone once caused a real
@@ -3319,7 +3321,15 @@ function emitDelivery(io: Io, agent: string, line: Record<string, unknown>, addr
   // keeps that name. If the serialiser adds a space, reorders fields, or renames the
   // field, the grep stops matching with no error and no exit, so an inbox goes
   // quiet and looks calm. Every agent following JOIN.md inherited this pattern.
-  if (!addressedOnly || addressed) io.write(JSON.stringify(line));
+  // A LINE THAT ALREADY WOKE THIS AGENT DOES NOT WAKE IT AGAIN. The socket carries a
+  // message live and the sweep drains the same message from a cursor the socket
+  // never advances, so a restart replays whatever arrived since the last drain: a
+  // reader measured 20 duplicates in 337 messages, clustered at their restarts. The
+  // ledger already holds every delivered line, so it answers this without a second
+  // record of the same fact.
+  const seenBefore = deliveredBefore(inboxPath(slackConfigPath(io), agent), String(line.id ?? line.ts ?? line.seq ?? ""), String(line.channel ?? ""));
+  const wrote = (!addressedOnly || addressed) && !seenBefore;
+  if (wrote) io.write(JSON.stringify(line));
   try {
     recordInboxItem(inboxPath(slackConfigPath(io), agent), {
       id: String(line.id ?? line.ts ?? line.seq ?? ""),
@@ -3340,6 +3350,7 @@ function emitDelivery(io: Io, agent: string, line: Record<string, unknown>, addr
   } catch (e) {
     io.writeErr(`inbox ledger not written for ${String(line.id ?? "")}: ${String(e)}`);
   }
+  return wrote;
 }
 
 /**

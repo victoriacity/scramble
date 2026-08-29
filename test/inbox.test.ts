@@ -24,6 +24,7 @@ import {
   NEAR_DUPLICATE_FLOOR,
   pairScore,
   saidAlready,
+  deliveredBefore,
   markSentDeleted,
   reopenAnsweredBy,
   sentAlready,
@@ -534,6 +535,29 @@ describe("the record of what this agent said", () => {
     expect(sentAlready(rows, "general", "abc", Date.parse("2026-08-26T13:00:00Z"), 10 * 60 * 1000)).toBeUndefined();
     // A row created before the field existed contains no draft, so it never matches.
     expect(sentAlready([{ ts: "1.1" }], "general", "abc", now, 10 * 60 * 1000)).toBeUndefined();
+  });
+
+  test("a line the ledger already holds does not wake this agent twice", () => {
+    // Two paths carry one message: the socket live, and the sweep from a cursor the
+    // socket never advances, so a restart replays whatever arrived since the last
+    // drain. A reader measured 20 duplicates in 337 messages, 5.9 percent, clustered
+    // at their restarts, and each one costs a turn to read an answered message.
+    const p = inboxPath(join(scratch(), "slack.json"), "dev");
+    expect(deliveredBefore(p, "7.7", "general")).toBe(false);
+    recordInboxItem(p, {
+      id: "7.7",
+      channel: "general",
+      from: "peer",
+      text: "the gate is green",
+      at: "2026-08-26T12:00:00Z",
+      mentions: [],
+      addressed: false,
+    });
+    expect(deliveredBefore(p, "7.7", "general")).toBe(true);
+    // The same timestamp in another channel is another message.
+    expect(deliveredBefore(p, "7.7", "team")).toBe(false);
+    // A line with no id cannot be matched, so it is never suppressed.
+    expect(deliveredBefore(p, "", "general")).toBe(false);
   });
 
   test("deleting an answer opens the question it answered", () => {
