@@ -92,22 +92,28 @@ verify: the host still serves <id> by sha, and that fetch carries 424 commit(s)
 verify: PUBLISHED HISTORY CARRIES 1 private reference(s) at <tip>
 ```
 
-WHAT THOSE OBJECTS CARRY, measured across four local copies, each scan carrying a
-control because a zero from a broken pipeline reads exactly like a zero from a clean
-history:
+WHAT THOSE OBJECTS CARRY, measured over every object in the databases that hold
+them. Each scan carries a control, because a zero from a broken pipeline reads
+exactly like a zero from a clean history:
 
-| copy | scanned | credential matches | control |
+| database | scanned | credential matches | control |
 |---|---|---|---|
-| a pre-rewrite tag | 2881 objects, 57,419,212 bytes | 0 | 41,208 hits for one word |
-| a third checkout | 484 objects, 2,361,249 bytes | 0 | 2,616 |
-| unreachable set, one host | 1671 objects, 30,615,182 bytes | 0 | 22,896 |
-| unreachable set, another | 1671 objects, 29,617,390 bytes | 0 | 14,814 |
+| two clones on one host, whole databases | 4413 + 4725 objects, 186,544,499 bytes | 0 | 131,594 and 178,339 hits for two ordinary words |
+| a third checkout, refs only | 484 objects, 2,361,249 bytes | 0 | 2,616 |
 
-The first scan walked refs alone and missed unreferenced objects, which `git fsck`
-then surfaced: five of them on one shared checkout, three carrying a credential
-SHAPE, all three synthetic decoys written during that day's testing and none
-matching a live value. So the exposure in the served objects is the company,
-product, host and account names the rewrite removed, with no credential among them.
+READ THE WHOLE DATABASE, since narrower reads keep missing objects. A scan of the
+closure under a pre-rewrite tag returned 2881 objects for a database holding 4413:
+35 percent of it sat outside what its reader called the complete set. A tag closure
+plus an `fsck` pass reads neither the closure under an unreachable tip nor anything
+a reflog still holds, and a tip that a reflog keeps reachable stays invisible to
+`fsck --unreachable` while its objects sit on disk. `git cat-file
+--batch-all-objects` is the read that covers all of it.
+
+An earlier pass surfaced five unreferenced objects on one shared checkout, three
+carrying a credential SHAPE, all three synthetic decoys written during that day's
+testing and none matching a live value. So the exposure in the served objects is the
+company, product, host and account names the rewrite removed, with no credential
+among them.
 
 The gate scans the object database on every run for the same reason: `git add`
 writes a blob immediately, and that blob survives the edit with no commit, no
