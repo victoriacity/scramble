@@ -92,6 +92,14 @@ verify: the host still serves <id> by sha, and that fetch carries 424 commit(s)
 verify: PUBLISHED HISTORY CARRIES 1 private reference(s) at <tip>
 ```
 
+WHAT THOSE OBJECTS CARRY, measured by a reader holding the only local copy of the
+pre-rewrite history: 2881 reachable objects, 57,419,212 bytes read, and zero
+matches for any credential family under the tight shapes. Their scan carried a
+control, since a zero from a broken pipeline reads exactly like a zero from a clean
+history: one ordinary word matched 41,208 times through the same pipeline, which
+proves the bytes reached the matcher. So the exposure there is the company, product,
+host and account names the rewrite removed, with no credential among them.
+
 Two paths close it, and both belong to whoever owns the repository on the host: a
 garbage collection by support request, or deleting the repository and pushing the
 clean history into a new one. Until one of them happens, the check reports the
