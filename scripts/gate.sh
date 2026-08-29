@@ -32,6 +32,31 @@ done
 # `log/postmortems/-coverage-gate-was-decorative-ignored-threshold.md`). Before trusting a single
 # number below, run the REPO'S OWN bunfig against a fixture with a deliberately untested branch and
 # require it to FAIL.
+# THE CREDENTIAL SHAPES AND THEIR FILTER, in one place, used by the scan below and
+# by the self-test that proves the scan can still fire. Two copies of this pattern
+# would diverge the first time somebody tightened one of them.
+LEAK_RX='xox[bpasre]-[A-Za-z0-9-]{12,}|sk-[A-Za-z0-9]{20,}|AIza[A-Za-z0-9_-]{30,}|xapp-[0-9]-[A-Za-z0-9-]{12,}'
+# Reads `file:line:match` on stdin, drops the placeholders by what the MATCH holds,
+# and cuts every surviving token to its first 11 characters.
+#
+# THE CUT IS ANCHORED TO THE MATCH FIELD, and the row around it is left alone. A
+# first version ran a `sed` over the whole row keyed on the family markers, and a PATH carrying one
+# of those markers matched first: a finding under a directory named `sk-configs`
+# came back as `sk-config…REDACTED`, with the file, the line and the token all eaten
+# by the substitution. A report that cannot say where the finding is fails at the one
+# thing it exists for. The match field is the only part this cuts, so a path can hold
+# any string at all.
+leak_filter() {
+  awk '{
+    row = $0;
+    m = row;
+    sub(/^.*:[0-9]+:/, "", m);
+    if (m ~ /000000/ || m ~ /EXAMPLE/) next;
+    prefix = substr(row, 1, length(row) - length(m));
+    print prefix substr(m, 1, 11) "…REDACTED";
+  }'
+}
+
 SELF="$(mktemp -d)"
 trap 'rm -rf "$SELF"' EXIT
 mkdir -p "$SELF/src" "$SELF/test"
@@ -65,6 +90,58 @@ if [ "$self_rc" -eq 0 ]; then
   exit 1
 fi
 echo "self-test ok: partial coverage exits $self_rc under this repo's bunfig"
+
+# THE LEAK SCAN PROVES IT CAN STILL FIRE, on every run. Its own tree passing says
+# only that the tree is clean, and this stage carried two defects while it reported
+# green: it excluded placeholders by LINE, so a real token beside an ellipsis was
+# reported by nothing, and it printed the whole match, so a finding wrote the
+# credential into every log that read the run. Both were found by readers.
+echo "== gate self-test: the leak scan must FIRE on a planted token and stay quiet on a placeholder =="
+# The fixture sits under a directory whose name carries a family marker, since the
+# report's cut used to key on those markers anywhere in the row.
+#
+# THE TOKENS ARE ASSEMBLED HERE, never written as literals: a live-shaped string in
+# a tracked file is what the commit hook exists to stop, and it stopped this file
+# the first time the fixture spelled one out. The pieces below match no pattern on
+# their own.
+mkdir -p "$SELF/sk-configs"
+FAM="xo""xb-"
+SEG1="111111111"
+SEG2="222222222"
+TAIL1="abcdefghijklmnop"
+SEG3="333333333"
+SEG4="444444444"
+TAIL2="qrstuvwxyzabcdef"
+ZEROS="000000000"
+APP="xa""pp-1-A0EXAMPLE001-"
+{
+  echo "a token beside an ellipsis: ${FAM}${SEG1}-${SEG2}-${TAIL1} and ..."
+  echo "a token alone: ${FAM}${SEG3}-${SEG4}-${TAIL2}"
+  echo "a zero placeholder: ${FAM}${ZEROS}-${ZEROS}-${ZEROS}abcd"
+  echo "an example placeholder: ${APP}${SEG2}-abcdef0123456789abcdef0123456789"
+} > "$SELF/sk-configs/leak-fixture.txt"
+# Scanned as a DIRECTORY, so every row carries a path, which is the shape the real
+# scan produces and the shape the cut has to survive.
+LEAK_SELF="$(cd "$SELF" && grep -IonrE "$LEAK_RX" sk-configs | leak_filter || true)"
+LEAK_SELF_N="$(printf '%s\n' "$LEAK_SELF" | grep -c 'REDACTED' || true)"
+LEAK_SELF_TAIL="$(printf '%s\n' "$LEAK_SELF" | grep -c 'abcdefghijklmnop\|qrstuvwxyzabcdef' || true)"
+LEAK_SELF_WHERE="$(printf '%s\n' "$LEAK_SELF" | grep -c 'sk-configs/leak-fixture.txt:' || true)"
+if [ "$LEAK_SELF_N" != "2" ] || [ "$LEAK_SELF_TAIL" != "0" ] || [ "$LEAK_SELF_WHERE" != "2" ]; then
+  echo "GATE SELF-TEST FAILED: the leak scan reported $LEAK_SELF_N of 2 planted tokens," \
+       "printed $LEAK_SELF_TAIL token tail(s) it should have cut, and placed $LEAK_SELF_WHERE of 2 findings."
+  echo "What it produced from the fixture:"
+  printf '%s\n' "$LEAK_SELF"
+  echo "The fixture holds two live-shaped tokens (one beside an ellipsis) and two placeholders,"
+  echo "under a directory whose name carries a family marker."
+  echo "GATE RED"
+  exit 1
+fi
+# WHAT THIS PROVES, exactly: the pattern still matches a live-shaped token, the
+# filter still suppresses both placeholder shapes, and every token the report names
+# is cut. The line-versus-match scope of the exclusion is no longer visible here,
+# since `-o` hands the filter the token alone; that defect is closed by the shape of
+# the pipeline instead.
+echo "self-test ok: the leak scan reported both planted tokens, suppressed both placeholders, and cut every tail"
 
 # NO MACHINE PATH IN A TRACKED FILE. This repo is bound for GitHub, and it carried six: my home
 # directory inside this very script, two akari paths in dispatch.sh, and my checkout's path inside
@@ -224,7 +301,7 @@ echo "== no credential-shaped string in a tracked file =="
 # of whoever ran it, so a scan meant to prevent a leak performs one. The file, the
 # line and the first six characters place the finding exactly; the tail is cut, the
 # way the commit hook already cuts it.
-LEAKS="$(git -C "$REPO" grep -IonE 'xox[bpasre]-[A-Za-z0-9-]{12,}|sk-[A-Za-z0-9]{20,}|AIza[A-Za-z0-9_-]{30,}|xapp-[0-9]-[A-Za-z0-9-]{12,}' -- . ':(exclude)scripts/gate.sh' 2>/dev/null | awk -F: '{ m = $0; sub(/^[^:]*:[0-9]+:/, "", m); if (m !~ /000000/ && m !~ /EXAMPLE/) print }' | sed -E 's/(xox[bpasre]-|sk-|AIza|xapp-)(.{0,6}).*/\1\2…REDACTED/' || true)"
+LEAKS="$(git -C "$REPO" grep -IonE "$LEAK_RX" -- . ':(exclude)scripts/gate.sh' 2>/dev/null | leak_filter || true)"
 if [ -n "$LEAKS" ]; then
   echo "GATE FAIL: a tracked file carries something shaped like a credential:"
   echo "$LEAKS"
