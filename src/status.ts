@@ -43,6 +43,11 @@ export const STATUS_TEXT = "working";
 export const STATUS_METADATA_TYPE = "scramble_status";
 
 const THREAD_STATUS_URL = "https://slack.com/api/assistant.threads.setStatus";
+/**
+ *  Slack's answers for a thread that no longer exists. A status record naming one
+ *  of these can only fail again, so the record drops the reference.
+ */
+const GONE_THREAD_ERRORS = new Set(["invalid_thread_ts", "thread_not_found", "message_not_found"]);
 
 /**
  *  The CLI already knows the backend-selection answers. The local daemon records
@@ -287,13 +292,17 @@ export class StatusManager {
     threadTs: string,
     status: string,
     channel?: string,
-  ): Promise<boolean> {
+  ): Promise<{ ok: boolean; gone: boolean }> {
     const r = await this.call(THREAD_STATUS_URL, { channel_id: channelId, thread_ts: threadTs, status });
     if (!r.ok) {
       this.report(`${r.error ?? "thread status failed"} (channel_id ${channelId}, thread ${threadTs})`, channel);
-      return false;
+      // A THREAD SLACK NO LONGER HAS IS NEVER COMING BACK. Its root was deleted, and
+      // an agent's every status write then fails with the same error and prints it:
+      // one deleted message produced that line on every send for as long as the
+      // record kept pointing at it. The caller drops the reference.
+      return { ok: false, gone: GONE_THREAD_ERRORS.has(r.error ?? "") };
     }
-    return true;
+    return { ok: true, gone: false };
   }
 
   /**
@@ -319,9 +328,19 @@ export class StatusManager {
     const existing = this.load().find((r) => r.channel === channel && r.agent === agent);
     const thread = existing?.thread ?? threadTs;
     let took = existing?.thread !== undefined;
+    let gone = false;
     if (this.cfg.backend === "slack" && thread !== undefined) {
       const cid = await this.channelId(channel);
-      took = cid !== undefined && (await this.setThreadStatus(cid, thread, STATUS_TEXT, channel));
+      const set = cid === undefined ? { ok: false, gone: false } : await this.setThreadStatus(cid, thread, STATUS_TEXT, channel);
+      took = set.ok;
+      gone = set.gone;
+    }
+    if (gone) {
+      this.report(
+        `the thread this status pointed at is gone from Slack, so the record stops naming it and this ` +
+          `agent shows no status here until a new thread arrives (thread ${thread})`,
+        channel,
+      );
     }
     this.locked((records) => {
       const idx = records.findIndex((r) => r.channel === channel && r.agent === agent);
@@ -330,6 +349,9 @@ export class StatusManager {
         const rec = records[idx]!;
         rec.agent = agent;
         rec.expiresAt = expiresAt;
+        // The reference goes with the thread it named, so the next write stops
+        // asking Slack about a message nobody has.
+        if (gone) delete rec.thread;
         return;
       }
       records.push({ channel, agent, expiresAt, ...(took && thread !== undefined ? { thread } : {}) });

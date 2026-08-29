@@ -309,6 +309,34 @@ describe("status slack backend", () => {
     expect(set[1]?.body).toMatchObject({ channel_id: "C1", thread_ts: "thread.9", status: "" });
   });
 
+  test("a thread Slack no longer has is dropped from the record, so the error stops repeating", async () => {
+    // A deleted message left an agent's status record pointing at its thread, and
+    // every send after that printed `invalid_thread_ts` naming the same timestamp.
+    // The reference goes with the thread it named.
+    let live = true;
+    const router = (url: string): Response =>
+      url.includes("assistant.threads.setStatus") && !live
+        ? new Response(JSON.stringify({ ok: false, error: "invalid_thread_ts" }), { status: 200 })
+        : new Response(JSON.stringify({ ok: true }), { status: 200 });
+    const { mgr, calls, errs, dir } = makeSlack({ router });
+    await mgr.setOn("general", "ana", "thread.9");
+    expect(recorded(dir)[0]?.thread).toBe("thread.9");
+
+    // Somebody deletes the message that thread hung from.
+    live = false;
+    await mgr.setOn("general", "ana");
+    expect(errs.join(" ")).toContain("the thread this status pointed at is gone from Slack");
+    expect(recorded(dir)[0]?.thread).toBeUndefined();
+    // The record still exists and still holds the status; what it lost is a
+    // reference no call can use.
+    expect(recorded(dir)[0]?.agent).toBe("ana");
+
+    // The next write asks Slack about nothing, so the error cannot repeat.
+    const before = calls.filter((c) => c.url.includes("assistant.threads.setStatus")).length;
+    await mgr.setOn("general", "ana");
+    expect(calls.filter((c) => c.url.includes("assistant.threads.setStatus"))).toHaveLength(before);
+  });
+
   test("a REFUSED setStatus records no thread, so a clear does not claim one", async () => {
     const refusing = (url: string): Response =>
       url.includes("assistant.threads.setStatus")
