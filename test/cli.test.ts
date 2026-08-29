@@ -6,7 +6,7 @@ import type { ChannelStore } from "../src/store";
 import { createStore } from "../src/store";
 import { createHandler } from "../src/server";
 import { WORD_LIMIT } from "../src/language";
-import { KNOWN_ENV, unknownEnvNote, hashVerdict, textHash, differenceLine, autoKey, installedChanges, changeBlock, monitorReport, sweepAgeMinutes, sweepInsideListener, SWEEP_INTERVAL_MS, main, parseBind, loadSlackConfig, slackConfigPath, staleConfigWarning, staleListeners, pickStale, staleListenerProblem, readProcesses, liveListeners, stillAlive, watchForNewerInstall, listenerCommit, listenersBehind, processesReadable, type Io } from "../src/cli";
+import { KNOWN_ENV, unknownEnvNote, hashVerdict, textHash, differenceLine, autoKey, installedChanges, changeBlock, monitorReport, sweepAgeMinutes, sweepInsideListener, sweepSummaryLine, SWEEP_INTERVAL_MS, main, parseBind, loadSlackConfig, slackConfigPath, staleConfigWarning, staleListeners, pickStale, staleListenerProblem, readProcesses, liveListeners, stillAlive, watchForNewerInstall, listenerCommit, listenersBehind, processesReadable, type Io } from "../src/cli";
 import { SCOPE_NAMES, BOT_EVENT_NAMES } from "../src/app-manifest";
 import { readTierBlock } from "../src/rewrite";
 
@@ -1215,6 +1215,22 @@ describe("both monitors are reported on every send", () => {
 });
 
 describe("the listener sweeps on its own timer", () => {
+  test("a quiet tick inside a listener says nothing, and a hand-run sweep says it ran", () => {
+    // EVERY LINE ON THE LISTENER STREAM IS A WAKE-UP. An agent measured the cost of
+    // the quiet tick on their harness: 96 wake-ups a day, each spending a turn to
+    // learn that nothing arrived. The tick's own record is the cursor it writes,
+    // whose mtime every send reads back, so the quiet line carries no fact the
+    // reader lacks.
+    expect(sweepSummaryLine(0, 2, true)).toBe("");
+    // A sweep that CARRIED something still speaks, since its reader wants the count
+    // beside the lines it just received.
+    expect(sweepSummaryLine(3, 2, true)).toContain("3 line(s) delivered, 2 channel(s) read");
+    // A HAND-RUN SWEEP CONFIRMS ITSELF EITHER WAY: the caller is waiting on the
+    // answer, and "nothing arrived" is the answer.
+    expect(sweepSummaryLine(0, 2, false)).toContain("0 line(s) delivered, 2 channel(s) read");
+  });
+
+
   // ONE ARMING ARMS BOTH MONITORS. Agents onboarded with the listener and without the
   // timed sweep, so ordinary traffic and the lines they owed never surfaced.
   test("a tick runs the sweep, an overlapping tick is dropped, and a failure is printed", async () => {

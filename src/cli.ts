@@ -1144,7 +1144,7 @@ async function cmdListen(argv: string[], io: Io): Promise<number> {
   recordSelf(io, name);
   const drift = watchForNewerInstall(io);
   // ARMING THE LISTENER ARMS THE SWEEP. See `sweepInsideListener`.
-  const sweep = sweepInsideListener(io, sweepOnce.bind(null, flags, io, "local"));
+  const sweep = sweepInsideListener(io, sweepOnce.bind(null, flags, io, "local", true));
   let lastSeq = 0;
   let backoff = 100;
   let staying = true;
@@ -1932,7 +1932,7 @@ async function slackCmdListen(argv: string[], io: Io): Promise<number> {
   // ARMING THE LISTENER ARMS THE SWEEP. See `sweepInsideListener`.
   // `bind` and not a wrapper arrow: an arrow here is a function the tests would have
   // to reach through a 15-minute timer to run.
-  const sweep = sweepInsideListener(io, sweepOnce.bind(null, flags, io, "slack"));
+  const sweep = sweepInsideListener(io, sweepOnce.bind(null, flags, io, "slack", true));
   try {
     return await s.backend.listen(
       positionals,
@@ -1994,7 +1994,14 @@ async function messageCheckLocal(flags: Map<string, string>, io: Io): Promise<nu
  *  exactly as the local path does, advances the cursor to the newest line seen per
  *  channel, and exits 0. The command reports a broken or missing configuration.
  */
-async function messageCheckSlack(flags: Map<string, string>, io: Io): Promise<number> {
+/** The line a finished sweep prints, or nothing when a quiet tick has nothing to
+ *  say. See the note at its call site for which caller is quiet and why. */
+export function sweepSummaryLine(delivered: number, drained: number, quietWhenEmpty: boolean): string {
+  if (delivered === 0 && quietWhenEmpty) return "";
+  return `check: ${delivered} line(s) delivered, ${drained} channel(s) read.`;
+}
+
+async function messageCheckSlack(flags: Map<string, string>, io: Io, quietWhenEmpty = false): Promise<number> {
   // A stale configuration announces itself on the path it breaks. An agent
   // onboarded before a fix keeps running and silently lacks it, so the delivery
   // commands that a mention travels through print the one line that names the
@@ -2147,14 +2154,23 @@ async function messageCheckSlack(flags: Map<string, string>, io: Io): Promise<nu
   // The same call writes the skipped set with the cursor, so the next sweep can
   // tell a moved set from a standing one.
   writeSlackCursor(io, name, next, [...notMine].sort());
-  // The output appears on every sweep, including sweeps with a count of zero. A tick
-  // that delivered nothing is the state an agent wants confirmed, and an unprinted
-  // count gets inferred from the records.
+  // A HAND-RUN SWEEP CONFIRMS ITSELF, INCLUDING A SWEEP THAT CARRIED NOTHING: the
+  // caller is waiting on the answer and an unprinted count gets inferred from the
+  // records.
+  //
+  // A SWEEP INSIDE A LISTENER STAYS QUIET WHEN IT CARRIED NOTHING. Its reader is a
+  // harness monitor, where this line is a wake-up: 96 of them a day per agent, each
+  // spending a turn to learn that nothing arrived. The tick's own record is the
+  // cursor it writes, whose mtime every send already reads back. A sweep that FAILS
+  // still prints, from the catch in `sweepInsideListener`.
   //
   // `drained` counts channels read, and a channel with nothing new is one of them,
   // so the line states that channels were read and omits delivery phrasing. The
   // first wording reported "from 1 channel" for a sweep that carried nothing.
-  io.writeErr(`check: ${delivered} line(s) delivered, ${drained} channel(s) read.`);
+  {
+    const line = sweepSummaryLine(delivered, drained, quietWhenEmpty);
+    if (line !== "") io.writeErr(line);
+  }
   if (selfHits.length > 0) {
     io.writeErr(
       `${selfHits.length} message(s) you already sent would be refused by today's rules:\n` +
@@ -2263,8 +2279,13 @@ async function cmdMessageCheck(argv: string[], io: Io, backend: "local" | "slack
  *  under more than one. It prints after the drain, so the count includes the lines
  *  just delivered, and on stderr, so the stdout contract stays one JSON line per
  *  message. */
-async function sweepOnce(flags: Map<string, string>, io: Io, backend: "local" | "slack"): Promise<number> {
-  const code = backend === "slack" ? await messageCheckSlack(flags, io) : await messageCheckLocal(flags, io);
+async function sweepOnce(
+  flags: Map<string, string>,
+  io: Io,
+  backend: "local" | "slack",
+  quietWhenEmpty = false,
+): Promise<number> {
+  const code = backend === "slack" ? await messageCheckSlack(flags, io, quietWhenEmpty) : await messageCheckLocal(flags, io);
   const owed = pendingInbox(inboxPath(slackConfigPath(io), nameFor(flags, io)));
   if (owed.length > 0) io.writeErr(pendingReport(owed, nameFor(flags, io)));
   return code;
