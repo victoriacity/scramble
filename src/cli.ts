@@ -30,7 +30,7 @@ import {
 } from "./attachments";
 import { StatusManager } from "./status";
 import { SCOPE_NAMES, BOT_EVENT_NAMES } from "./app-manifest";
-import { CODE_RULES, DATE_RULES, languageRefusal, lengthRefusal, lineOf, lintLanguage, wordCount } from "./language";
+import { attributionRefusal, CODE_RULES, DATE_RULES, languageRefusal, lengthRefusal, lineOf, lintLanguage, unownedAttributions, wordCount } from "./language";
 import { createHash } from "node:crypto";
 import { tierFor, unclassified, type Tier } from "./tier";
 import { credentialsPath, firstCredential, freshCliToken } from "./slack-credential";
@@ -3433,6 +3433,16 @@ async function cmdMessage(args: string[], io: Io, backend: "local" | "slack"): P
       const tooLong = lengthRefusal(text);
       if (tooLong !== "") {
         io.writeErr(tooLong);
+        return 1;
+      }
+      // The address is checked where the language is, and for the same reason: a
+      // message to several agents that says "your" without naming which one leaves
+      // every reader to guess. The rule the earlier repair wrote into the skill asked
+      // for a ts beside a borrowed fact, and a sentence that names nobody and cites
+      // nothing went out the next day carrying one agent's scan under another's name.
+      const unowned = attributionRefusal(unownedAttributions(text), text);
+      if (unowned !== "") {
+        io.writeErr(unowned);
         return 1;
       }
       // By default, an inbox reply posts within the thread that it answers, and a

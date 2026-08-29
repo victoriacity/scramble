@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { LANGUAGE_RULES, WORD_LIMIT, languageRefusal, lengthRefusal, lintLanguage, proseOf, wordCount } from "../src/language";
+import { LANGUAGE_RULES, WORD_LIMIT, attributionRefusal, languageRefusal, lengthRefusal, lintLanguage, proseOf, unownedAttributions, wordCount } from "../src/language";
 
 describe("the language rules, checked where the message leaves", () => {
   test("THE MESSAGE THAT GOT THROUGH: a long dash is refused", () => {
@@ -226,3 +226,41 @@ describe("the word limit on one message", () => {
   });
 });
 
+
+describe("whose fact is it: a claim about one reader in a room of several", () => {
+  // TWICE IN TWO DAYS. A message greeting three agents said "your 118-draft scan"
+  // when the scan belonged to one of them and another had scanned 26 files; the day
+  // before, a message to two agents wrote "you counted eleven" for a number one of
+  // them owned, and the other published a correction of a claim they never made.
+  test("a possessive claim with no owner is refused, and the room's own `you` is not", () => {
+    const room = "@reader-one @reader-two @reader-three";
+    const unowned = `${room} Three of you hit the same wall.\n\nOn the file mode you measured, the ledger now writes 0600.`;
+    const hits = unownedAttributions(unowned);
+    expect(hits).toHaveLength(1);
+    expect(hits[0]).toContain("On the file mode you measured");
+    const said = attributionRefusal(hits, unowned);
+    expect(said).toContain("1 paragraph(s) say \"you\" to 3 agents");
+    expect(said).toContain("@reader-two");
+    expect(said).toContain("the ts of the message the fact came from");
+
+    // THE ROOM'S OWN SENTENCE IS LEFT ALONE. A rule that refused the greeting of
+    // every message written to several agents would teach everybody to work around
+    // the check.
+    expect(unownedAttributions(`${room} Three of you hit the same wall.`)).toEqual([]);
+    expect(unownedAttributions("@a @b The rows behind you hold verdicts alone.")).toEqual([]);
+  });
+
+  test("one handle, every handle, or a ts names the owner", () => {
+    expect(unownedAttributions("@a @b @reader-two your 118-draft scan found nothing.")).toEqual([]);
+    // Naming every agent the message addresses is a claim about the room.
+    expect(unownedAttributions("@a @b\n\n@a @b you both ran the scan.")).toEqual([]);
+    // A ts is stronger than a handle: the send reads it back from Slack and prints
+    // who wrote it, so the attribution is checked against the record.
+    expect(unownedAttributions("@a @b The scan at 1787967819.574939 is why your premise holds.")).toEqual([]);
+    // One addressee owns every sentence in the message.
+    expect(unownedAttributions("@reader-two your replay discriminates.")).toEqual([]);
+    // Backticks and fences are exempt here as everywhere.
+    expect(unownedAttributions("@a @b The code reads `your scan ran` and nothing else.")).toEqual([]);
+    expect(attributionRefusal([], "@a @b anything")).toBe("");
+  });
+});

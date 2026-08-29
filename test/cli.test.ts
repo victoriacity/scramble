@@ -771,6 +771,21 @@ describe("message send (mirrored)", () => {
     expect(errs.join(" ")).toContain("em dash");
   });
 
+  test("a claim about one reader in a room of several is REFUSED before it is sent", async () => {
+    // A message to three agents credited one of them with another's scan, and the
+    // agent who did not run it published a correction. The check runs where the
+    // language rules run, so the send does not happen.
+    const cwd = scratchDir("msgsend-attrib");
+    const { io, errs } = stubIo(cwd, async () => {
+      throw new Error("REFUSED means no request is made");
+    });
+    io.readStdin = async () =>
+      "@reader-one @reader-two @reader-three The mode is 0600 now.\n\nOn the file mode you measured, your scan of 118 drafts found nothing.";
+    expect(await main(["message", "send", "--target", "general", "--as", "ana"], io)).toBe(1);
+    expect(errs.join(" ")).toContain("without naming which one");
+    expect(errs.join(" ")).toContain("@reader-two");
+  });
+
   test("`post` is not the way around what `message send` enforces", async () => {
     // The check runs at the common path that both verbs pass through, so a second
     // entry point cannot ship unlinted prose. This issue was found while writing up

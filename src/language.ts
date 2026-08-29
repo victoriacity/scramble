@@ -288,6 +288,63 @@ export function lengthRefusal(text: string): string {
   );
 }
 
+/** The paragraphs that say "your" to a room of several agents without naming which
+ *  one they mean, returned as the text of each offending paragraph.
+ *
+ *  WHOSE FACT IS IT. A message greeting three agents and then saying "your 118-draft
+ *  scan" leaves every reader to guess whether the clause is theirs, and they guess
+ *  wrong: one agent read two clauses as both theirs and published a correction of a
+ *  claim they never made, and a later message credited one agent's scan of 26 files
+ *  as another's scan of 118. Twice in two days, from the same writing habit of
+ *  opening to everyone who replied and then writing clauses that each belong to one
+ *  of them.
+ *
+ *  A paragraph clears this by naming its owner: one `@handle` inside that paragraph,
+ *  or the timestamp of the message the fact came from, which the send already reads
+ *  back from Slack with its author printed. A message addressed to one agent has one
+ *  owner throughout and is left alone. */
+export function unownedAttributions(text: string): string[] {
+  const prose = proseOf(text);
+  const handlesIn = (s: string): Set<string> =>
+    new Set((s.match(/@[a-z][a-z0-9_.-]{2,}/gi) ?? []).map((h) => h.toLowerCase()));
+  const handles = handlesIn(prose);
+  if (handles.size < 2) return [];
+  // A CLAIM ABOUT WHAT ONE READER DID is what goes wrong: a possessive ("your
+  // 118-draft scan") or a report of their action ("you measured"). A collective "you"
+  // ("the rows behind you", "three of you hit the same wall") belongs to the room and
+  // names nobody's work, so it is left alone. A wider rule refused the greeting of
+  // every message written to more than one agent, which would have taught everybody
+  // to work around the check.
+  const attributes = (s: string): boolean =>
+    /\byours?\b\s+[a-z0-9]/i.test(s) ||
+    /\byou\b\s+(measured|counted|ran|scanned|reported|published|wrote|found|said|held|proposed|posted|sent|read|replayed|stored|built|filed|landed|shipped)\b/i.test(s);
+  const out: string[] = [];
+  for (const para of prose.split(/\n\s*\n/)) {
+    if (!attributes(para)) continue;
+    const named = handlesIn(para);
+    // A Slack ts names the message the fact came from, which is stronger than a
+    // handle: the send reads it back and prints who wrote it.
+    if (/\b\d{10}\.\d{6}\b/.test(para)) continue;
+    // One handle names the owner. Every handle the message addresses is the room,
+    // and a sentence to the room owns its claim collectively.
+    if (named.size === 1 || named.size === handles.size) continue;
+    out.push(para.trim());
+  }
+  return out;
+}
+
+export function attributionRefusal(paras: string[], text: string): string {
+  if (paras.length === 0) return "";
+  const handles = [...new Set((proseOf(text).match(/@[a-z][a-z0-9_.-]{2,}/gi) ?? []).map((h) => h.toLowerCase()))];
+  return (
+    `message send REFUSED: ${paras.length} paragraph(s) say "you" to ${handles.length} agents ` +
+    `(${handles.join(", ")}) without naming which one.\n` +
+    `${paras.map((p) => `  ${JSON.stringify(p.slice(0, 160))}`).join("\n")}\n` +
+    `Name the owner in the paragraph, with the handle or with the ts of the message the fact came from.\n` +
+    `${SKILL_POINTER}`
+  );
+}
+
 export function languageRefusal(hits: LanguageHit[]): string {
   if (hits.length === 0) return "";
   const lines = hits.map((h) => `  [${h.label}] ${JSON.stringify(h.match)}`);
