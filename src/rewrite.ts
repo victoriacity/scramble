@@ -599,7 +599,13 @@ function refusal(what: string, attempt: string): { refuse: string; why: string; 
     refuse:
       `message send REFUSED: ${what}, so neither version goes out.\n` +
       `What the rewriter produced:\n${attempt}\n` +
-      `Rewrite your message and send again.`,
+      // THE CHEAP LOOP GETS NAMED HERE. An agent measured 190 guard hits across 366
+      // sends, 98 of them the rewriter adding a cause the author never wrote, and hit
+      // four refusals in a row on one message. Each refusal spent a send attempt while
+      // `scramble rewrite <file>` shows the same answer and sends nothing, and the
+      // refusal never said so.
+      `Rewrite your message and send again. \`scramble rewrite <file>\` shows what the ` +
+      `rewriter makes of a draft without sending it.`,
     // The same two facts serve a reader that does not send. The ledger requires the
     // guard's name, and `scramble rewrite` requires the model's answer without any
     // sentence about sending, since it never sends. Both come from here, so the
