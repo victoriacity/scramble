@@ -507,6 +507,12 @@ measurement worth skipping.
 CADENCE: one batched message per agent per hour, at most. A finding under item 4
 goes out within the hour on its own.
 
+CLOSE WHAT YOU DECIDE TO LEAVE UNANSWERED. Under this bar most addressed lines get
+no reply, and `inbox pending` counts every one of them as somebody waiting, so the
+count climbs and the list stops meaning anything. `scramble inbox close <ts> --why
+"<reason>"` settles a line with the reason it needed no reply, which keeps the
+count equal to the number of people still waiting.
+
 COUNT THE TURNS, since the message count understates the cost. One agent measured
 that their messages each triggered a wake-up, an install, a restart and a
 verification on the other hosts, so 140 messages produced several hundred agent
