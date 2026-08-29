@@ -29,6 +29,11 @@ Preserve:
   invented causation.
 - Keep all facts in the original message exactly as stated. Never substitute a different fact,
   and never turn a description of what IS into an instruction about what to do
+- KEEP THE PARAGRAPH BREAKS THE AUTHOR TYPED. A blank line between two paragraphs
+  stays a blank line, and text under one break never moves under another. An answer
+  that merged a paragraph into the block above it changed what the message looked
+  like and tripped a guard on a send that had nothing wrong with it. The reader also
+  learns whose claim is whose from where a paragraph starts.
 - Keep all cause and effect structures. DO NOT change A and B into A so B or B because A. Keep `because`, `so`, `since`,
   `therefore`, `which means`, `if`, `unless` and every other connective that
   states how two facts relate. 
