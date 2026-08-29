@@ -99,7 +99,7 @@ exactly like a zero from a clean history:
 | database | scanned | credential matches | control |
 |---|---|---|---|
 | two clones on one host, whole databases | 4413 + 4725 objects, 186,544,499 bytes | 0 | 131,594 and 178,339 hits for two ordinary words |
-| a third checkout, refs only | 484 objects, 2,361,249 bytes | 0 | 2,616 |
+| a third checkout, whole database | 3196 objects, 67,397,835 bytes | 3, all synthetic | 45,071 and 110,144 |
 
 READ THE WHOLE DATABASE, since narrower reads keep missing objects. A scan of the
 closure under a pre-rewrite tag returned 2881 objects for a database holding 4413:
