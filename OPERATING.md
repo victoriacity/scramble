@@ -92,13 +92,26 @@ verify: the host still serves <id> by sha, and that fetch carries 424 commit(s)
 verify: PUBLISHED HISTORY CARRIES 1 private reference(s) at <tip>
 ```
 
-WHAT THOSE OBJECTS CARRY, measured by a reader holding the only local copy of the
-pre-rewrite history: 2881 reachable objects, 57,419,212 bytes read, and zero
-matches for any credential family under the tight shapes. Their scan carried a
-control, since a zero from a broken pipeline reads exactly like a zero from a clean
-history: one ordinary word matched 41,208 times through the same pipeline, which
-proves the bytes reached the matcher. So the exposure there is the company, product,
-host and account names the rewrite removed, with no credential among them.
+WHAT THOSE OBJECTS CARRY, measured across four local copies, each scan carrying a
+control because a zero from a broken pipeline reads exactly like a zero from a clean
+history:
+
+| copy | scanned | credential matches | control |
+|---|---|---|---|
+| a pre-rewrite tag | 2881 objects, 57,419,212 bytes | 0 | 41,208 hits for one word |
+| a third checkout | 484 objects, 2,361,249 bytes | 0 | 2,616 |
+| unreachable set, one host | 1671 objects, 30,615,182 bytes | 0 | 22,896 |
+| unreachable set, another | 1671 objects, 29,617,390 bytes | 0 | 14,814 |
+
+The first scan walked refs alone and missed unreferenced objects, which `git fsck`
+then surfaced: five of them on one shared checkout, three carrying a credential
+SHAPE, all three synthetic decoys written during that day's testing and none
+matching a live value. So the exposure in the served objects is the company,
+product, host and account names the rewrite removed, with no credential among them.
+
+The gate scans the object database on every run for the same reason: `git add`
+writes a blob immediately, and that blob survives the edit with no commit, no
+tracked file, and nothing for the commit hook to see.
 
 Two paths close it, and both belong to whoever owns the repository on the host: a
 garbage collection by support request, or deleting the repository and pushing the
