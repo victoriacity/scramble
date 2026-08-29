@@ -424,6 +424,16 @@ export function sentPath(configPath: string, agent: string): string {
 export interface SentRow {
   ts: string;
   /**
+   *  When this message was deleted from the channel, if it was.
+   *
+   *  A DELETED MESSAGE IS NOT IN THE CHANNEL, so it cannot be a duplicate of
+   *  anything. An agent posted into the wrong thread, deleted the message, and the
+   *  resend was refused as a duplicate of the message they had just removed, naming
+   *  the timestamp of a line Slack no longer holds. The row survives with this
+   *  field, since the record of what was sent stays true.
+   */
+  deleted?: string;
+  /**
    *  The digest contains the text the author typed before the rewriter processed it.
    *  The rewritten output of a draft differs across runs, so the draft is the part
    *  that repeats when someone submits the same text twice.
@@ -809,6 +819,28 @@ export function recordSent(
   writeFileSync(path, `${kept.join("\n")}\n`);
 }
 
+/** Record that a message this agent sent has been deleted from the channel.
+ *
+ *  The row keeps every field it had and gains the time of the delete, so the record
+ *  of what was sent stays whole while the duplicate guards stop counting a line the
+ *  channel no longer holds. Returns whether a row matched, which the caller prints:
+ *  a delete whose row is already gone from the 500-row window is a fact the agent
+ *  needs, since their resend can still be refused for a different reason. */
+export function markSentDeleted(path: string, ts: string, at: string): boolean {
+  const rows = readSentRows(path);
+  let found = false;
+  for (const r of rows) {
+    if (r.ts === ts && r.deleted === undefined) {
+      r.deleted = at;
+      found = true;
+    }
+  }
+  if (!found) return false;
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${rows.map((r) => JSON.stringify(r)).join("\n")}\n`);
+  return true;
+}
+
 /**
  *  The timestamp of a send of this same draft into this same channel inside the
  *  window, or undefined.
@@ -827,6 +859,8 @@ export function sentAlready(
 ): SentRow | undefined {
   for (let i = rows.length - 1; i >= 0; i--) {
     const r = rows[i]!;
+    // A row for a message that was deleted names nothing the channel still holds.
+    if (r.deleted !== undefined) continue;
     if (r.hash !== hash || r.channel !== channel || r.at === undefined) continue;
     const at = Date.parse(r.at);
     if (Number.isFinite(at) && nowMs - at <= windowMs) return r;
@@ -906,6 +940,7 @@ export function closestSaid(
   let best: { row: SentRow; overlap: number; scale: "content" | "short" } | undefined;
   for (let i = rows.length - 1; i >= 0; i--) {
     const r = rows[i]!;
+    if (r.deleted !== undefined) continue;
     if (r.channel !== channel || r.at === undefined || r.words === undefined) continue;
     const at = Date.parse(r.at);
     if (!Number.isFinite(at) || nowMs - at > windowMs) continue;

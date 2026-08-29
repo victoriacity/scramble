@@ -24,6 +24,7 @@ import {
   NEAR_DUPLICATE_FLOOR,
   pairScore,
   saidAlready,
+  markSentDeleted,
   sentAlready,
   wordOverlap,
   recordSent,
@@ -532,6 +533,36 @@ describe("the record of what this agent said", () => {
     expect(sentAlready(rows, "general", "abc", Date.parse("2026-08-26T13:00:00Z"), 10 * 60 * 1000)).toBeUndefined();
     // A row created before the field existed contains no draft, so it never matches.
     expect(sentAlready([{ ts: "1.1" }], "general", "abc", now, 10 * 60 * 1000)).toBeUndefined();
+  });
+
+  test("a message deleted from the channel stops being a duplicate of anything", () => {
+    // An agent posted into the wrong thread, deleted the message, and their resend was
+    // refused as a duplicate of the line they had just removed, naming a timestamp
+    // Slack no longer held. The delete and the duplicate guard read one record, and
+    // only one of them was writing to it.
+    const p = sentPath(join(scratch(), "slack.json"), "dev");
+    recordSent(p, "2.2", { hash: "abc", channel: "general", at: "2026-08-26T12:00:00Z", words: ["gate", "green", "again"] });
+    const now = Date.parse("2026-08-26T12:05:00Z");
+    expect(sentAlready(readSentRows(p), "general", "abc", now, 10 * 60 * 1000)?.ts).toBe("2.2");
+
+    expect(markSentDeleted(p, "2.2", "2026-08-26T12:04:00Z")).toBe(true);
+    const after = readSentRows(p);
+    // THE ROW SURVIVES. The record of what was sent stays whole, and it now carries
+    // when the message left the channel.
+    expect(after[0]?.ts).toBe("2.2");
+    expect(after[0]?.deleted).toBe("2026-08-26T12:04:00Z");
+    expect(after[0]?.hash).toBe("abc");
+    expect(sentAlready(after, "general", "abc", now, 10 * 60 * 1000)).toBeUndefined();
+    // The near-duplicate reader skips it too: a reader cannot see a deleted message,
+    // so a message that resembles it repeats nothing they have read.
+    expect(closestSaid(after, "general", ["gate", "green", "again"], now, 10 * 60 * 1000)).toBeUndefined();
+
+    // A SECOND DELETE OF THE SAME TS CHANGES NOTHING, and a delete of a timestamp the
+    // window no longer holds says so, since the caller's resend can still be refused
+    // for a different reason.
+    expect(markSentDeleted(p, "2.2", "2026-08-26T12:06:00Z")).toBe(false);
+    expect(readSentRows(p)[0]?.deleted).toBe("2026-08-26T12:04:00Z");
+    expect(markSentDeleted(p, "9.9", "2026-08-26T12:06:00Z")).toBe(false);
   });
 
   test("THE SAME THING IN OTHER WORDS is refused, and a different report is not", () => {

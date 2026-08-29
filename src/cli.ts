@@ -128,6 +128,7 @@ import {
   closestSaid,
   nearReport,
   pairScore,
+  markSentDeleted,
   readSentRows,
   recordSent,
   type SentRow,
@@ -3636,6 +3637,17 @@ async function cmdMessage(args: string[], io: Io, backend: "local" | "slack"): P
           return 1;
         }
         io.writeErr(`deleted: ${req.channel} ts ${to} is gone from Slack.`);
+        // THE SENT LOG LEARNS ABOUT THE DELETE, because the duplicate guards read it
+        // and a deleted message is not in the channel. An agent posted into the wrong
+        // thread, deleted it, and their resend was refused as a duplicate of the line
+        // they had just removed.
+        const marked = markSentDeleted(sentPath(slackConfigPath(io), who), to, new Date().toISOString());
+        io.writeErr(
+          marked
+            ? `deleted: the sent record for ${to} is marked deleted, so a resend of that draft is not a duplicate.`
+            : `deleted: no sent record here holds ${to}, so nothing was marked. A resend can still be refused ` +
+                `for a near-duplicate of another message.`,
+        );
         return 0;
       }
       const raw = await (io.readStdin ? io.readStdin() : Promise.resolve(""));
