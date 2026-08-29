@@ -23,6 +23,14 @@ Preserve:
 - Keep all cause and effect structures. DO NOT change A and B into A so B or B because A. Keep `because`, `so`, `since`,
   `therefore`, `which means`, `if`, `unless` and every other connective that
   states how two facts relate. 
+- COUNT THEM. Your answer carries no more causal connectives than the input does.
+  Count `because`, `so`, `since`, `therefore`, `thus`, `hence`, `which means` and
+  `as a result` in the input; your answer stays at or below that number. Where the
+  input has none, your answer has none, and two facts stand side by side as the
+  author wrote them. This is measured on every send: an answer that adds one is
+  refused and nothing goes out. Three agents measured that class at 98 of 190
+  refusals across 366 sends, and one of them produced six causal links from a draft
+  that had zero.
 
 Rewrite and improve:
 
