@@ -206,9 +206,19 @@ tsc_rc=$?
 echo "== no credential-shaped string in a tracked file =="
 # A PLACEHOLDER IS NOT A LEAK. The setup document shows the shape of a config
 # with `xapp-1-A0EXAMPLE001-...` in it, and a scan that cannot tell that from a
-# key is one people learn to wave through. A run of zeros or an ellipsis inside
-# the match is a placeholder; a real credential has neither.
-LEAKS="$(git -C "$REPO" grep -InE 'xox[bpasre]-[A-Za-z0-9-]{12,}|sk-[A-Za-z0-9]{20,}|AIza[A-Za-z0-9_-]{30,}|xapp-[0-9]-[A-Za-z0-9-]{12,}' -- . ':(exclude)scripts/gate.sh' 2>/dev/null | grep -vE '\.\.\.|0{6,}|EXAMPLE|<[a-z-]+>' || true)"
+# key is one people learn to wave through. A run of zeros or the word EXAMPLE
+# INSIDE THE MATCH is a placeholder; a real credential carries neither.
+#
+# THE EXCLUSION READS THE MATCHED TOKEN. It used to drop any line holding
+# one of those markers anywhere, so a real token sharing a line with an ellipsis
+# passed the scan: measured on a two-line fixture where line 1 carried a live-shaped
+# token beside `...` and only line 2 was reported. Proximity is not evidence about a
+# token, and the placeholders carry their marker inside themselves.
+#
+# Two of the four old markers do no work at match scope and are gone: a token that
+# matches these patterns can hold no ellipsis and no angle-bracket name, since
+# neither character is in the character classes above.
+LEAKS="$(git -C "$REPO" grep -IonE 'xox[bpasre]-[A-Za-z0-9-]{12,}|sk-[A-Za-z0-9]{20,}|AIza[A-Za-z0-9_-]{30,}|xapp-[0-9]-[A-Za-z0-9-]{12,}' -- . ':(exclude)scripts/gate.sh' 2>/dev/null | awk -F: '{ m = $0; sub(/^[^:]*:[0-9]+:/, "", m); if (m !~ /000000/ && m !~ /EXAMPLE/) print }' || true)"
 if [ -n "$LEAKS" ]; then
   echo "GATE FAIL: a tracked file carries something shaped like a credential:"
   echo "$LEAKS"
