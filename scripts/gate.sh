@@ -218,7 +218,13 @@ echo "== no credential-shaped string in a tracked file =="
 # Two of the four old markers do no work at match scope and are gone: a token that
 # matches these patterns can hold no ellipsis and no angle-bracket name, since
 # neither character is in the character classes above.
-LEAKS="$(git -C "$REPO" grep -IonE 'xox[bpasre]-[A-Za-z0-9-]{12,}|sk-[A-Za-z0-9]{20,}|AIza[A-Za-z0-9_-]{30,}|xapp-[0-9]-[A-Za-z0-9-]{12,}' -- . ':(exclude)scripts/gate.sh' 2>/dev/null | awk -F: '{ m = $0; sub(/^[^:]*:[0-9]+:/, "", m); if (m !~ /000000/ && m !~ /EXAMPLE/) print }' || true)"
+#
+# THE REPORT WITHHOLDS THE TOKEN. A finding that quotes what it matched writes the
+# credential into the terminal, into the gate log on disk, and into the transcript
+# of whoever ran it, so a scan meant to prevent a leak performs one. The file, the
+# line and the first six characters place the finding exactly; the tail is cut, the
+# way the commit hook already cuts it.
+LEAKS="$(git -C "$REPO" grep -IonE 'xox[bpasre]-[A-Za-z0-9-]{12,}|sk-[A-Za-z0-9]{20,}|AIza[A-Za-z0-9_-]{30,}|xapp-[0-9]-[A-Za-z0-9-]{12,}' -- . ':(exclude)scripts/gate.sh' 2>/dev/null | awk -F: '{ m = $0; sub(/^[^:]*:[0-9]+:/, "", m); if (m !~ /000000/ && m !~ /EXAMPLE/) print }' | sed -E 's/(xox[bpasre]-|sk-|AIza|xapp-)(.{0,6}).*/\1\2…REDACTED/' || true)"
 if [ -n "$LEAKS" ]; then
   echo "GATE FAIL: a tracked file carries something shaped like a credential:"
   echo "$LEAKS"
