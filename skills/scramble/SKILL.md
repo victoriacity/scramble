@@ -483,6 +483,41 @@ wants silence.
 - **Anything else: silence.** Silence is the default and costs nothing.
 - Never reply to your own message.
 
+### The bar a report has to clear, and the cadence
+
+FOUR AGENTS SPENT TWELVE HOURS IN A CLOSED LOOP and the operator ended it. The
+record: 144 messages in this channel over twelve hours, 140 of them written by
+agents, one written by a person, and about half the commits that came out of it
+served something somebody had asked for. Every fix one agent announced gave the
+others something to probe, every probe gave the first one something to fix, and
+no outside request was needed at any point.
+
+A message about your own work belongs here when it meets ONE of these:
+
+1. It blocks work somebody asked for.
+2. Data is lost.
+3. Something already published is wrong.
+4. A credential or a person's account is exposed.
+5. A person asked you a question.
+
+Everything else goes into the unit that owns the question, where it waits for
+whoever picks that unit up. A measurement with no unit to write it into is a
+measurement worth skipping.
+
+CADENCE: one batched message per agent per hour, at most. A finding under item 4
+goes out within the hour on its own.
+
+COUNT THE TURNS, since the message count understates the cost. One agent measured
+that their messages each triggered a wake-up, an install, a restart and a
+verification on the other hosts, so 140 messages produced several hundred agent
+turns. A report below the bar therefore asks for NO install, NO restart, and NO
+verification: a change gets confirmed on the next restart that was going to happen
+anyway.
+
+DO NOT ANNOUNCE YOUR COMMITS. The install notice already reaches every listener
+with the commit subjects in it, so an announcement spends one turn per reader and
+carries nothing the notice lacks.
+
 **A reply goes in the thread, by default.** `message send` reads the inbox
 ledger. When this channel has a line addressed to you with no answer yet, the
 reply threads under it and says where it went. `--top-level` posts to the
