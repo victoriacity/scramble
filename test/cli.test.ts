@@ -1339,6 +1339,27 @@ describe("`scramble lint`: the send's rules, pointed at any document", () => {
     expect(errs.join("\n")).toContain("(stdin):1:");
   });
 
+  test("the preview reports the unowned claim the send refuses, on message text alone", async () => {
+    // An agent piped a message with two handles in the greeting and a claim about
+    // one reader that named nobody. The send refuses it; this verb called it clean.
+    const cwd = scratchDir("lint-attrib");
+    const { io, errs, writes } = stubIo(cwd, async () => new Response("{}", { status: 200 }));
+    io.readStdin = async () => "@reader-one @reader-two The mode is 0600 now.\n\nYour scan of 26 files found nothing.";
+    expect(await main(["lint"], io)).toBe(1);
+    expect(errs.join("\n")).toContain("[unowned claim]");
+    expect(errs.join("\n")).toContain("Your scan of 26 files");
+    expect(JSON.parse(writes[0]!)).toEqual({ lint: "hits", files: 1, hits: 1 });
+
+    // A FILE KEEPS THE REPOSITORY RULES. The predicate reads `@name` and
+    // second-person prose, which fires 52 times across this repository's own
+    // documents and tests, where a reader in general is addressed.
+    const f = join(cwd, "doc.md");
+    writeFileSync(f, "@reader-one @reader-two\n\nYour scan of 26 files found nothing.\n");
+    const asFile = stubIo(cwd, async () => new Response("{}", { status: 200 }));
+    expect(await main(["lint", f], asFile.io)).toBe(0);
+    expect(asFile.errs.join(" ")).not.toContain("unowned claim");
+  });
+
   test("no file and no stdin is a usage error", async () => {
     const cwd = scratchDir("lint-usage");
     const { io, errs } = stubIo(cwd, async () => new Response("{}", { status: 200 }));

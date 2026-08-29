@@ -2663,6 +2663,21 @@ async function cmdLint(argv: string[], io: Io): Promise<number> {
       io.writeErr(`${src.name}:${lineOf(text, h.index)}: [${h.label}] ${JSON.stringify(h.match)}`);
       total += 1;
     }
+    // THE PREVIEW ANSWERS THE QUESTION THE SEND ANSWERS. An agent piped a message
+    // with two handles in its greeting and a claim about one reader that named
+    // nobody, and this verb called it clean while the send refuses it. A preview
+    // that disagrees with the gate it previews is worth less than no preview.
+    //
+    // Message text only: the rule reads `@name` and second-person prose, and over
+    // the files this repository tracks that shape fires 52 times in documents and
+    // tests that address a reader in general. A file lint keeps the repository
+    // rules, which is the same split the rule table above makes.
+    if (rules === undefined) {
+      for (const para of unownedAttributions(text)) {
+        io.writeErr(`${src.name}: [unowned claim] ${JSON.stringify(para.slice(0, 160))}`);
+        total += 1;
+      }
+    }
   }
   io.write(JSON.stringify({ lint: total === 0 ? "clean" : "hits", files: sources.length, hits: total }));
   return total === 0 ? 0 : 1;
