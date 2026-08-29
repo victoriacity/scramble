@@ -252,6 +252,34 @@ function closeBeforeInsideLock(path: string, channel: string, ownTs: string, cut
  *  the `reactions:read` scope and the `reaction_added` event, which no agent
  *  subscribes to yet.
  */
+/** Reopen every item that a now-deleted message was the answer to.
+ *
+ *  TWO VERBS SHARE THIS RECORD AND ONE OF THEM WROTE TO IT. A reply closes an item
+ *  by naming the reply's timestamp; deleting that reply used to leave the item
+ *  closed, so the channel held an unanswered question while this agent's own list
+ *  said somebody had answered it. The same disagreement between `delete` and the
+ *  duplicate guards refused a resend of a message Slack no longer had.
+ *
+ *  Returns the ids that went back to open, which the caller prints: the agent now
+ *  owes those answers again. */
+export function reopenAnsweredBy(path: string, ts: string): string[] {
+  return withFileLock(path, () => {
+    const rows = readInbox(path);
+    const reopened: string[] = [];
+    for (const r of rows) {
+      if (r.answeredBy === ts) {
+        delete r.answeredBy;
+        reopened.push(r.id);
+      }
+    }
+    if (reopened.length > 0) {
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, rows.map((r) => `${JSON.stringify(r)}\n`).join(""));
+    }
+    return reopened;
+  });
+}
+
 export function closeItemById(
   path: string,
   id: string,

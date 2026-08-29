@@ -123,6 +123,7 @@ import {
   closeInboxItems,
   closeItemById,
   readSent,
+  reopenAnsweredBy,
   allWords,
   CALIBRATION,
   closestSaid,
@@ -3642,6 +3643,16 @@ async function cmdMessage(args: string[], io: Io, backend: "local" | "slack"): P
         // thread, deleted it, and their resend was refused as a duplicate of the line
         // they had just removed.
         const marked = markSentDeleted(sentPath(slackConfigPath(io), who), to, new Date().toISOString());
+        // The inbox ledger is the second record this delete touches: an item that
+        // this message answered is unanswered again the moment the message leaves the
+        // channel.
+        const reopened = reopenAnsweredBy(inboxPath(slackConfigPath(io), who), to);
+        if (reopened.length > 0) {
+          io.writeErr(
+            `deleted: ${reopened.length} inbox item(s) that message answered are open again: ${reopened.join(", ")}. ` +
+              `The question is still in the channel and nothing answers it now.`,
+          );
+        }
         io.writeErr(
           marked
             ? `deleted: the sent record for ${to} is marked deleted, so a resend of that draft is not a duplicate.`

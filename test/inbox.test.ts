@@ -25,6 +25,7 @@ import {
   pairScore,
   saidAlready,
   markSentDeleted,
+  reopenAnsweredBy,
   sentAlready,
   wordOverlap,
   recordSent,
@@ -533,6 +534,32 @@ describe("the record of what this agent said", () => {
     expect(sentAlready(rows, "general", "abc", Date.parse("2026-08-26T13:00:00Z"), 10 * 60 * 1000)).toBeUndefined();
     // A row created before the field existed contains no draft, so it never matches.
     expect(sentAlready([{ ts: "1.1" }], "general", "abc", now, 10 * 60 * 1000)).toBeUndefined();
+  });
+
+  test("deleting an answer opens the question it answered", () => {
+    // The same disagreement, one record over: a reply closes an item by naming its
+    // timestamp, and deleting that reply left the item closed while the question was
+    // still in the channel with nothing answering it.
+    const p = inboxPath(join(scratch(), "slack.json"), "dev");
+    recordInboxItem(p, {
+      id: "5.5",
+      channel: "general",
+      from: "peer",
+      text: "@dev what did the gate say",
+      at: "2026-08-26T12:00:00Z",
+      mentions: ["dev"],
+      addressed: true,
+    });
+    expect(pendingInbox(p).map((r) => r.id)).toEqual(["5.5"]);
+    expect(closeInboxItems(p, "general", "6.6")).toBe(1);
+    expect(pendingInbox(p)).toEqual([]);
+
+    // The answer leaves the channel, so the question is owed again and the delete
+    // says which ones came back.
+    expect(reopenAnsweredBy(p, "6.6")).toEqual(["5.5"]);
+    expect(pendingInbox(p).map((r) => r.id)).toEqual(["5.5"]);
+    // A timestamp that answered nothing reopens nothing.
+    expect(reopenAnsweredBy(p, "9.9")).toEqual([]);
   });
 
   test("a message deleted from the channel stops being a duplicate of anything", () => {

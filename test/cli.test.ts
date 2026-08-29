@@ -8,6 +8,7 @@ import { createHandler } from "../src/server";
 import { WORD_LIMIT } from "../src/language";
 import { KNOWN_ENV, unknownEnvNote, hashVerdict, textHash, differenceLine, autoKey, installedChanges, changeBlock, monitorReport, sweepAgeMinutes, sweepInsideListener, sweepSummaryLine, SWEEP_INTERVAL_MS, main, parseBind, loadSlackConfig, slackConfigPath, staleConfigWarning, staleListeners, pickStale, staleListenerProblem, readProcesses, liveListeners, stillAlive, watchForNewerInstall, listenerCommit, listenersBehind, processesReadable, type Io } from "../src/cli";
 import { SCOPE_NAMES, BOT_EVENT_NAMES } from "../src/app-manifest";
+import { closeInboxItems, inboxPath, pendingInbox, readSentRows, recordInboxItem, recordSent, sentAlready, sentPath } from "../src/inbox";
 import { readTierBlock } from "../src/rewrite";
 
 /**
@@ -2194,6 +2195,44 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     ).toBe(0);
     expect(calls.some((c) => c.url.includes("chat.delete"))).toBe(true);
     expect(errs.join(" ")).toContain("deleted: general ts 77.7 is gone");
+    // A DELETE TOUCHES TWO OTHER RECORDS, and both used to keep believing the message
+    // was there: the sent log refused a resend as a duplicate of the deleted line, and
+    // the inbox kept a question marked answered by it.
+    expect(errs.join(" ")).toContain("no sent record here holds 77.7");
+  });
+
+  test("deleting a reply reopens what it answered, and marks the draft resendable", async () => {
+    const cwd = scratchDir("delete-records");
+    const { io, errs } = stubIo(cwd, async () => new Response(JSON.stringify({ ok: true }), { status: 200 }));
+    writeSlackConfig(cwd, {
+      appToken: "xapp-1",
+      token: "xoxb-1",
+      channels: { general: "C1" },
+      agents: { dev: { token: "T", handle: "dev" } },
+    });
+    const cfg = slackConfigPath(io);
+    // A question this agent owes, and the reply that closed it.
+    recordInboxItem(inboxPath(cfg, "dev"), {
+      id: "5.5",
+      channel: "general",
+      from: "peer",
+      text: "@dev what did the gate say",
+      at: "2026-08-26T12:00:00Z",
+      mentions: ["dev"],
+      addressed: true,
+    });
+    closeInboxItems(inboxPath(cfg, "dev"), "general", "77.7");
+    recordSent(sentPath(cfg, "dev"), "77.7", { hash: "abc", channel: "general", at: new Date().toISOString() });
+    expect(pendingInbox(inboxPath(cfg, "dev"))).toEqual([]);
+
+    expect(
+      await main(["message", "delete", "--target", "general", "--to", "77.7", "--as", "dev", "--backend", "slack"], io),
+    ).toBe(0);
+    expect(errs.join(" ")).toContain("1 inbox item(s) that message answered are open again: 5.5");
+    expect(errs.join(" ")).toContain("the sent record for 77.7 is marked deleted");
+    // The question is owed again, and the draft can go back out.
+    expect(pendingInbox(inboxPath(cfg, "dev")).map((r) => r.id)).toEqual(["5.5"]);
+    expect(sentAlready(readSentRows(sentPath(cfg, "dev")), "general", "abc", Date.now(), 10 * 60 * 1000)).toBeUndefined();
   });
 
   test("an edit passes the language rules, needs a ts, needs stdin, and reports Slack's refusal", async () => {
