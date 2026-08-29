@@ -5,7 +5,7 @@
 // may know its same directory peers. The agent previously did not record this
 // information, and the absence cost two round trips that afternoon.
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readdirSync, writeFileSync, mkdirSync } from "node:fs";
+import { appendFileSync, existsSync, mkdtempSync, readdirSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -350,6 +350,20 @@ describe("the peers record", () => {
     expect(recordPeer(p, "old", "old", { host: "h", dir: "/now", agent: "old" }, "2026-08-28T10:00:00Z")).toBe(true);
     const read = readPeerFile(p);
     expect(read.damaged).toBe(1);
+    // A NUMBER THAT NO REPAIR CAN MOVE TEACHES ITS READER TO STOP LOOKING. An agent
+    // watched `damaged 18` on their host and found all 18 in the shared file, which
+    // stopped taking writes when each writer got its own. The split says which count
+    // is actionable, and the total keeps its meaning for whatever already reads it.
+    expect(read.frozen).toBe(1);
+    expect(read.live).toBe(0);
+    // A torn line in a writer's OWN file is live damage, since that writer is still
+    // appending to it.
+    const mine = peerFileFor(p, "old");
+    appendFileSync(mine, `{"agent":"old","ho\n`);
+    const again = readPeerFile(p);
+    expect(again.frozen).toBe(1);
+    expect(again.live).toBe(1);
+    expect(again.damaged).toBe(2);
     // The newest row takes precedence across the two files, and the older row
     // remains readable.
     expect(currentPeers(read.rows).map((r) => r.dir)).toEqual(["/now"]);

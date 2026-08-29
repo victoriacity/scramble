@@ -301,7 +301,7 @@ export function readPeers(path: string): PeerRow[] {
  *  The system still reads the shared file. It holds every row written up to this
  *  change, and the system never rewrites a record of what was seen.
  */
-export function readPeerFile(path: string): { rows: PeerRow[]; damaged: number } {
+export function readPeerFile(path: string): { rows: PeerRow[]; damaged: number; frozen: number; live: number } {
   const shared = readOneFile(path);
   const rows = [...shared.rows];
   let damaged = shared.damaged;
@@ -316,10 +316,18 @@ export function readPeerFile(path: string): { rows: PeerRow[]; damaged: number }
     rows.push(...one.rows);
     damaged += one.damaged;
   }
-  // Read records oldest first across files. Each file is already ordered, but a
-  // merge of two files loses this ordering, so a newest-row-wins read would pick
-  // whichever file sorted last. A row with no timestamp keeps its place.
-  return { rows: rows.sort((a, b) => (a.at ?? "").localeCompare(b.at ?? "")), damaged };
+  // THE DAMAGE IS SPLIT BY WHETHER ANYBODY CAN STILL FIX IT. The shared file froze
+  // when writers moved to one file each, so the lines it lost are history: an agent
+  // read `damaged 18` on their host, found all 18 in that frozen file and none in
+  // the live ones, and a number that can never return to zero teaches its reader to
+  // stop looking. `damaged` keeps its meaning, every unreadable line in the record,
+  // so a monitor already reading it reads the same fact.
+  return {
+    rows: rows.sort((a, b) => (a.at ?? "").localeCompare(b.at ?? "")),
+    damaged,
+    frozen: shared.damaged,
+    live: damaged - shared.damaged,
+  };
 }
 
 /**

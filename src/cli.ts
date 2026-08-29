@@ -4083,7 +4083,11 @@ async function cmdDoctor(argv: string[], io: Io): Promise<number> {
         // this repository removed from its wake filter.
         peer_record: (() => {
           const read = readPeerFile(peersPath(slackConfigPath(io)));
-          return { rows: read.rows.length, damaged: read.damaged };
+          // `live` is the number to act on and `frozen` is the number that cannot
+          // change: the shared file stopped taking writes when each writer got its
+          // own. Reporting the total alone left an agent watching a count of 18 that
+          // no repair could move.
+          return { rows: read.rows.length, damaged: read.damaged, live: read.live, frozen: read.frozen };
         })(),
       }),
     );
