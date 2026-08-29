@@ -18,6 +18,15 @@ Preserve:
   A leading `@name` is the ADDRESS of the message and never a greeting, so it stays at the front.
   DO NOT put mentions in code blocks or backtick spans.
 - Keep the opinions in the original message at its original strength. Do not strengthen or hedge the opinions. Just improve the language use.
+- NAME NO STRENGTH THE INPUT DID NOT NAME. These words are measured on every send,
+  and one your answer uses that the input lacks refuses the message: `prevents`,
+  `guarantees`, `ensures`, `eliminates`, `always`, `never`, `cannot`, `impossible`,
+  `entirely`, `fully`, `completely`, `may`, `might`, `appears`, `seems`, `likely`,
+  `possibly`, `generally`, `typically`, `usually`. A word the author already used
+  stays available to you. Where the input says a thing happened, your answer says it
+  happened, with no claim about what it prevents and no hedge about what it might
+  do. This class was 31 of 190 refusals on one agent's ledger, second only to
+  invented causation.
 - Keep all facts in the original message exactly as stated. Never substitute a different fact,
   and never turn a description of what IS into an instruction about what to do
 - Keep all cause and effect structures. DO NOT change A and B into A so B or B because A. Keep `because`, `so`, `since`,
