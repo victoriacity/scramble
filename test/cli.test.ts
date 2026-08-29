@@ -1350,14 +1350,46 @@ describe("`scramble lint`: the send's rules, pointed at any document", () => {
     expect(errs.join("\n")).toContain("Your scan of 26 files");
     expect(JSON.parse(writes[0]!)).toEqual({ lint: "hits", files: 1, hits: 1 });
 
-    // A FILE KEEPS THE REPOSITORY RULES. The predicate reads `@name` and
+    // A DRAFT IN A SCRATCH DIRECTORY IS A MESSAGE, whatever it is spelled like on
+    // the command line. The answer used to come from the spelling: `lint <file>`
+    // took the repository rules and `lint < file` took the message rules, so one
+    // draft got two verdicts and an agent who linted from a file all evening never
+    // saw the message-only checks.
+    const f = join(cwd, "draft.md");
+    writeFileSync(f, "@reader-one @reader-two\n\nYour scan of 26 files found nothing.\n");
+    const draft = stubIo(cwd, async () => new Response("{}", { status: 200 }));
+    expect(await main(["lint", f], draft.io)).toBe(1);
+    expect(draft.errs.join(" ")).toContain("unowned claim");
+
+    // A FILE UNDER A REPOSITORY IS REPOSITORY TEXT. The predicate reads `@name` and
     // second-person prose, which fires 52 times across this repository's own
     // documents and tests, where a reader in general is addressed.
-    const f = join(cwd, "doc.md");
-    writeFileSync(f, "@reader-one @reader-two\n\nYour scan of 26 files found nothing.\n");
-    const asFile = stubIo(cwd, async () => new Response("{}", { status: 200 }));
-    expect(await main(["lint", f], asFile.io)).toBe(0);
-    expect(asFile.errs.join(" ")).not.toContain("unowned claim");
+    const repo = join(cwd, "checkout");
+    mkdirSync(join(repo, ".git"), { recursive: true });
+    const doc = join(repo, "doc.md");
+    writeFileSync(doc, "@reader-one @reader-two\n\nYour scan of 26 files found nothing.\n");
+    const inRepo = stubIo(cwd, async () => new Response("{}", { status: 200 }));
+    expect(await main(["lint", doc], inRepo.io)).toBe(0);
+    expect(inRepo.errs.join(" ")).not.toContain("unowned claim");
+    // THE SKIP SAYS SO. A message-only check that quietly does not run reads exactly
+    // like a check that passed.
+    expect(inRepo.errs.join(" ")).toContain("message-only checks did NOT run");
+
+    // A worktree carries `.git` as a FILE, and its documents are repository text
+    // too, so the test is existence.
+    const tree = join(cwd, "worktree");
+    mkdirSync(tree, { recursive: true });
+    writeFileSync(join(tree, ".git"), "gitdir: /elsewhere/.git/worktrees/one\n");
+    const wdoc = join(tree, "doc.md");
+    writeFileSync(wdoc, "@reader-one @reader-two\n\nYour scan of 26 files found nothing.\n");
+    const inTree = stubIo(cwd, async () => new Response("{}", { status: 200 }));
+    expect(await main(["lint", wdoc], inTree.io)).toBe(0);
+
+    // `--message` states the intent for a draft written inside a checkout, where
+    // nothing in the file says which it is.
+    const forced = stubIo(cwd, async () => new Response("{}", { status: 200 }));
+    expect(await main(["lint", "--message", doc], forced.io)).toBe(1);
+    expect(forced.errs.join(" ")).toContain("unowned claim");
   });
 
   test("no file and no stdin is a usage error", async () => {

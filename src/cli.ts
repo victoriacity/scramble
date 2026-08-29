@@ -13,7 +13,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { createStore, type ChannelStore } from "./store";
 import type { Message, PostResult } from "./types";
 import type { ServeOptions } from "./server";
@@ -308,6 +308,7 @@ interface Parsed {
 const BOOLEAN_FLAGS = new Set([
   "again",
   "comments",
+  "message",
   "document",
   "once",
   "calibrate",
@@ -2615,6 +2616,24 @@ export function maskToComments(text: string, style: "slash" | "hash" = "slash"):
     .join("\n");
 }
 
+/** Whether a path sits under a git repository, which is what makes its text
+ *  repository text. A path outside every repository is a draft somebody is writing.
+ *
+ *  The walk stops at the filesystem root. A worktree carries `.git` as a FILE, so
+ *  the test is existence and never a directory test. */
+function insideRepository(path: string): boolean {
+  let dir = dirname(resolve(path));
+  // The loop test carries the question. A `for (;;)` whose every exit is a `return`
+  // leaves its own closing brace unreachable, and the coverage bar this repository
+  // holds reads that as a line nobody covers.
+  while (!existsSync(join(dir, ".git"))) {
+    const up = dirname(dir);
+    if (up === dir) return false;
+    dir = up;
+  }
+  return true;
+}
+
 async function cmdLint(argv: string[], io: Io): Promise<number> {
   const { positionals } = parseArgs(argv);
   const sources: Array<{ name: string; text: string }> = [];
@@ -2647,6 +2666,7 @@ async function cmdLint(argv: string[], io: Io): Promise<number> {
   // patterns) is out of scope.
   const commentsOnly = argv.includes("--comments");
   let total = 0;
+  let repoFiles = 0;
   for (const src of sources) {
     const hash = /\.(sh|bash|py|toml|yml|yaml)$/.test(src.name);
     const text = commentsOnly ? maskToComments(src.text, hash ? "hash" : "slash") : src.text;
@@ -2658,7 +2678,18 @@ async function cmdLint(argv: string[], io: Io): Promise<number> {
     // this option to verify the tests and the scripts, because the ban applies to
     // every file the repository ships. The prose rules had never run over those
     // directories, where they find 121 older hits that remain separate work.
-    const rules = argv.includes("--dates") ? DATE_RULES : src.name === "(stdin)" ? undefined : CODE_RULES;
+    // WHICH RULES A FILE TAKES IS A QUESTION ABOUT THE FILE, and the answer used to
+    // be its spelling on the command line: `lint <file>` took the repository rules
+    // and `lint < file` took the message rules, so one draft got two verdicts and an
+    // agent who linted from a file all evening never saw the message-only checks.
+    //
+    // A file under a repository is repository text. A draft in a scratch directory
+    // is a message. The walk answers that without a knob, and the `--message` flag
+    // states the intent for a draft written inside a checkout, where nothing in the
+    // file says which it is.
+    const asMessage = src.name === "(stdin)" || argv.includes("--message") || !insideRepository(src.name);
+    if (!asMessage) repoFiles += 1;
+    const rules = argv.includes("--dates") ? DATE_RULES : asMessage ? undefined : CODE_RULES;
     for (const h of lintLanguage(text, rules)) {
       io.writeErr(`${src.name}:${lineOf(text, h.index)}: [${h.label}] ${JSON.stringify(h.match)}`);
       total += 1;
@@ -2672,12 +2703,21 @@ async function cmdLint(argv: string[], io: Io): Promise<number> {
     // the files this repository tracks that shape fires 52 times in documents and
     // tests that address a reader in general. A file lint keeps the repository
     // rules, which is the same split the rule table above makes.
-    if (rules === undefined) {
+    if (asMessage) {
       for (const para of unownedAttributions(text)) {
         io.writeErr(`${src.name}: [unowned claim] ${JSON.stringify(para.slice(0, 160))}`);
         total += 1;
       }
     }
+  }
+  // THE SKIP IS SAID ONCE, and it is said: a message-only check that quietly does
+  // not run reads exactly like a check that passed. The flags that ask for the
+  // repository rules by name need no notice, since the caller already chose.
+  if (repoFiles > 0 && !commentsOnly && !argv.includes("--dates")) {
+    io.writeErr(
+      `lint: ${repoFiles} file(s) sit under a repository, so they took the repository rules and the ` +
+        `message-only checks did NOT run on them. Pass --message to lint a draft as a message.`,
+    );
   }
   io.write(JSON.stringify({ lint: total === 0 ? "clean" : "hits", files: sources.length, hits: total }));
   return total === 0 ? 0 : 1;
@@ -4660,8 +4700,9 @@ const USAGE = [
   "                                                  build, each old verdict beside its new one",
   "  inbox trace <ts>                                did that message reach you, and wake you",
   "  inbox close <ts>… --why <text>                 settle items the sender said need no reply",
-  "  lint <file>...    [--comments]                  the send's language rules, on any file;",
-  "                                                  --comments reads only a source file's comments",
+  "  lint <file>...    [--comments] [--message]      the send's language rules, on any file;",
+  "                                                  --comments reads only a source file's comments,",
+  "                                                  --message lints a draft written inside a checkout",
   "  listen            [--addressed]                 stream deliveries, one JSON line each",
   "  next              [--timeout N]                 one delivery, then exit",
   "  doctor            [--wake <channel>]            is this agent's wiring real",
