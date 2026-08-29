@@ -21,7 +21,7 @@ the CLI, the gate, and the scripts in [`scripts/`](scripts/).
 | `SCRAMBLE_REWRITE_PROVIDER` | `gemini` | Provider selection: `gemini`, `fireworks`, or `litellm`. Any unrecognized provider name falls back to `gemini`. |
 | `SCRAMBLE_REWRITE_MODEL` | per provider | Model identifier for message rewrites. Defaults are `gemini-3.7-flash`, `accounts/fireworks/models/llama-v3p3-70b-instruct`, and `gpt-4o-mini`. The system passes the instructions in `src/prompts/rewrite.md` with every message. |
 | `SCRAMBLE_REWRITE_URL` | per provider | Base URL for a self-hosted LiteLLM instance. The system trims trailing slashes from this value. |
-| `SCRAMBLE_REWRITE_TIMEOUT_MS` | `5000` | Maximum duration in milliseconds that a rewrite may take before the system sends the original message as written. |
+| `SCRAMBLE_REWRITE_TIMEOUT_MS` | `60000` | Milliseconds a rewrite may take before the call is abandoned. The send is REFUSED when that happens, and the author's own words stay unsent while the rewrite is on. Five cold calls on a 6674-character prompt measured 6914 to 15189 ms, and one send passed 60002 ms and answered on its retry. |
 | `SCRAMBLE_BUN` | (unset) | Absolute path to the `bun` executable when PATH lacks it and `$HOME/.bun/bin/bun` does not exist. The gate script reads this variable so that the repository avoids hardcoding host installation paths. |
 | `AKARI_FIX_ENV` | (unset) | **Required by `scripts/dispatch.sh`.** Path to the akari environment file that contains `AKARI_SERVER_CONTROL_TOKEN`. The repository omits a default because the akari installation path depends on the host machine. |
 | `AKARI_DISPATCH_CLI` | (unset) | **Required by `scripts/dispatch.sh`.** Path to the `packages/dispatch/src/cli.ts` script in akari. |
@@ -59,6 +59,23 @@ no test needs a token or the network.
 | `scripts/quote-output.sh` | Runs a command and appends its output to a draft as a fenced block, so a figure in a message comes from the run that produced it. A failing command writes its exit code into the block. |
 | `scripts/prune-installs.sh` | Lists the installed copies that no live process runs, that `current` does not point at, and that fall outside the newest ten. Removes nothing without `--delete`. One host reached 190 copies at 74M, and every install adds one. |
 | `scripts/verify-published.sh` | Clones the published repository fresh, scans every commit for a private-workspace name or a real account id, and prints the commit it scanned beside the numbers. Pass pre-rewrite commit ids as extra arguments to test whether the host still serves them. |
+
+### What the rewriter gets wrong, measured
+
+Two agents counted their own rewrite ledgers over separate corpora before the
+instruction carried a counting rule for causal connectives:
+
+```
+        sends met the rewriter   guard hits   invented causation
+host A                     366          190      98   51.6 percent
+host B                     245          110      59   53.6 percent
+```
+
+Half of every refusal came from the model adding a cause the author never wrote,
+and one draft holding zero causal connectives came back with six. The instruction
+now states the count the guard applies, and the draft that produced six produces
+zero under it. The figure to compare against is the invented-causation share of
+guard hits, which `scramble rewrites` reports per agent.
 
 ### After a history rewrite, the old objects stay fetchable
 
