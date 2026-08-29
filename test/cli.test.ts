@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import type { ChannelStore } from "../src/store";
@@ -247,6 +247,9 @@ describe("listen", () => {
     let call = 0;
     const { io, writes } = stubIo(cwd, async (input) => {
       const u = new URL(input);
+      // The listener's own sweep drains `pending` at startup, which is a different
+      // cursor on a different path; this test reads the STREAM's resume point.
+      if (u.pathname.includes("/pending")) return new Response("[]", { status: 200 });
       seenSince.push(Number(u.searchParams.get("since")));
       const n = call++;
       if (n === 0) return ndjs([msg(5, "bob", "one")], "error"); // drop mid-stream
@@ -1216,14 +1219,20 @@ describe("the listener sweeps on its own timer", () => {
       60_000,
     );
     try {
-      const first = sweep.tick();
+      // ONE SWEEP AT STARTUP. A restart resets the interval, and the restart is when
+      // the gap exists, so a run of installs would otherwise push the first drain
+      // back indefinitely.
+      expect(runs).toBe(1);
       // A SLOW DRAIN THAT OUTLASTS ITS INTERVAL MUST NOT STACK: two drains at once
-      // advance one cursor underneath each other.
+      // advance one cursor underneath each other. The startup drain is still inside
+      // its own call here, so these two ticks are the overlapping ones.
+      await sweep.tick();
       await sweep.tick();
       expect(runs).toBe(1);
       release();
-      await first;
-      // With the first one finished, the next tick runs.
+      // The startup drain finishes on its own turn of the loop, so the flag it holds
+      // clears before the next tick is asked for.
+      await new Promise((r) => setTimeout(r, 0));
       await sweep.tick();
       expect(runs).toBe(2);
     } finally {
@@ -1553,6 +1562,74 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     const scoped = stubIo(cwd, async () => new Response("{}", { status: 200 }));
     expect(await main(["rewrites", "--as", "someone-else"], scoped.io)).toBe(0);
     expect(scoped.writes.join(" ")).toContain("No sends from someone-else");
+  });
+
+  test("`rewrites --replay` runs the refused drafts again and counts what changed", async () => {
+    // THE MEASUREMENT AN INSTRUCTION CHANGE NEEDS. Three agents were asked what a
+    // change did to the class it targeted, and none could answer: their ledgers
+    // held verdicts with no text behind them, so each replayed whatever drafts they
+    // still had, all of which were clean under both builds.
+    const cwd = scratchDir("rewrites-replay");
+    mkdirSync(join(cwd, ".scramble"), { recursive: true });
+    const row = (at: string, why: string, draft?: string): string =>
+      `${JSON.stringify({ at, agent: "dev", channel: "general", outcome: "refused", why, words: [9, 0], ...(draft === undefined ? {} : { draft }) })}\n`;
+    const file = join(cwd, ".scramble", "rewrites.jsonl");
+    // A row from before drafts were kept carries no text and cannot be replayed.
+    writeFileSync(file, row("2026-08-01T00:00:00.000Z", "introduced a reason"));
+    const none = stubIo(cwd, async () => new Response("{}", { status: 200 }));
+    expect(await main(["rewrites", "--replay", "--as", "dev"], none.io)).toBe(1);
+    expect(none.errs.join(" ")).toContain("no row for dev carries a draft");
+    expect(none.errs.join(" ")).toContain("cannot be replayed");
+
+    appendFileSync(file, row("2026-08-02T00:00:00.000Z", "introduced a reason", "the check reads the stamp"));
+    appendFileSync(file, row("2026-08-03T00:00:00.000Z", "introduced cannot", "the check compares two ids"));
+    const answers = ["the check reads the stamp", "the check compares two ids because the stamp says so"];
+    let call = 0;
+    const { io, writes, errs } = stubIo(cwd, async (u) =>
+      String(u).includes("generativelanguage")
+        ? new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: answers[call++] ?? "" }] } }] }), { status: 200 })
+        : new Response("{}", { status: 200 }),
+    );
+    const keyed: Io = {
+      ...io,
+      env: (n) => (n === "SCRAMBLE_REWRITE_KEY" ? "k" : io.env(n)),
+      moduleDir: () => join(import.meta.dir, "..", "src"),
+    };
+    expect(await main(["rewrites", "--replay", "--as", "dev"], keyed)).toBe(0);
+    // One answer keeps the input's meaning and passes; the other adds a reason the
+    // input never gave, which is the guard that refused these rows in the first
+    // place. The row's old verdict rides beside the new one.
+    const lines = writes.filter((w) => w.includes("\"replay\""));
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toContain("\"was\":\"introduced a reason\"");
+    expect(lines[0]).toContain("\"now\":\"clean\"");
+    expect(errs.join(" ")).toContain("2 draft(s) for dev under this build");
+    expect(errs.join(" ")).toContain("1 clean now");
+
+    // EVERY REPLAYED ROW COSTS A MODEL CALL, so the run is bounded and says what it
+    // left out. A cap that stays quiet reads as full coverage.
+    const capped = stubIo(cwd, async () => new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: "x" }] } }] }), { status: 200 }));
+    const cappedKeyed: Io = {
+      ...capped.io,
+      env: (n) => (n === "SCRAMBLE_REWRITE_KEY" ? "k" : capped.io.env(n)),
+      moduleDir: () => join(import.meta.dir, "..", "src"),
+    };
+    expect(await main(["rewrites", "--replay", "--as", "dev", "--limit", "1"], cappedKeyed)).toBe(0);
+    expect(capped.errs.join(" ")).toContain("2 row(s) match and this run takes the newest 1");
+
+    // The `--why` flag narrows the replay to one class, which is how a change aimed
+    // at one guard is measured against that guard's own rows.
+    const one = stubIo(cwd, async () => new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: "y" }] } }] }), { status: 200 }));
+    const oneKeyed: Io = {
+      ...one.io,
+      env: (n) => (n === "SCRAMBLE_REWRITE_KEY" ? "k" : one.io.env(n)),
+      moduleDir: () => join(import.meta.dir, "..", "src"),
+    };
+    expect(await main(["rewrites", "--replay", "--as", "dev", "--why", "cannot"], oneKeyed)).toBe(0);
+    expect(one.errs.join(" ")).toContain("1 draft(s) for dev");
+    const missing = stubIo(cwd, async () => new Response("{}", { status: 200 }));
+    expect(await main(["rewrites", "--replay", "--as", "dev", "--why", "no such verdict"], missing.io)).toBe(1);
+    expect(missing.errs.join(" ")).toContain("whose verdict contains no such verdict");
   });
 
   test("`rewrites --near` reads the duplicate scores this agent's sends measured", async () => {

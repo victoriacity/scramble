@@ -858,6 +858,10 @@ async function postText(
         outcome,
         ...(why === undefined ? {} : { why }),
         words: [wordCount(text), "send" in chosen ? wordCount(chosen.send) : 0],
+        // THE DRAFT IS KEPT WHERE THE GUARD FIRED, so a change to the instruction
+        // can be replayed against the messages it was written for. See
+        // `RewriteRecord.draft`.
+        ...(outcome === "refused" || outcome === "retried" ? { draft: text } : {}),
       });
     } catch (e) {
       io.writeErr(`rewrite record not written: ${String(e)}`);
@@ -2313,6 +2317,12 @@ export function sweepInsideListener(
   // timer is pending.
   const timer = setInterval(tick, intervalMs);
   (timer as { unref?: () => void }).unref?.();
+  // ONE SWEEP AT STARTUP, because a restart otherwise resets the whole interval and
+  // the restart is exactly when the gap exists: the process was down, and every
+  // install tells every agent on the host to restart, so a run of installs can push
+  // the first sweep back indefinitely. This drain covers the time the process was
+  // gone, which is what the sweep is for.
+  void tick();
   return { stop: () => clearInterval(timer), tick };
 }
 
@@ -2901,6 +2911,57 @@ async function cmdRewrite(argv: string[], io: Io): Promise<number> {
  *  someone remembered. This command counts the outcomes and identifies which guard
  *  fires most often.
  */
+/** Replay the drafts whose guard fired, under the rewriter as it stands now.
+ *
+ *  WHAT THIS ANSWERS. An instruction change is aimed at a class of refusals, and
+ *  the only reading of whether it worked is what those same drafts do now. The
+ *  guard verdicts before and after sit side by side, so a row that still fails, a
+ *  row that passes now, and a row that fails for a NEW reason are three different
+ *  outcomes and are counted apart.
+ *
+ *  EVERY REPLAYED ROW COSTS A MODEL CALL, so the count is bounded and the bound is
+ *  printed with what it left out. A silent cap reads as full coverage.
+ *
+ *  This sends nothing to any channel: `attemptRewrite` is the send path's own
+ *  rewriter, called here without the send. */
+async function replayRewrites(flags: Map<string, string>, io: Io): Promise<number> {
+  const who = flags.get("as") ?? nameFor(flags, io);
+  const limit = intFlag(flags, "limit", 25);
+  const pattern = flags.get("why") ?? "";
+  const rows = readRewrites(rewritesPath(slackConfigPath(io))).filter(
+    (r) => r.agent === who && typeof r.draft === "string" && r.draft !== "" && (pattern === "" || (r.why ?? "").includes(pattern)),
+  );
+  if (rows.length === 0) {
+    io.writeErr(
+      `replay: no row for ${who} carries a draft${pattern === "" ? "" : ` whose verdict contains ${pattern}`}. ` +
+        `A draft is kept on a refused or retried row from this version onward, so the rows behind you hold ` +
+        `verdicts alone and cannot be replayed.`,
+    );
+    return 1;
+  }
+  const take = rows.slice(-limit);
+  if (take.length < rows.length) {
+    io.writeErr(`replay: ${rows.length} row(s) match and this run takes the newest ${take.length}. Raise it with --limit.`);
+  }
+  let fixed = 0;
+  let same = 0;
+  let moved = 0;
+  for (const row of take) {
+    const { chosen } = await attemptRewrite(row.draft!, io);
+    const now = "refuse" in chosen ? guardName(chosen.why) : "";
+    const before = row.why ?? "";
+    if (now === "") fixed++;
+    else if (now === before) same++;
+    else moved++;
+    io.write(JSON.stringify({ replay: row.at, was: before, now: now === "" ? "clean" : now, words: row.words[0] }));
+  }
+  io.writeErr(
+    `replay: ${take.length} draft(s) for ${who} under this build: ${fixed} clean now, ${same} refused for the ` +
+      `same reason, ${moved} refused for a different one.`,
+  );
+  return 0;
+}
+
 async function cmdRewrites(argv: string[], io: Io): Promise<number> {
   // The `--as` flag selects rows for one named agent. Without `--as`, the command
   // counts every agent on the host and places their names on the first line, because
@@ -2912,6 +2973,13 @@ async function cmdRewrites(argv: string[], io: Io): Promise<number> {
   // samples on request. The tool can gather these samples, so every send records
   // what it measured, and `--near` reads the accumulated records back.
   //
+  // The `--replay` flag sends the stored drafts through the rewriter as it stands
+  // now and prints each row's old verdict beside its new one. A change to the
+  // instruction is measured on the drafts it was written for, and nothing else
+  // measures it: three agents asked to measure one such change replayed whatever
+  // drafts they still held, every one of those was clean under both builds, and the
+  // comparison came back empty on all three hosts.
+  if (flags.has("replay")) return replayRewrites(flags, io);
   // The `--calibrate` flag re-measures every recorded row from Slack. When two
   // readers execute the same function on one table, the operation measures the
   // readers. The table held the agent's synthetic pair labeled as the founding
@@ -4563,6 +4631,8 @@ const USAGE = [
   "  rewrite           [<file>] [--why]              what the rewriter makes of this text, or with",
   "                                                  --why, what is wrong with it; sends nothing",
   "  rewrites          [--as <agent>]                what the rewriter did on this host, by outcome",
+  "  rewrites --replay [--limit N] [--why <text>]    the drafts a guard refused, run again under this",
+  "                                                  build, each old verdict beside its new one",
   "  inbox trace <ts>                                did that message reach you, and wake you",
   "  inbox close <ts>… --why <text>                 settle items the sender said need no reply",
   "  lint <file>...    [--comments]                  the send's language rules, on any file;",

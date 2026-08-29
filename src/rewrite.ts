@@ -22,7 +22,7 @@
 // same checks applied to the sender's original text. When a rewrite violates a
 // rule, the system discards it and transmits the original text that passed
 // validation.
-import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, chmodSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { lengthRefusal, lintLanguage, proseOf } from "./language";
 // The system reuses the duplicate guard's text comparison so a document rewrite
@@ -181,6 +181,22 @@ export interface RewriteRecord {
    *  sees what the rewrite did to length without keeping either text.
    */
   words: [number, number];
+  /**
+   *  The author's own words, kept ONLY on a row whose guard fired, which is
+   *  `retried` and `refused`.
+   *
+   *  A CHANGE TO THE INSTRUCTION IS MEASURED BY REPLAYING THE DRAFTS THAT FAILED.
+   *  Three agents were asked for that measurement on the same day and none could
+   *  run it: their ledgers held the verdict and the word counts, and the text
+   *  behind them was gone, so every one of them replayed whatever drafts they
+   *  happened to still hold. Those samples were clean under both builds and
+   *  measured nothing. A count of failures nobody can re-run says a class exists
+   *  and never says whether a change closed it.
+   *
+   *  A `sent` or `unchanged` row keeps no text, which is most rows: the failures
+   *  are the population a guard change is aimed at.
+   */
+  draft?: string;
 }
 
 export function rewritesPath(configPath: string): string {
@@ -189,7 +205,19 @@ export function rewritesPath(configPath: string): string {
 
 export function recordRewrite(path: string, row: RewriteRecord): void {
   mkdirSync(dirname(path), { recursive: true });
-  appendFileSync(path, `${JSON.stringify(row)}\n`);
+  appendFileSync(path, `${JSON.stringify(row)}\n`, { mode: 0o600 });
+  // THE FILE HOLDS THE AGENT'S OWN UNSENT PROSE, so it is readable by its owner and
+  // nobody else, which is the mode the credential files beside it already carry.
+  // Two agents measured this directory and found 0600 on `slack.json` and
+  // `rewrite.env` beside 0664 on this file, on hosts whose home directory allows
+  // world traversal. The mode argument above applies at creation only, so the
+  // existing files move too.
+  try {
+    chmodSync(path, 0o600);
+  } catch {
+    // A file owned by another user on a shared host keeps its own mode, and the row
+    // is already written. The reader that cares is `--replay`, on this host.
+  }
 }
 
 export function readRewrites(path: string): RewriteRecord[] {
