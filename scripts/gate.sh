@@ -143,6 +143,32 @@ fi
 # the pipeline instead.
 echo "self-test ok: the leak scan reported both planted tokens, suppressed both placeholders, and cut every tail"
 
+# THE OBJECT SCAN PROVES ITSELF THE SAME WAY, in a throwaway repository, since a
+# planted object in THIS one would be the very thing the stage reports. `git add`
+# alone writes the blob, which is the case the stage exists for: no commit happens,
+# the tree scan sees nothing, and the object stays.
+echo "== gate self-test: the object scan must FIND a staged blob nobody committed =="
+git init -q "$SELF/objrepo" 2>/dev/null
+echo "a token: ${FAM}${SEG1}-${SEG2}-${TAIL1}" > "$SELF/objrepo/staged.txt"
+( cd "$SELF/objrepo" && git add staged.txt 2>/dev/null && rm -f staged.txt )
+OBJ_SELF="$(git -C "$SELF/objrepo" cat-file --batch-all-objects --batch --buffer 2>/dev/null | awk -v rx="$LEAK_RX" '
+  need <= 0 { if ($0 ~ /^[0-9a-f]{40} [a-z]+ [0-9]+$/) { oid = $1; typ = $2; need = $3 + 0; next } next }
+  { need -= (length($0) + 1); if (typ != "blob") next
+    rest = $0
+    while (match(rest, rx)) { tok = substr(rest, RSTART, RLENGTH); rest = substr(rest, RSTART + RLENGTH)
+      if (tok ~ /000000/ || tok ~ /EXAMPLE/) continue
+      print oid " " substr(tok, 1, 11) "…REDACTED" } }' | grep -c 'REDACTED' || true)"
+# The worktree file is gone and no commit exists, so a tree scan finds nothing here.
+OBJ_SELF_TREE="$(cd "$SELF/objrepo" && git grep -IonE "$LEAK_RX" -- . 2>/dev/null | grep -c . || true)"
+if [ "$OBJ_SELF" != "1" ] || [ "$OBJ_SELF_TREE" != "0" ]; then
+  echo "GATE SELF-TEST FAILED: the object scan found $OBJ_SELF of 1 staged token" \
+       "and the tree scan found $OBJ_SELF_TREE, where it must find none."
+  echo "The fixture stages one blob, deletes the file, and commits nothing."
+  echo "GATE RED"
+  exit 1
+fi
+echo "self-test ok: the object scan found the staged blob that the tree scan cannot see"
+
 # NO MACHINE PATH IN A TRACKED FILE. This repo is bound for GitHub, and it carried six: my home
 # directory inside this very script, two akari paths in dispatch.sh, and my checkout's path inside
 # the onboarding call to action in the README. A path from one machine is wrong in every clone of
@@ -312,6 +338,66 @@ else
   leak_rc=0
 fi
 
+# NO CREDENTIAL-SHAPED STRING IN THE OBJECT DATABASE EITHER. `git add` writes a blob
+# the moment it runs, and that blob outlives the edit: the file can be fixed, the
+# change abandoned, the commit never made, and the object stays in `.git/objects`
+# with the credential in it. The tree scan above reads tracked files, so it sees
+# none of that, and the commit hook only ever runs on a commit that happens. A
+# reader measured the checkout this repository lives in: every directory on the path
+# is world-readable and 326 accounts share the host, so an object nobody can see
+# through `git grep` is readable by all of them.
+#
+# The whole database costs a fifth of a second to read here, so this runs on every
+# gate. The stream pass answers whether anything matches; the object id comes from a
+# per-blob pass that only runs when something did.
+echo "== no credential-shaped string in the object database =="
+# The whole database reads in about half a second here, so this runs on every gate.
+# Object boundaries come from the size in each header, since content can hold any
+# line at all, including one shaped like a header.
+OBJ_ROWS="$(git -C "$REPO" cat-file --batch-all-objects --batch --buffer 2>/dev/null | awk -v rx="$LEAK_RX" '
+  need <= 0 {
+    if ($0 ~ /^[0-9a-f]{40} [a-z]+ [0-9]+$/) { oid = $1; typ = $2; need = $3 + 0; next }
+    next
+  }
+  {
+    need -= (length($0) + 1)
+    if (typ != "blob") next
+    rest = $0
+    while (match(rest, rx)) {
+      tok = substr(rest, RSTART, RLENGTH)
+      rest = substr(rest, RSTART + RLENGTH)
+      if (tok ~ /000000/ || tok ~ /EXAMPLE/) continue
+      print oid " " substr(tok, 1, 11) "…REDACTED"
+    }
+  }' | sort -u || true)"
+# The reachable set is what a push carries. Everything else is a blob some `git add`
+# wrote and nothing kept: it reaches no remote, and it sits in this directory until
+# somebody expires it.
+REACHABLE="$(git -C "$REPO" rev-list --objects --all 2>/dev/null | awk '{print $1}' | sort -u)"
+obj_rc=0
+OBJ_REACHED="$(printf '%s\n' "$OBJ_ROWS" | grep . | while read -r oid rest; do printf '%s\n' "$REACHABLE" | grep -qxF "$oid" && echo "$oid $rest"; done || true)"
+OBJ_LOOSE="$(printf '%s\n' "$OBJ_ROWS" | grep . | while read -r oid rest; do printf '%s\n' "$REACHABLE" | grep -qxF "$oid" || echo "$oid $rest"; done || true)"
+if [ -n "$OBJ_REACHED" ]; then
+  echo "GATE FAIL: an object a push would carry holds something shaped like a credential:"
+  printf '%s\n' "$OBJ_REACHED" | sed 's/^/  object /'
+  echo "Rotate the credential and keep it out of the history."
+  obj_rc=1
+fi
+if [ -n "$OBJ_LOOSE" ]; then
+  # THIS PRINTS AND DOES NOT STOP THE RUN. These objects reach no remote, and the
+  # command that clears them rewrites a database other agents on this host share, so
+  # that call belongs to whoever owns the checkout. A reader measured this one: every
+  # directory on the path is world-readable and 326 accounts share the host, so an
+  # object `git grep` cannot see is readable by all of them.
+  echo "object database: $(printf '%s\n' "$OBJ_LOOSE" | grep -c .) unreachable object row(s) hold a credential shape."
+  printf '%s\n' "$OBJ_LOOSE" | sed 's/^/  object /'
+  echo "No push carries them. To clear them on a checkout nobody else is using:"
+  echo "  git reflog expire --expire=now --all && git gc --prune=now"
+fi
+if [ "$obj_rc" = "0" ] && [ -z "$OBJ_LOOSE" ]; then
+  echo "no credential-shaped strings in the object database"
+fi
+
 # NOTHING FROM THE PRIVATE WORKSPACE IN A PUBLIC FILE. This repository is
 # published, and the names carrying the company, its products, its hosts and its
 # people's Slack accounts were spread across tests, fixtures, comments and one
@@ -366,8 +452,8 @@ echo "== bun test --coverage =="
 test_rc=$?
 
 echo "== gate summary =="
-echo "self_test_rc=$self_rc (nonzero required) paths_rc=$paths_rc lang_rc=$lang_rc skill_rc=$skill_rc comment_rc=$comment_rc dates_rc=$dates_rc leak_rc=$leak_rc private_rc=$private_rc cover_rc=$cover_rc tsc_rc=$tsc_rc test_rc=$test_rc"
-if [ "$paths_rc" -ne 0 ] || [ "$lang_rc" -ne 0 ] || [ "$skill_rc" -ne 0 ] || [ "$comment_rc" -ne 0 ] || [ "$dates_rc" -ne 0 ] || [ "$leak_rc" -ne 0 ] || [ "$private_rc" -ne 0 ] || [ "$cover_rc" -ne 0 ] || [ "$tsc_rc" -ne 0 ] || [ "$test_rc" -ne 0 ]; then
+echo "self_test_rc=$self_rc (nonzero required) paths_rc=$paths_rc lang_rc=$lang_rc skill_rc=$skill_rc comment_rc=$comment_rc dates_rc=$dates_rc leak_rc=$leak_rc obj_rc=$obj_rc private_rc=$private_rc cover_rc=$cover_rc tsc_rc=$tsc_rc test_rc=$test_rc"
+if [ "$paths_rc" -ne 0 ] || [ "$lang_rc" -ne 0 ] || [ "$skill_rc" -ne 0 ] || [ "$comment_rc" -ne 0 ] || [ "$dates_rc" -ne 0 ] || [ "$leak_rc" -ne 0 ] || [ "$obj_rc" -ne 0 ] || [ "$private_rc" -ne 0 ] || [ "$cover_rc" -ne 0 ] || [ "$tsc_rc" -ne 0 ] || [ "$test_rc" -ne 0 ]; then
   echo "GATE RED"
   exit 1
 fi
