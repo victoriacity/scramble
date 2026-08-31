@@ -166,6 +166,19 @@ describe("undoAutoLinks", () => {
     // Please provide the section of text you would like rewritten.
     expect(undoAutoLinks("<https://example.com/docs|the docs>")).toBe("<https://example.com/docs|the docs>");
     expect(undoAutoLinks("nothing to collapse")).toBe("nothing to collapse");
+
+    // THE BARE FORM CORRUPTS CODE, and it survived the label rule above. An agent
+    // sent four source files to a peer; the two holding a URL in a string literal
+    // arrived with Slack's brackets inside the quotes, and the sender read their own
+    // draft and saw nothing wrong.
+    expect(undoAutoLinks("daemonUrl: config?.daemonUrl ?? '<http://127.0.0.1:8080>',")).toBe(
+      "daemonUrl: config?.daemonUrl ?? 'http://127.0.0.1:8080',",
+    );
+    expect(undoAutoLinks("<https://example.com/a/b?c=1>")).toBe("https://example.com/a/b?c=1");
+    expect(undoAutoLinks("<mailto:a@b.c>")).toBe("a@b.c");
+    // The other entity shapes belong to Slack and stay whole: a user mention, a
+    // broadcast, and a channel link.
+    expect(undoAutoLinks("<@U0ABCDEF> <!channel> <#C0ABCDE|general>")).toBe("<@U0ABCDEF> <!channel> <#C0ABCDE|general>");
   });
 });
 

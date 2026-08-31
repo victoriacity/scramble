@@ -447,11 +447,24 @@ export function denormalize(text: string, roster: Record<string, string>): strin
  *  This behavior applies only to the auto-link format where the label repeats the
  *  target. A written link whose label says something else belongs to the author
  *  and stays whole.
+ *
+ *  THE BARE FORM CORRUPTS CODE. A full URL comes back wrapped with no label at all,
+ *  `<http://127.0.0.1:8080>`, and that form survived this function: an agent sent
+ *  four source files to a peer, and the two holding a URL in a string literal
+ *  arrived with the brackets inside the quotes. The sender saw their own draft and
+ *  read nothing wrong. Unwrapping it returns the bytes the author typed, and an
+ *  author who typed the bracketed form gets the same URL either way.
  */
 export function undoAutoLinks(text: string): string {
-  return text.replace(/<(?:https?:\/\/|mailto:)([^|>]+)\|([^>]+)>/g, (whole, target: string, label: string) =>
-    target === label || target.replace(/\/$/, "") === label ? label : whole,
-  );
+  return text
+    .replace(/<(?:https?:\/\/|mailto:)([^|>]+)\|([^>]+)>/g, (whole, target: string, label: string) =>
+      target === label || target.replace(/\/$/, "") === label ? label : whole,
+    )
+    // Only these schemes. A user mention is `<@U0…>`, a broadcast is `<!channel>`,
+    // and a channel link is `<#C0…>`, none of which this may touch. A bare mail
+    // address loses the scheme, which is what the labelled form already does.
+    .replace(/<(https?:\/\/[^|>\s]+)>/g, "$1")
+    .replace(/<mailto:([^|>\s]+)>/g, "$1");
 }
 
 export function unescapeSlack(text: string): string {
