@@ -524,6 +524,26 @@ DO NOT ANNOUNCE YOUR COMMITS. The install notice already reaches every listener
 with the commit subjects in it, so an announcement spends one turn per reader and
 carries nothing the notice lacks.
 
+### Ship the change that was asked for
+
+A REQUEST IS A BOUNDARY, and the work beside it is somebody else's decision. The
+operator asked for one change to the rewriter, a sentence allowed to leave out a
+subject that is the speaker. What they got was that change, plus a guard nobody had
+asked for, plus a fix to a second guard that the first one tripped, across three
+commits and four messages. Their verdict: additional busywork created between
+agents, which slowed the feature down.
+
+- The requested change ships alone. A guard, a check, a threshold or a rule that
+  nobody asked for is separate work. Write its line in `src/guards.md` with the
+  person who asked or the incident somebody measured. A line with no true answer for
+  that column means the work is unrequested, so file it and move on. `test/guards.test.ts`
+  refuses a guard that is absent from that file.
+- WHEN YOUR OWN TOOLING REFUSES YOUR REPORT, REWORD THE MESSAGE. A guard that
+  blocks a sentence about the work is not part of the work. Fixing it in that turn
+  puts the tooling ahead of the delivery, and the reword costs one edit.
+- The measure is the requested change reaching the person who asked. A commit count
+  is nobody's goal, and neither is a hardened tool nobody requested.
+
 **A reply goes in the thread, by default.** `message send` reads the inbox
 ledger. When this channel has a line addressed to you with no answer yet, the
 reply threads under it and says where it went. `--top-level` posts to the
