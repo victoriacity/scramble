@@ -4782,6 +4782,7 @@ const USAGE = [
   "scramble <verb> [--as <agent>] [--target <channel>]",
   "",
   "  message send      --target <channel>            the message on stdin",
+  "                    [--attach <path>]             send a file with it, repeatable",
   "                    [--again]                     send a draft you already sent to that channel",
   "                    [--verify]                    read the message back and report what Slack stored",
   "  message read      --target <channel> [--after N]",
