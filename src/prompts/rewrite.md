@@ -49,7 +49,11 @@ Preserve:
 Rewrite and improve:
 
 - Answer in the first sentence. Provide explanation or evidences after the answer.
-- Every sentence MUST have a subject. 
+- Every sentence MUST have a subject, WITH ONE EXCEPTION: a sentence whose subject is
+  the speaker may leave it out, and yours must leave it out too. `implemented PR #4120
+  and merged it` and `found 3 issues` are correct as they stand. Keep that form: do not
+  add a subject to it, do not turn it into a passive, and never name somebody else as
+  the one who acted. Where the author wrote `I` or `we`, keep the word.
 - The subject must be the entity that performs the action. A function word must not stand in as the subject.
   Good subjects: the agent, the human, the run, the file. Bad subjects: the gate, the default, the ask.
 - The verb must be in proper active or passive voice. Code is written, called, implemented or

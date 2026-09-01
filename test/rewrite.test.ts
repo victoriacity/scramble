@@ -26,6 +26,7 @@ import {
   causalIn,
   connectivesIn,
   factsIn,
+  ACTOR_PHRASES,
   wordCountRatio,
   WORD_COUNT_FLOOR,
   quotedSpan,
@@ -375,6 +376,41 @@ describe("choosing what to send", () => {
     // At the floor it goes out: 32 words back from 40 is 80 percent.
     const atFloor = chooseText(original, { ok: true, text: Array.from({ length: 32 }, (_, i) => `word${i % 3}`).join(" ") });
     expect("send" in atFloor).toBe(true);
+  });
+
+  test("A SUBJECT-LESS SENTENCE BELONGS TO THE SPEAKER, and an actor cannot be invented for it", () => {
+    // Operator ruling: a sentence may leave its subject out when the subject is the
+    // speaker, so `found 3 issues` and `implemented PR 4120 and merged` stand as
+    // written. The failure that opens is the model filling the empty slot with
+    // somebody else, which hands the report to a party who was never in the message.
+    const filled = chooseText("found 3 issues in the scanner", {
+      ok: true,
+      text: "The team found 3 issues in the scanner file.",
+    });
+    expect("refuse" in filled && filled.refuse).toContain("named the team as the one who acted");
+
+    // The same sentence rewritten with its subject still absent goes out.
+    const kept = chooseText("found 3 issues in the scanner", {
+      ok: true,
+      text: "Found 3 issues in the scanner, and all three sit in one file.",
+    });
+    expect("send" in kept).toBe(true);
+
+    // An actor the author named is in both texts, so naming it again is no invention.
+    const named = chooseText("the run found 3 issues", { ok: true, text: "The run found 3 issues in the scanner file." });
+    expect("send" in named).toBe(true);
+
+    // The first person the author used survives, which the guard below this one
+    // covers, and adding it to a subject-less sentence is allowed: the subject was
+    // the speaker either way.
+    const spoken = chooseText("implemented PR 4120 and merged it", {
+      ok: true,
+      text: "I implemented PR 4120 and merged it into the main branch.",
+    });
+    expect("send" in spoken).toBe(true);
+
+    expect(ACTOR_PHRASES).toContain("the team");
+    expect(ACTOR_PHRASES).toContain("someone");
   });
 
   test("what counts as a fact to preserve", () => {

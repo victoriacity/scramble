@@ -668,6 +668,28 @@ export function wordCountRatio(original: string, rewritten: string): number {
  */
 export const WORD_COUNT_FLOOR = 0.8;
 
+/** The generic actors a rewrite reaches for when a sentence leaves its subject out.
+ *
+ *  A subject-less sentence belongs to the speaker, so an empty subject slot filled
+ *  with one of these hands the action to somebody who was never in the message.
+ */
+export const ACTOR_PHRASES = [
+  "the agent",
+  "the team",
+  "the system",
+  "the process",
+  "the user",
+  "the operator",
+  "the developer",
+  "the author",
+  "the caller",
+  "the service",
+  "the tool",
+  "the script",
+  "someone",
+  "somebody",
+];
+
 export function factsIn(text: string): string[] {
   const out = new Set<string>();
   // An inline span designates an identifier, such as a timestamp, a flag, a
@@ -1019,6 +1041,25 @@ export function chooseText(
       `the rewrite removed the first person from a message that had it, so who did the thing is gone`,
       rewritten.text,
     );
+  }
+  // AN ACTOR THE AUTHOR NEVER NAMED IS AN INVENTED ACTOR. A sentence whose subject is
+  // the speaker may leave the subject out, and the instruction now tells the model to
+  // keep that form: `found 3 issues` stays as it is. The failure this opens is the
+  // model filling the empty slot with somebody else, so `found 3 issues` returns as
+  // `the team found 3 issues` and the report changes hands. These phrases are the
+  // generic fillers a model reaches for; a name the author used is in both texts and
+  // passes.
+  {
+    const invented = ACTOR_PHRASES.filter((a) => {
+      const rx = new RegExp(`\\b${a}\\b`, "i");
+      return rx.test(proseOf(rewritten.text)) && !rx.test(proseOf(original));
+    });
+    if (opts?.document !== true && invented.length > 0) {
+      return refusal(
+        `the rewrite named ${invented.join(", ")} as the one who acted, and your message named nobody there`,
+        rewritten.text,
+      );
+    }
   }
   // Please provide the section you would like rewritten.
   const myLinks = connectivesIn(original);
