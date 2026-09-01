@@ -1552,7 +1552,7 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     const cwd = scratchDir("send-rewrite");
     const { io, errs } = stubIo(cwd, async (u) =>
       String(u).includes("generativelanguage")
-        ? new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: "the professional line" }] } }] }), { status: 200 })
+        ? new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: "the parser fix has now shipped" }] } }] }), { status: 200 })
         : new Response(JSON.stringify({ crossings: [] }), { status: 200 }),
     );
     // The fixture contains no first person. The system refuses a rewrite that drops the
@@ -1917,10 +1917,10 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     const { io, errs } = stubIo(cwd, async (u) => {
       const url = String(u);
       if (url.includes("generativelanguage"))
-        return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: "the shipped line" }] } }] }), { status: 200 });
+        return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: "the line that shipped this morning" }] } }] }), { status: 200 });
       if (url.includes("chat.postMessage"))
         return new Response(JSON.stringify({ ok: true, ts: "22.2", message: {} }), { status: 200 });
-      return new Response(JSON.stringify({ ok: true, messages: [{ ts: "22.2", text: "the shipped line" }] }), { status: 200 });
+      return new Response(JSON.stringify({ ok: true, messages: [{ ts: "22.2", text: "the line that shipped this morning" }] }), { status: 200 });
     });
     writeSlackConfig(cwd, {
       appToken: "xapp-1",
@@ -1950,11 +1950,11 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     const responder = async (u: string): Promise<Response> => {
       seen.push(String(u));
       if (String(u).includes("generativelanguage"))
-        return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: "the shipped line" }] } }] }), { status: 200 });
+        return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: "the line that shipped this morning" }] } }] }), { status: 200 });
       if (String(u).includes("chat.postMessage"))
         return new Response(JSON.stringify({ ok: true, ts: "33.3", message: {} }), { status: 200 });
       if (String(u).includes("conversations.history"))
-        return new Response(JSON.stringify({ ok: true, messages: [{ ts: "33.3", text: "the shipped line" }] }), { status: 200 });
+        return new Response(JSON.stringify({ ok: true, messages: [{ ts: "33.3", text: "the line that shipped this morning" }] }), { status: 200 });
       return new Response(JSON.stringify({ ok: true, messages: [] }), { status: 200 });
     };
     const { io, errs } = stubIo(cwd, async (u) => responder(String(u)));
@@ -2296,7 +2296,7 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     // The guards stop the edit if they refuse a rewrite, exactly as they stop a send.
     const bad = stubIo(cwd, async (u) =>
       String(u).includes("generativelanguage")
-        ? new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: "it got fixed" }] } }] }), {
+        ? new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: "the thing got fixed here" }] } }] }), {
             status: 200,
           })
         : new Response(JSON.stringify({ ok: true }), { status: 200 }),
@@ -2524,7 +2524,7 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
       if (url.includes("generativelanguage")) {
         prompt = String(init?.body ?? "");
         return new Response(
-          JSON.stringify({ candidates: [{ content: { parts: [{ text: "I shipped the parser fix." }] } }] }),
+          JSON.stringify({ candidates: [{ content: { parts: [{ text: "I shipped the parser fix and I sent it." }] } }] }),
           { status: 200 },
         );
       }
@@ -2597,7 +2597,7 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
       if (String(u).includes("generativelanguage")) {
         prompt = String(init?.body ?? "");
         return new Response(
-          JSON.stringify({ candidates: [{ content: { parts: [{ text: "I shipped the parser fix." }] } }] }),
+          JSON.stringify({ candidates: [{ content: { parts: [{ text: "I shipped the parser fix and I sent it." }] } }] }),
           { status: 200 },
         );
       }
@@ -2635,7 +2635,7 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
       if (String(u).includes("generativelanguage")) {
         prompt = String(init?.body ?? "");
         return new Response(
-          JSON.stringify({ candidates: [{ content: { parts: [{ text: "I shipped the parser fix, again." }] } }] }),
+          JSON.stringify({ candidates: [{ content: { parts: [{ text: "I shipped the parser fix again, and I sent it." }] } }] }),
           { status: 200 },
         );
       }
@@ -2730,7 +2730,7 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     // a message elsewhere.
     const cwd = scratchDir("rewrite-preview");
     const { io, writes, errs, urls } = stubIo(cwd, async () =>
-      new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: "I shipped the parser fix." }] } }] }), {
+      new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: "I shipped the parser fix and I sent it." }] } }] }), {
         status: 200,
       }),
     );
@@ -2742,7 +2742,7 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
       moduleDir: () => join(import.meta.dir, "..", "src"),
     };
     expect(await main(["rewrite", draft], withKey)).toBe(0);
-    expect(writes.join("")).toContain("I shipped the parser fix.");
+    expect(writes.join("")).toContain("I shipped the parser fix and I sent it.");
     expect(errs.join(" ")).toContain("rewrite:");
     // The process made one call to the model and sent nothing to a channel.
     expect(urls.length).toBe(1);
@@ -2761,7 +2761,7 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
         calls += 1;
         if (calls === 1) throw new Error("The operation was aborted.");
         return new Response(
-          JSON.stringify({ candidates: [{ content: { parts: [{ text: "I shipped the parser fix." }] } }] }),
+          JSON.stringify({ candidates: [{ content: { parts: [{ text: "I shipped the parser fix and I sent it." }] } }] }),
           { status: 200 },
         );
       }
@@ -2849,6 +2849,7 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
 
   test("`rewrite` reads stdin when no file is named, and says when nothing changed", async () => {
     const cwd = scratchDir("rewrite-stdin");
+    // The answer repeats the input, which is the case this covers.
     const { io, errs } = stubIo(cwd, async () =>
       new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: "I shipped the parser fix." }] } }] }), {
         status: 200,
@@ -2867,8 +2868,11 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
 
   test("`rewrite` reports a missing file, an empty input, an absent key, and a refusal", async () => {
     const cwd = scratchDir("rewrite-sad");
+    // The answer drops the actor, which is the guard this case exercises, and carries
+    // enough words to clear the count floor so the refusal names the actor and
+    // nothing else.
     const { io, errs, writes } = stubIo(cwd, async () =>
-      new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: "shipped the parser fix." }] } }] }), {
+      new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: "the parser fix was shipped and then it went out." }] } }] }), {
         status: 200,
       }),
     );
@@ -2898,7 +2902,7 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
     writeFileSync(drops, "I shipped the parser fix.");
     const before = writes.length;
     expect(await main(["rewrite", drops], withKey)).toBe(1);
-    expect(writes.slice(before).join("")).toContain("shipped the parser fix.");
+    expect(writes.slice(before).join("")).toContain("the parser fix was shipped");
     expect(errs.join(" ")).toContain("the guards would stop this from going out");
     expect(errs.join(" ")).toContain("Nothing was sent.");
     expect(errs.join(" ")).not.toContain("send again");
@@ -3011,7 +3015,12 @@ describe("`inbox pending`: the count of what is owed, per ITEM", () => {
       if (String(u).includes("generativelanguage")) {
         call += 1;
         prompts.push(String(init?.body));
-        const text = call === 1 ? "the fix shipped, not the workaround" : "the fix shipped and the workaround stayed out";
+        // The first answer breaks a language rule and carries enough words to clear
+        // the count floor, so the retry happens for the rule and nothing else.
+        const text =
+          call === 1
+            ? "the fix shipped and the workaround stayed out of it, not in it"
+            : "the fix shipped and the workaround stayed out of the build";
         return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text }] } }] }), { status: 200 });
       }
       return new Response(JSON.stringify({ crossings: [] }), { status: 200 });

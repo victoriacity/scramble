@@ -22,15 +22,15 @@ import {
   readDocumentTemplate,
   splitSections,
   DEFAULT_TIMEOUT_MS,
-  MIN_PROSE_RATIO,
   chooseText,
   causalIn,
   connectivesIn,
   factsIn,
+  wordCountRatio,
+  WORD_COUNT_FLOOR,
   quotedSpan,
   citedTimestamps,
   mentionsIn,
-  proseRatio,
   strengthDrift,
   readRewrites,
   recordRewrite,
@@ -359,19 +359,22 @@ describe("choosing what to send", () => {
     expect("refuse" in out && out.refuse).toContain("neither version goes out");
   });
 
-  test("A STUB IS REFUSED AND TIGHTENING IS NOT, since a length cannot tell padding from a conclusion", () => {
-    // THE FLOOR WAS 0.6 AND FORBADE THE WORK. Cutting a padded draft by half is
-    // what this tool is for, and the old floor refused it. What a length can still
-    // see is a model that answers a page with a sentence: one measured case came
-    // back at 66 words from 900.
-    const original = Array.from({ length: 40 }, (_, i) => `word${i % 3}`).join(" ");
-    const stub = chooseText(original, { ok: true, text: "word0 word1 word2 word0 word1" });
-    expect("refuse" in stub && stub.refuse).toContain("under the 25% floor");
-    expect("refuse" in stub && stub.refuse).toContain("a summary where a rewrite belongs");
+  test("THE FLOOR IS A WORD COUNT at the operator's 80 percent, and it compares two counts only", () => {
+    // The ratio ignores code, so an evidence-heavy message pays nothing for its
+    // fenced blocks.
+    const withCode = ["one two three four five", "```", "a b c d e f g h i j", "```"].join("\n");
+    expect(wordCountRatio(withCode, "one two three four five")).toBe(1);
+    expect(WORD_COUNT_FLOOR).toBe(0.8);
 
-    // Half the length passes, and the facts in it are checked by name elsewhere.
-    const tightened = chooseText(original, { ok: true, text: Array.from({ length: 20 }, (_, i) => `word${i % 3}`).join(" ") });
-    expect("send" in tightened).toBe(true);
+    // A summary comes back refused, and the refusal names the two counts it compared.
+    const original = Array.from({ length: 40 }, (_, i) => `word${i % 3}`).join(" ");
+    const summary = chooseText(original, { ok: true, text: "word0 word1 word2 word0 word1" });
+    expect("refuse" in summary && summary.refuse).toContain("of your draft's word count");
+    expect("refuse" in summary && summary.refuse).toContain("the floor is 80%");
+
+    // At the floor it goes out: 32 words back from 40 is 80 percent.
+    const atFloor = chooseText(original, { ok: true, text: Array.from({ length: 32 }, (_, i) => `word${i % 3}`).join(" ") });
+    expect("send" in atFloor).toBe(true);
   });
 
   test("what counts as a fact to preserve", () => {
@@ -381,12 +384,6 @@ describe("choosing what to send", () => {
     expect(facts).toContain("@dev");
     expect(facts).toContain("https://x.dev/y");
     expect(facts).toContain("/srv/data/f.json");
-  });
-
-  test("the prose ratio ignores code, so an evidence-heavy message is not penalised", () => {
-    const original = ["one two three four five", "```", "a b c d e f g h i j", "```"].join("\n");
-    expect(proseRatio(original, "one two three four five")).toBe(1);
-    expect(MIN_PROSE_RATIO).toBeLessThan(1);
   });
 
   test("a mention moved into code stopped notifying, and is refused", () => {

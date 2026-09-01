@@ -648,6 +648,26 @@ function refusal(what: string, attempt: string): { refuse: string; why: string; 
   };
 }
 
+/** The rewrite's word count over the draft's, with code stripped out.
+ *
+ *  A WORD COUNT AND NOTHING ELSE. This compares how many words came back against how
+ *  many went in. It says nothing about which words they were: the facts are checked
+ *  by name elsewhere, where every identifier, number, path and mention has to
+ *  survive, the causal connectives are counted, and the claim strengths are compared.
+ */
+export function wordCountRatio(original: string, rewritten: string): number {
+  const count = (t: string): number => proseOf(t).split(/\s+/).filter((w) => w !== "").length;
+  const before = count(original);
+  return before === 0 ? 1 : count(rewritten) / before;
+}
+
+/** How short a rewrite may come back before it counts as a summary.
+ *
+ *  Operator ruling: no less than 80 percent of the draft's word count. The floor was
+ *  0.6 and briefly 0.25 while this was measured, and the number is theirs.
+ */
+export const WORD_COUNT_FLOOR = 0.8;
+
 export function factsIn(text: string): string[] {
   const out = new Set<string>();
   // An inline span designates an identifier, such as a timestamp, a flag, a
@@ -716,37 +736,6 @@ export function mentionsIn(text: string): string[] {
   ];
 }
 
-/**
- *  The fraction measures how much of the original's LENGTH came back, counting
- *  words with the code stripped out.
- *
- *  WHAT THIS CANNOT SEE. A length is silent about which words went. Padding cut
- *  from a rambling draft and a conclusion deleted from a tight one read the same
- *  here, and the checks above this one are the ones that answer the second case:
- *  every identifier, number and path has to survive, every mention has to survive,
- *  the causal connectives are counted, the claim strengths are compared, and a
- *  section keeps its subject. What is left for a length to catch is a STUB, where
- *  the model answers a page with a sentence.
- */
-export function proseRatio(original: string, rewritten: string): number {
-  const words = (t: string): number => proseOf(t).split(/\s+/).filter((w) => w !== "").length;
-  const before = words(original);
-  return before === 0 ? 1 : words(rewritten) / before;
-}
-
-/** A rewrite this much shorter than the draft is a stub, and anything above it is
- *  the tightening this tool exists to do.
- *
- *  THE FLOOR WAS 0.6, WHICH FORBADE THE WORK. Cutting a padded 900-word draft to
- *  300 tight words is a ratio of 0.33, and the guard refused it while a reader
- *  waited: the operator asked whether bad prose survives a 60 percent floor, and it
- *  does not. The number had no measurement under it either, and every fact the
- *  floor was meant to protect is checked by name above.
- *
- *  A quarter keeps the case a length can genuinely see. The one measured instance:
- *  a model answered a 900-word draft with 66 words, a ratio of 0.07.
- */
-export const MIN_PROSE_RATIO = 0.25;
 
 /**
  *  A send operation processes rewrites using `send` and `refuse`. The `send`
@@ -1061,11 +1050,15 @@ export function chooseText(
         rewritten.text,
     );
   }
-  const kept = proseRatio(original, rewritten.text);
-  if (kept < MIN_PROSE_RATIO) {
+  // THE FLOOR IS A WORD COUNT, set by the operator at 80 percent. A rewrite that
+  // comes back much shorter has answered with a summary, and this compares the two
+  // counts and nothing else: no overlap, no preservation score, no judgement about
+  // which words went.
+  const kept = wordCountRatio(original, rewritten.text);
+  if (kept < WORD_COUNT_FLOOR) {
     return refusal(
-        `the rewrite came back at ${Math.round(kept * 100)}% of your draft's length, under the ` +
-          `${Math.round(MIN_PROSE_RATIO * 100)}% floor, so it answered with a summary where a rewrite belongs`,
+        `the rewrite came back at ${Math.round(kept * 100)}% of your draft's word count, and the floor ` +
+          `is ${Math.round(WORD_COUNT_FLOOR * 100)}%`,
         rewritten.text,
     );
   }
