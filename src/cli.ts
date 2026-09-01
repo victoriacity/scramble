@@ -671,6 +671,29 @@ function channelTier(channel: string, io: Io): { tier: Tier; why: string } {
  *  an answer that repeats spans from them quotes those instructions into the
  *  channel.
  */
+/** Markdown bullets, turned into the character Slack renders as a list.
+ *
+ *  Slack's own format carries no list syntax, so a leading `-` or `*` posts as
+ *  itself. The substitution runs on the line's indent and its marker alone, which
+ *  leaves a fenced block, a hyphenated word, an em-rule and `--flag` untouched.
+ *
+ *  A numbered list stays as it is: `1.` reads as a numbered list already.
+ */
+export function bulletsForSlack(text: string): string {
+  const lines = text.split("\n");
+  let fenced = false;
+  return lines
+    .map((line) => {
+      if (/^\s*```/.test(line)) {
+        fenced = !fenced;
+        return line;
+      }
+      if (fenced) return line;
+      return line.replace(/^(\s*)[-*]\s+(?=\S)/, "$1• ");
+    })
+    .join("\n");
+}
+
 function instructionOf(template: string, register?: string): string {
   return register === undefined || register === "" ? template : `${template}\n\n${register}`;
 }
@@ -891,7 +914,13 @@ async function postText(
     retried ? retriedWhy : undefined,
   );
   if (chosen.note !== "") io.writeErr(`rewrite: ${chosen.note}`);
-  text = chosen.send;
+  // A MARKDOWN BULLET REACHES SLACK AS A DASH. Slack's message format has no list
+  // syntax, so `- item` arrives as the characters `- item`: an agent posted a
+  // six-item list and it read as six dashes. A bullet character renders as a list
+  // everywhere Slack shows the message, and it happens here, before the ledger, the
+  // read-back and the duplicate check, so all three compare the string that was
+  // posted. An agent running the evaluation suite asked for it.
+  text = bulletsForSlack(chosen.send);
   const thread = flags.get("thread") ?? undefined;
   const status = statusTracker(io, backend, nameFor(flags, io));
   await settleStatus(status?.clearExpired());

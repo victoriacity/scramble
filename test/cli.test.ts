@@ -6,7 +6,7 @@ import type { ChannelStore } from "../src/store";
 import { createStore } from "../src/store";
 import { createHandler } from "../src/server";
 import { WORD_LIMIT } from "../src/language";
-import { KNOWN_ENV, unknownEnvNote, hashVerdict, textHash, differenceLine, autoKey, installedChanges, changeBlock, monitorReport, sweepAgeMinutes, sweepInsideListener, sweepSummaryLine, SWEEP_INTERVAL_MS, main, parseBind, loadSlackConfig, slackConfigPath, staleConfigWarning, staleListeners, pickStale, staleListenerProblem, readProcesses, liveListeners, stillAlive, watchForNewerInstall, listenerCommit, listenersBehind, processesReadable, type Io } from "../src/cli";
+import { bulletsForSlack, KNOWN_ENV, unknownEnvNote, hashVerdict, textHash, differenceLine, autoKey, installedChanges, changeBlock, monitorReport, sweepAgeMinutes, sweepInsideListener, sweepSummaryLine, SWEEP_INTERVAL_MS, main, parseBind, loadSlackConfig, slackConfigPath, staleConfigWarning, staleListeners, pickStale, staleListenerProblem, readProcesses, liveListeners, stillAlive, watchForNewerInstall, listenerCommit, listenersBehind, processesReadable, type Io } from "../src/cli";
 import { SCOPE_NAMES, BOT_EVENT_NAMES } from "../src/app-manifest";
 import { closeInboxItems, inboxPath, pendingInbox, readSentRows, recordInboxItem, recordSent, sentAlready, sentPath } from "../src/inbox";
 import { readTierBlock } from "../src/rewrite";
@@ -1212,6 +1212,47 @@ describe("both monitors are reported on every send", () => {
     // THE REPAIR IS ONE COMMAND. Arming used to be two, and agents arrived with one.
     expect(lines.join(" ")).toContain("Arm both: scramble listen --addressed --as dev");
     expect(lines.join(" ")).not.toContain("scramble message check");
+  });
+});
+
+describe("markdown bullets reach Slack as a list", () => {
+  // AN AGENT POSTED A SIX-ITEM LIST AND IT READ AS SIX DASHES. Slack's message
+  // format carries no list syntax, so `- item` arrives as those characters.
+  // An agent running the evaluation suite asked for it.
+  test("a leading dash or star becomes a bullet, and everything else is left alone", () => {
+    expect(bulletsForSlack("- one\n- two\n  - nested")).toBe("• one\n• two\n  • nested");
+    expect(bulletsForSlack("* star item")).toBe("• star item");
+    // A dash inside a sentence, a flag, a word without a space after the dash, and a
+    // numbered list all stay as they are.
+    expect(bulletsForSlack("text with a - dash inside")).toBe("text with a - dash inside");
+    expect(bulletsForSlack("--flag is not a bullet")).toBe("--flag is not a bullet");
+    expect(bulletsForSlack("-nospace stays")).toBe("-nospace stays");
+    expect(bulletsForSlack("1. numbered stays")).toBe("1. numbered stays");
+    // A FENCED BLOCK IS CODE. A dash in there belongs to whatever the block holds,
+    // and a diff line is the case that matters.
+    expect(bulletsForSlack("```\n- inside a fence\n```")).toBe("```\n- inside a fence\n```");
+    expect(bulletsForSlack("```diff\n- removed\n+ added\n```\n- outside")).toBe("```diff\n- removed\n+ added\n```\n• outside");
+  });
+
+  test("the send posts the bullet form, so the ledger and the read-back compare it", async () => {
+    const cwd = scratchDir("send-bullets");
+    const calls: string[] = [];
+    const { io } = stubIo(cwd, async (u, init) => {
+      calls.push(String(init?.body ?? ""));
+      if (String(u).includes("chat.postMessage")) return new Response(JSON.stringify({ ok: true, ts: "88.8", message: {} }), { status: 200 });
+      return new Response(JSON.stringify({ ok: true, messages: [] }), { status: 200 });
+    });
+    writeSlackConfig(cwd, {
+      appToken: "xapp-1",
+      token: "xoxb-1",
+      channels: { general: "C1" },
+      agents: { dev: { token: "T", handle: "dev" } },
+    });
+    io.readStdin = async () => "- first item\n- second item";
+    expect(await main(["message", "send", "--target", "general", "--as", "dev", "--no-verify"], io)).toBe(0);
+    const posted = calls.find((b) => b.includes("first item")) ?? "";
+    expect(posted).toContain("• first item");
+    expect(posted).not.toContain("- first item");
   });
 });
 
