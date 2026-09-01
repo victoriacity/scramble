@@ -12,8 +12,8 @@ import { join } from "node:path";
  *  A guard refuses somebody's message, so the authority for it comes from a person
  *  who asked or an incident somebody measured. This test makes the writing-down step
  *  mandatory: a new rule or a new refusal fails the suite until its line exists. A
- *  line that cannot be written honestly is the signal that the guard was nobody's
- *  request.
+ *  requester column with no true answer in it is the signal that the guard was
+ *  nobody's request.
  */
 const src = (name: string): string => readFileSync(join(import.meta.dir, "..", "src", name), "utf8");
 
@@ -41,7 +41,9 @@ describe("every guard names who asked for it", () => {
       // The label appears in the table with a requester beside it. A row with an
       // empty requester column fails the same way, since the split below needs text
       // on both sides.
-      const row = registry.split("\n").find((l) => l.includes(`| ${label} |`));
+      // The labels sit in backticks in the registry, since the linter reads that
+      // file and a rule about a word would otherwise fire on its own name.
+      const row = registry.split("\n").find((l) => l.includes(`| \`${label}\` |`));
       expect(row, `no line in src/guards.md for the language rule "${label}"`).toBeDefined();
       const who = (row ?? "").split("|")[2]?.trim() ?? "";
       expect(who.length, `the registry line for "${label}" names no requester`).toBeGreaterThan(8);
