@@ -717,8 +717,16 @@ export function mentionsIn(text: string): string[] {
 }
 
 /**
- *  The fraction measures how much of the original prose survived. An outside
- *  reader treats disappearing whole sentences as dropped conclusions.
+ *  The fraction measures how much of the original's LENGTH came back, counting
+ *  words with the code stripped out.
+ *
+ *  WHAT THIS CANNOT SEE. A length is silent about which words went. Padding cut
+ *  from a rambling draft and a conclusion deleted from a tight one read the same
+ *  here, and the checks above this one are the ones that answer the second case:
+ *  every identifier, number and path has to survive, every mention has to survive,
+ *  the causal connectives are counted, the claim strengths are compared, and a
+ *  section keeps its subject. What is left for a length to catch is a STUB, where
+ *  the model answers a page with a sentence.
  */
 export function proseRatio(original: string, rewritten: string): number {
   const words = (t: string): number => proseOf(t).split(/\s+/).filter((w) => w !== "").length;
@@ -726,10 +734,19 @@ export function proseRatio(original: string, rewritten: string): number {
   return before === 0 ? 1 : words(rewritten) / before;
 }
 
-/**
- *  A rewrite may drop a share of the original prose before it is refused.
+/** A rewrite this much shorter than the draft is a stub, and anything above it is
+ *  the tightening this tool exists to do.
+ *
+ *  THE FLOOR WAS 0.6, WHICH FORBADE THE WORK. Cutting a padded 900-word draft to
+ *  300 tight words is a ratio of 0.33, and the guard refused it while a reader
+ *  waited: the operator asked whether bad prose survives a 60 percent floor, and it
+ *  does not. The number had no measurement under it either, and every fact the
+ *  floor was meant to protect is checked by name above.
+ *
+ *  A quarter keeps the case a length can genuinely see. The one measured instance:
+ *  a model answered a 900-word draft with 66 words, a ratio of 0.07.
  */
-export const MIN_PROSE_RATIO = 0.6;
+export const MIN_PROSE_RATIO = 0.25;
 
 /**
  *  A send operation processes rewrites using `send` and `refuse`. The `send`
@@ -1047,9 +1064,8 @@ export function chooseText(
   const kept = proseRatio(original, rewritten.text);
   if (kept < MIN_PROSE_RATIO) {
     return refusal(
-        `the rewrite kept ${Math.round(kept * 100)}% of your prose, under the ` +
-          `${Math.round(MIN_PROSE_RATIO * 100)}% floor, and a whole sentence going missing is what a ` +
-          `dropped conclusion looks like`,
+        `the rewrite came back at ${Math.round(kept * 100)}% of your draft's length, under the ` +
+          `${Math.round(MIN_PROSE_RATIO * 100)}% floor, so it answered with a summary where a rewrite belongs`,
         rewritten.text,
     );
   }

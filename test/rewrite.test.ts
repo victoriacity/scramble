@@ -359,11 +359,19 @@ describe("choosing what to send", () => {
     expect("refuse" in out && out.refuse).toContain("neither version goes out");
   });
 
-  test("a rewrite that loses most of the prose is refused", () => {
-    // An outside reader sees a dropped conclusion when a whole sentence goes missing.
+  test("A STUB IS REFUSED AND TIGHTENING IS NOT, since a length cannot tell padding from a conclusion", () => {
+    // THE FLOOR WAS 0.6 AND FORBADE THE WORK. Cutting a padded draft by half is
+    // what this tool is for, and the old floor refused it. What a length can still
+    // see is a model that answers a page with a sentence: one measured case came
+    // back at 66 words from 900.
     const original = Array.from({ length: 40 }, (_, i) => `word${i % 3}`).join(" ");
-    const out = chooseText(original, { ok: true, text: "word0 word1 word2 word0 word1" });
-    expect("refuse" in out && out.refuse).toContain("under the 60% floor");
+    const stub = chooseText(original, { ok: true, text: "word0 word1 word2 word0 word1" });
+    expect("refuse" in stub && stub.refuse).toContain("under the 25% floor");
+    expect("refuse" in stub && stub.refuse).toContain("a summary where a rewrite belongs");
+
+    // Half the length passes, and the facts in it are checked by name elsewhere.
+    const tightened = chooseText(original, { ok: true, text: Array.from({ length: 20 }, (_, i) => `word${i % 3}`).join(" ") });
+    expect("send" in tightened).toBe(true);
   });
 
   test("what counts as a fact to preserve", () => {
