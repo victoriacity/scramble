@@ -44,6 +44,22 @@ export function lineOf(text: string, index: number): number {
  *  obvious.
  */
 export const LANGUAGE_RULES: LanguageRule[] = [
+  // A DECISION INSIDE YOUR OWN CODE IS YOURS TO MAKE. An agent read a threshold in
+  // its own repository, found the number had no measurement under it, found that it
+  // refused the work the tool exists to do, named the replacement, and then closed
+  // with `it is yours to call`. The operator answered that the agent is the sole
+  // developer of the codebase, and spent two messages doing the deciding. The same
+  // agent had
+  // deferred a page change of its own an hour earlier.
+  //
+  // A decision that genuinely belongs to a person names the thing they own: a
+  // hostname, a credential, a visibility flip, a budget, an access grant. Those
+  // sentences carry none of the phrases below, which are the reflex forms and say
+  // nothing about which decision is whose.
+  {
+    label: "deferring a decision the writer owns",
+    rx: /\byours to (call|decide)\b|\byour call\b|\bup to you\b|\bfor you to decide\b|\bif you want it\b|\bsay the word and I\b/gi,
+  },
   {
     label: "filler",
     rx: /\b(honestly|honest|honesty|actually|basically|essentially|frankly|candidly|truthfully)\b|\bstated plainly\b|\bplainly put\b|\bto be (fair|blunt|clear)\b/gi,

@@ -27,6 +27,7 @@ describe("the language rules, checked where the message leaves", () => {
 
   test("every rule fires on its own shape", () => {
     const cases: Array<[string, string]> = [
+      ["deferring a decision the writer owns", "The floor is yours to call."],
       ["filler", "This is basically the same defect."],
       ["announcing candor", "One thing I should say plainly: it went out unchecked."],
       ["hedge", "That said, the socket stayed open."],
@@ -226,6 +227,37 @@ describe("the word limit on one message", () => {
   });
 });
 
+
+describe("a decision inside your own code", () => {
+  // AN AGENT READ A THRESHOLD IN ITS OWN REPOSITORY, found the number had no
+  // measurement under it, found that it refused the work the tool exists to do,
+  // named the replacement, and closed with a phrase handing the choice back. The
+  // operator answered that the agent is the sole developer of the codebase, and
+  // then spent two messages doing the deciding.
+  test("the reflex deferrals are refused, and naming what somebody else owns is not", () => {
+    for (const said of [
+      "The measure for that is per-sentence coverage. I have not built it, and it is yours to call.",
+      "Your call on the threshold.",
+      "Switching the page into that mode is up to you.",
+      "The floor is for you to decide.",
+      "I can wire the mode in if you want it.",
+      "Say the word and I will wire that up.",
+    ]) {
+      const hits = lintLanguage(said);
+      expect(hits.map((h) => h.label)).toContain("deferring a decision the writer owns");
+    }
+
+    // A decision that belongs to a person names the thing they own. These sentences
+    // carry no reflex phrase and pass.
+    for (const said of [
+      "The hostname and the certificate need your word, since the DNS is yours.",
+      "The visibility flip on that repository needs the account that owns it.",
+      "I set the floor at a quarter, and the measurement is in the commit.",
+    ]) {
+      expect(lintLanguage(said).map((h) => h.label)).not.toContain("deferring a decision the writer owns");
+    }
+  });
+});
 
 describe("whose fact is it: a claim about one reader in a room of several", () => {
   // TWICE IN TWO DAYS. A message greeting three agents said "your 118-draft scan"
