@@ -608,12 +608,16 @@ export function causalIn(text: string): string[] {
  *  The caller excludes the draft, because a rewrite shares long spans with the
  *  author's words on purpose.
  */
-export function quotedSpan(answer: string, prompt: string, span = 40): string {
-  const a = answer.toLowerCase().replace(/\s+/g, " ");
-  const p = prompt.toLowerCase().replace(/\s+/g, " ");
+export function quotedSpan(answer: string, prompt: string, span = 40, draft = ""): string {
+  const flat = (t: string): string => t.toLowerCase().replace(/\s+/g, " ");
+  const a = flat(answer);
+  const p = flat(prompt);
+  const d = flat(draft);
   for (let i = 0; i + span <= p.length; i += 1) {
     const piece = p.slice(i, i + span);
-    if (a.includes(piece)) return piece;
+    // A span the draft already carried belongs to the author, whatever the
+    // instruction also says.
+    if (a.includes(piece) && !d.includes(piece)) return piece;
   }
   return "";
 }
@@ -951,7 +955,11 @@ export function chooseText(
   //
   // This file defines the retry sentence as fixed text, so the detector is exact.
   if (instruction !== undefined && instruction !== "") {
-    const echoed = quotedSpan(rewritten.text, instruction);
+    // A SPAN THE AUTHOR WROTE IS THE AUTHOR'S. A message ABOUT the instruction shares
+    // long spans with it on purpose: a send describing a new rule quoted the rule,
+    // and this guard refused the message for carrying words its own author had typed.
+    // The comparison therefore skips any span already in the draft.
+    const echoed = quotedSpan(rewritten.text, instruction, 40, original);
     if (echoed !== "") {
       return refusal(`the rewrite copied its own instruction into the message ("${echoed.trim()}")`, rewritten.text);
     }

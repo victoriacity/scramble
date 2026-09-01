@@ -378,6 +378,23 @@ describe("choosing what to send", () => {
     expect("send" in atFloor).toBe(true);
   });
 
+  test("A MESSAGE ABOUT THE INSTRUCTION KEEPS ITS OWN WORDS, since a shared span is the author's", () => {
+    // A send describing a new rule quoted the rule, and the echo guard refused the
+    // message for carrying words its own author had typed. The comparison skips any
+    // span the draft already held.
+    const rule = "a sentence whose subject is the speaker may leave the subject out, and yours must leave it out too";
+    const about = `The instruction now says that ${rule}, which is the change.`;
+    const kept = chooseText(about, { ok: true, text: `The instruction says that ${rule}. That is the change here.` }, rule);
+    expect("send" in kept).toBe(true);
+
+    // A span from the instruction that the draft never held is still refused.
+    const echoed = chooseText("the parser fix shipped this morning", {
+      ok: true,
+      text: `The parser fix shipped this morning. ${rule}.`,
+    }, rule);
+    expect("refuse" in echoed && echoed.refuse).toContain("copied its own instruction");
+  });
+
   test("A SUBJECT-LESS SENTENCE BELONGS TO THE SPEAKER, and an actor cannot be invented for it", () => {
     // Operator ruling: a sentence may leave its subject out when the subject is the
     // speaker, so `found 3 issues` and `implemented PR 4120 and merged` stand as
