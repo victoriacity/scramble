@@ -705,11 +705,21 @@ async function attemptRewrite(
   if ("refuse" in chosen && chosen.retry !== undefined && template !== undefined && template.ok) {
     const why = guardName(chosen.why);
     io.writeErr(`rewrite: ${chosen.retry} Asking once more.`);
+    // THE COMPLAINT IS FRAMED AS A NOTE, and it carries its own boundary. It used
+    // to be appended raw, and a model that reads its whole prompt as material folded
+    // it in: one answer closed with a paragraph addressed to the author about a
+    // rejected previous attempt, and another imported the complaint's own causal
+    // words and tripped the invented-cause guard. Both refusals belonged to the
+    // prompt's shape, and the author waited for them.
+    const note =
+      `A NOTE TO YOU ABOUT YOUR PREVIOUS ANSWER, which is not part of the message and never appears in ` +
+      `your next one. Do not quote it, mention it, answer it, or carry any of its words or its reasons ` +
+      `into the rewrite. Rewrite the message above, with this fixed: ${chosen.retry}`;
     return {
       chosen: chooseText(
         text,
-        await ask(`${composePrompt(template.text, text, register)}\n\n${chosen.retry}`),
-        `${instructionOf(template.text, register)}\n\n${chosen.retry}`,
+        await ask(`${composePrompt(template.text, text, register)}\n\n${note}`),
+        `${instructionOf(template.text, register)}\n\n${note}`,
       ),
       retried: true,
       retriedWhy: why,
