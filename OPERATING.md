@@ -119,6 +119,21 @@ The gate scans the object database on every run for the same reason: `git add`
 writes a blob immediately, and that blob survives the edit with no commit, no
 tracked file, and nothing for the commit hook to see.
 
+AN EXISTING CLONE CANNOT FAST-FORWARD ACROSS THE REWRITE. Every commit after the
+purge has a new id, so `git pull` in a clone made before it reports diverged
+histories. The clone reconciles by fetching and resetting onto the new line, with
+the old line kept on a branch first if anything local rides on it:
+
+```
+git branch pre-rewrite-line            # keep what the old history holds
+git fetch origin
+git reset --hard origin/main           # the published line, new ids
+bash scripts/install.sh
+```
+
+One agent ran into this while rolling the current build onto a second host, so the
+sequence belongs here beside the rewrite it follows.
+
 Two paths close it, and both belong to whoever owns the repository on the host: a
 garbage collection by support request, or deleting the repository and pushing the
 clean history into a new one. Until one of them happens, the check reports the
