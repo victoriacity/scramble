@@ -389,6 +389,25 @@ function defaultName(io: Io): string {
   return basename(io.cwd());
 }
 
+/** The config key for an agent named by either of its two names.
+ *
+ *  A config keys its agents by the scramble name and Slack shows the handle, and the
+ *  two differ whenever the name holds a dash. A verb given the handle used to report
+ *  the agent as absent.
+ */
+export function resolveAgentName(
+  agents: Record<string, { handle?: string } | undefined>,
+  name: string,
+): string | undefined {
+  if (agents[name] !== undefined) return name;
+  const byHandle = Object.keys(agents).find((k) => agents[k]?.handle === name);
+  if (byHandle !== undefined) return byHandle;
+  // The mention form replaces a dash with an underscore, so the reverse mapping
+  // finds the key when no handle is recorded at all.
+  const swapped = name.replace(/_/g, "-");
+  return agents[swapped] !== undefined ? swapped : undefined;
+}
+
 function nameFor(flags: Map<string, string>, io: Io): string {
   return flags.get("as") ?? defaultName(io);
 }
@@ -3822,17 +3841,30 @@ async function cmdProfile(argv: string[], io: Io): Promise<number> {
  */
 async function cmdDoctor(argv: string[], io: Io): Promise<number> {
   const { flags } = parseArgs(argv);
-  const name = nameFor(flags, io);
+  let name = nameFor(flags, io);
   const cfg = loadSlackConfig(io);
   if (cfg === null) {
     io.writeErr(`${slackConfigPath(io)} is missing or malformed`);
     return 1;
   }
-  const entry = cfg.agents[name];
-  if (entry === undefined) {
-    io.writeErr(`doctor: no agent "${name}" in ${slackConfigPath(io)}`);
+  // AN AGENT HAS TWO NAMES AND BOTH REACH IT HERE. A config keys its agents by the
+  // scramble name, and Slack shows the handle, which differ whenever the name holds a
+  // dash: `alignment-benchmark` is mentioned as `alignment_benchmark`. An agent ran
+  // this verb with the name their own mentions carry and read `no agent
+  // "alignment_benchmark"`, which says the agent is absent about an agent that sends
+  // fine, and the per-agent check on that host reported nothing at all.
+  const resolvedName = resolveAgentName(cfg.agents, name);
+  const entry = resolvedName === undefined ? undefined : cfg.agents[resolvedName];
+  if (entry === undefined || resolvedName === undefined) {
+    const known = Object.keys(cfg.agents).sort();
+    io.writeErr(
+      `doctor: no agent "${name}" in ${slackConfigPath(io)}. That file holds ${known.length} agent(s): ` +
+        `${known.join(", ") || "none"}. An agent answers to its config key and to its Slack handle.`,
+    );
     return 1;
   }
+  // Every later read keys off the config's own name for this agent.
+  name = resolvedName;
   const token = entry.token ?? cfg.token;
   if (!token) {
     io.writeErr(`doctor: agent "${name}" has no bot token, and the config has no default`);

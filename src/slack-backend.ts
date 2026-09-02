@@ -61,6 +61,18 @@ const USERS_CONVERSATIONS_URL = "https://slack.com/api/users.conversations";
  *  1787715629). The agent needs the thread it writes in expanded, and the root of
  *  that thread is old by definition.
  */
+/** How many thread reads are in flight at once, how many times a rate-limited one
+ *  is asked again, and how long it waits between attempts.
+ *
+ *  Awaiting each read inside the row walk made them serial, and one read of a busy
+ *  channel passed 120 seconds. Sending all of them at once produced `ratelimited`
+ *  across four roots in one sweep, and a dropped expansion loses a thread reply
+ *  somebody is waiting on. A few in flight with a retry keeps both failures away.
+ */
+export const REPLY_CONCURRENCY = 4;
+export const REPLY_RETRIES = 3;
+export const REPLY_RETRY_PAUSE_MS = 1200;
+
 export const THREAD_EXPANSION_CAP = 25;
 
 /**
@@ -1887,8 +1899,14 @@ export class SlackBackend {
     // round trip for the whole set replaces up to 25 in a row, and the walk below
     // keeps Slack's newest-first order, since every reply it needs is already in a map.
     const fetched = new Map<string, SlackHistoryMessage[]>();
-    await Promise.all(
-      [...expandable].map(async (rootTs) => {
+    // A BURST TRIPS SLACK'S LIMIT. Sending all 25 at once produced
+    // `ratelimited` across four roots in one sweep on a busy channel, and a dropped
+    // expansion means a thread reply somebody is waiting on never arrives. The pool
+    // below keeps a few in flight and retries a rate-limited call after a pause,
+    // which is what Slack's own answer asks for.
+    const pending = [...expandable];
+    const readRoot = async (rootTs: string): Promise<void> => {
+      for (let attempt = 0; attempt < REPLY_RETRIES; attempt += 1) {
         const rep = await readOk<{ messages?: SlackHistoryMessage[] }>(
           this.fetch,
           // Request metadata here as well. Every other read passes
@@ -1901,11 +1919,26 @@ export class SlackBackend {
         );
         // A failed reply request keeps the top-level messages, reports the problem,
         // and leaves the rest of the read alone.
-        if (!rep.ok) {
+        if (rep.ok) {
+          fetched.set(rootTs, rep.data.messages ?? []);
+          return;
+        }
+        // A rate-limited call is worth asking again, and every other error is the
+        // answer. The pause grows with the attempt.
+        if (rep.error !== "ratelimited" || attempt === REPLY_RETRIES - 1) {
           problems.push(`thread replies failed for root ${rootTs}: ${rep.error ?? "slack call failed"}`);
           return;
         }
-        fetched.set(rootTs, rep.data.messages ?? []);
+        await this.sleep(REPLY_RETRY_PAUSE_MS * (attempt + 1));
+      }
+    };
+    await Promise.all(
+      Array.from({ length: Math.min(REPLY_CONCURRENCY, pending.length) }, async () => {
+        for (;;) {
+          const next = pending.shift();
+          if (next === undefined) return;
+          await readRoot(next);
+        }
       }),
     );
     let droppedRoots = 0;

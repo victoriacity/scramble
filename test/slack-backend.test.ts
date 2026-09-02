@@ -8,6 +8,7 @@ import {
   computeMentions,
   unescapeSlack,
   undoAutoLinks,
+  REPLY_CONCURRENCY,
   denormalize,
   readerBroadcasts,
   isStatusLine,
@@ -750,6 +751,50 @@ describe("history", () => {
     expect(r.messages[0]!.from).toBe("ana");
     expect(r.messages[0]!.text).toBe("start");
     expect(r.messages[0]!.ts).toBe("1");
+  });
+
+  test("A RATE-LIMITED THREAD READ IS ASKED AGAIN, and the burst is bounded", async () => {
+    // Sending every expansion at once produced `ratelimited` across four roots in one
+    // sweep on a busy channel, and a dropped expansion loses a thread reply somebody
+    // is waiting on.
+    let inFlight = 0;
+    let peak = 0;
+    let firstCall = true;
+    const roots = Array.from({ length: 8 }, (_, i) => ({
+      ts: String(100 + i),
+      text: `root ${i}`,
+      user: "U1",
+      thread_ts: String(100 + i),
+      reply_count: 1,
+      latest_reply: String(200 + i),
+    }));
+    const h = make({}, async (url) => {
+      if (!String(url).includes("conversations.replies")) {
+        return new Response(JSON.stringify({ ok: true, messages: roots }), { status: 200 });
+      }
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      try {
+        // The first reply read answers `ratelimited` once, and the retry succeeds.
+        if (firstCall) {
+          firstCall = false;
+          return new Response(JSON.stringify({ ok: false, error: "ratelimited" }), { status: 200 });
+        }
+        const ts = new URL(String(url)).searchParams.get("ts") ?? "";
+        return new Response(
+          JSON.stringify({ ok: true, messages: [{ ts, text: "root", user: "U1" }, { ts: `${ts}.1`, text: "a reply", user: "U1", thread_ts: ts }] }),
+          { status: 200 },
+        );
+      } finally {
+        inFlight -= 1;
+      }
+    });
+    const r = await h.backend.history("general");
+    expect(r.code).toBe(0);
+    // Every root came back with its reply, including the one that was refused first.
+    expect(r.messages.filter((m) => m.text === "a reply")).toHaveLength(8);
+    expect(r.problems.join(" ")).not.toContain("ratelimited");
+    expect(peak).toBeLessThanOrEqual(REPLY_CONCURRENCY);
   });
 
   test("THE CURSOR FILTERS THE LINES, since Slack's oldest filters the roots", async () => {
