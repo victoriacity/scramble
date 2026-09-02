@@ -1886,8 +1886,16 @@ export class SlackBackend {
     // choice depends on the newest reply independently of the order returned by
     // history.
     const roots = (r.data.messages ?? []).filter(isThreadRoot);
+    // A CURSOR NARROWS THE WORK TO THE THREADS THAT MOVED. Slack reports each root's
+    // newest reply, so a root whose latest reply predates the cursor holds nothing
+    // this read can return, and expanding it spends a call to confirm that. On this
+    // channel the cap was dropping 43 roots per sweep while almost none of them had
+    // moved, so the reads that mattered were the ones being dropped.
+    const since_ = since === undefined ? 0 : Number(since);
+    const candidates =
+      since_ > 0 ? roots.filter((m) => Number(m.latest_reply ?? m.ts ?? 0) > since_) : roots;
     const expandable = new Set(
-      [...roots]
+      [...candidates]
         .sort((a, b) => Number(b.latest_reply ?? b.ts ?? 0) - Number(a.latest_reply ?? a.ts ?? 0))
         .slice(0, THREAD_EXPANSION_CAP)
         .map((m) => m.ts ?? ""),
@@ -1950,6 +1958,9 @@ export class SlackBackend {
       // newest
       // replies. Unbounded expansion on a busy channel is unacceptable.
       if (!expandable.has(m.ts ?? "")) {
+        // A root the cursor ruled out holds nothing newer, so its absence from this
+        // read is no loss and says nothing to report.
+        if (since_ > 0 && Number(m.latest_reply ?? m.ts ?? 0) <= since_) continue;
         droppedRoots += 1;
         continue;
       }

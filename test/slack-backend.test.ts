@@ -753,6 +753,36 @@ describe("history", () => {
     expect(r.messages[0]!.ts).toBe("1");
   });
 
+  test("A CURSOR NARROWS THE EXPANSION to the threads that moved", async () => {
+    // The cap was dropping 43 roots per sweep on one channel while almost none of
+    // them had a new reply, so the reads that mattered were the ones being dropped.
+    // Slack reports each root's newest reply, which answers whether a root can hold
+    // anything this read would return.
+    const asked: string[] = [];
+    const roots = [
+      { ts: "10", text: "quiet thread", user: "U1", thread_ts: "10", reply_count: 1, latest_reply: "11" },
+      { ts: "20", text: "moved thread", user: "U1", thread_ts: "20", reply_count: 1, latest_reply: "99" },
+    ];
+    const h = make({}, async (url) => {
+      if (String(url).includes("conversations.replies")) {
+        const ts = new URL(String(url)).searchParams.get("ts") ?? "";
+        asked.push(ts);
+        return new Response(
+          JSON.stringify({ ok: true, messages: [{ ts, text: "root", user: "U1" }, { ts: "99", text: "the new reply", user: "U1", thread_ts: ts }] }),
+          { status: 200 },
+        );
+      }
+      return new Response(JSON.stringify({ ok: true, messages: roots }), { status: 200 });
+    });
+    const r = await h.backend.history("general", "50");
+    expect(r.code).toBe(0);
+    // One call, for the thread whose newest reply is past the cursor.
+    expect(asked).toEqual(["20"]);
+    expect(r.messages.map((m) => m.text)).toEqual(["the new reply"]);
+    // A root the cursor ruled out is no loss, so nothing is reported about it.
+    expect(r.problems.join(" ")).not.toContain("read capped");
+  });
+
   test("A RATE-LIMITED THREAD READ IS ASKED AGAIN, and the burst is bounded", async () => {
     // Sending every expansion at once produced `ratelimited` across four roots in one
     // sweep on a busy channel, and a dropped expansion loses a thread reply somebody
