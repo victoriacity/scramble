@@ -1349,7 +1349,16 @@ async function historyRead(
       io.writeErr(`read failed: ${r.error}`);
       return 1;
     }
-    for (const m of r.messages) io.write(JSON.stringify(m));
+    // `--last N` answers "what happened lately" in one command. A whole-channel read
+    // asks a reader to scroll, and the operator asked for the newest items to be one
+    // fast command. The rows arrive newest-first from Slack with each thread's replies
+    // sitting under their root, so the newest N by timestamp needs the sort.
+    const last = intFlag(flags, "last", 0);
+    const rows =
+      last > 0
+        ? [...r.messages].sort((a, b) => Number(b.ts ?? 0) - Number(a.ts ?? 0)).slice(0, last)
+        : r.messages;
+    for (const m of rows) io.write(JSON.stringify(m));
     return 0;
   }
   return historyLocal(channel, since, flags, io);
@@ -4785,7 +4794,8 @@ const USAGE = [
   "                    [--attach <path>]             send a file with it, repeatable",
   "                    [--again]                     send a draft you already sent to that channel",
   "                    [--verify]                    read the message back and report what Slack stored",
-  "  message read      --target <channel> [--after N]",
+  "  message read      --target <channel> [--after N] [--last N]",
+  "                                                  --last N prints the newest N lines, newest first",
   "  message check                                   drain what arrived, and what you owe",
   "  message react     --target <channel> --to <ts> --emoji <name>",
   "  message edit      --target <channel> --to <ts>  the new text on stdin",

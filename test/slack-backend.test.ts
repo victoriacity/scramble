@@ -752,13 +752,38 @@ describe("history", () => {
     expect(r.messages[0]!.ts).toBe("1");
   });
 
-  test("maps a since cursor to Slack's oldest param", async () => {
+  test("THE CURSOR FILTERS THE LINES, since Slack's oldest filters the roots", async () => {
+    // An agent read a channel whose recent traffic lives inside old threads, passed
+    // `--after` with a recent timestamp, and got nothing: the roots sat before the
+    // cursor, so Slack returned none of them and their new replies came with none of
+    // them. The read asks for the recent window and drops what sits at or before the
+    // cursor, after the threads are in.
+    const urls: string[] = [];
     const h = make({}, async (url) => {
-      expect(url).toContain("oldest=5");
-      return new Response(JSON.stringify({ ok: true, messages: [] }), { status: 200 });
+      urls.push(String(url));
+      if (String(url).includes("conversations.replies")) {
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            messages: [
+              { ts: "5", text: "the old root", user: "U1" },
+              { ts: "9", text: "a reply after the cursor", user: "U1", thread_ts: "5" },
+            ],
+          }),
+          { status: 200 },
+        );
+      }
+      return new Response(
+        JSON.stringify({ ok: true, messages: [{ ts: "5", text: "the old root", user: "U1", thread_ts: "5", reply_count: 1, latest_reply: "9" }] }),
+        { status: 200 },
+      );
     });
-    const r = await h.backend.history("general", "5");
+    const r = await h.backend.history("general", "7");
     expect(r.code).toBe(0);
+    // No `oldest` reaches Slack, and the reply newer than the cursor comes back while
+    // the root at "5" does not.
+    expect(urls.join(" ")).not.toContain("oldest=");
+    expect(r.messages.map((m) => m.ts)).toEqual(["9"]);
   });
 
   test("an unknown channel history fails naming the channel", async () => {

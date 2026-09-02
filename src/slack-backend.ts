@@ -1846,7 +1846,12 @@ export class SlackBackend {
     const t = this.agentToken(as ?? "");
     if (!t.ok) return { code: 1, error: t.error, messages: [], problems: [] };
     const token = t.token;
-    const qs = since !== undefined ? `&oldest=${encodeURIComponent(since)}` : "";
+    // THE CURSOR FILTERS THE LINES, and Slack's `oldest` filters the ROOTS. Passing
+    // the cursor to the API hid every reply under a root older than it: an agent read
+    // a channel whose recent traffic lives in old threads, got an empty answer from
+    // `--after`, and concluded the messages were gone. The read asks for the recent
+    // window, expands the threads, and drops what sits at or before the cursor.
+    const qs = "";
     const r = await readOk<{ messages?: SlackHistoryMessage[] }>(
       this.fetch,
       `${HISTORY_URL}?channel=${encodeURIComponent(slackChannel)}&${WITH_METADATA}${qs}`,
@@ -1875,6 +1880,34 @@ export class SlackBackend {
         .slice(0, THREAD_EXPANSION_CAP)
         .map((m) => m.ts ?? ""),
     );
+    // THE REPLY CALLS GO OUT TOGETHER. Each expandable root costs one
+    // `conversations.replies` request, and awaiting them inside the walk made them
+    // serial: an agent measured a read of one busy channel past 120 seconds, where
+    // the channel's recent traffic lives inside threads and the roots are old. One
+    // round trip for the whole set replaces up to 25 in a row, and the walk below
+    // keeps Slack's newest-first order, since every reply it needs is already in a map.
+    const fetched = new Map<string, SlackHistoryMessage[]>();
+    await Promise.all(
+      [...expandable].map(async (rootTs) => {
+        const rep = await readOk<{ messages?: SlackHistoryMessage[] }>(
+          this.fetch,
+          // Request metadata here as well. Every other read passes
+          // include_all_metadata and this one did not, so a message posted in a thread
+          // returned without an origin and without a status marker, which left `peers`
+          // unable to say which host wrote it.
+          `${REPLIES_URL}?channel=${encodeURIComponent(slackChannel)}&${WITH_METADATA}` +
+            `&ts=${encodeURIComponent(rootTs)}`,
+          { headers: { authorization: `Bearer ${token}` } },
+        );
+        // A failed reply request keeps the top-level messages, reports the problem,
+        // and leaves the rest of the read alone.
+        if (!rep.ok) {
+          problems.push(`thread replies failed for root ${rootTs}: ${rep.error ?? "slack call failed"}`);
+          return;
+        }
+        fetched.set(rootTs, rep.data.messages ?? []);
+      }),
+    );
     let droppedRoots = 0;
     for (const m of r.data.messages ?? []) {
       seq = await this.appendLine(m, slackChannel, channel, messages, problems, seq, token, as ?? "", forDelivery);
@@ -1888,34 +1921,17 @@ export class SlackBackend {
         continue;
       }
       const rootTs = m.ts ?? "";
-      const rep = await readOk<{ messages?: SlackHistoryMessage[] }>(
-        this.fetch,
-        // Request metadata in this read as well. Every other read passes
-        // include_all_metadata and this read did not, so a message posted in a thread
-        // returned without an origin and without a status marker. Because of this,
-        // `peers`
-        // could not determine which host or commit wrote the message, and a status line
-        // inside a thread read as an ordinary message. This was measured on two
-        // threaded
-        // replies whose delivery rows carry `origin: None` while the same agent's
-        // top-level lines carry theirs.
-        `${REPLIES_URL}?channel=${encodeURIComponent(slackChannel)}&${WITH_METADATA}` +
-          `&ts=${encodeURIComponent(rootTs)}`,
-        { headers: { authorization: `Bearer ${token}` } },
-      );
-      // If a request for replies fails, the read operation must not fail. The reader
-      // keeps the top-level messages, reports the problem, and continues.
-      if (!rep.ok) {
-        problems.push(`thread replies failed for root ${rootTs}: ${rep.error ?? "slack call failed"}`);
-        continue;
-      }
-      for (const reply of rep.data.messages ?? []) {
+      for (const reply of fetched.get(rootTs) ?? []) {
         // conversations.replies returns the root message as its first entry. The root
         // already appeared exactly once above with no `thread`, so drop it.
         if (reply.ts !== undefined && reply.ts === m.ts) continue;
         seq = await this.appendLine(reply, slackChannel, channel, messages, problems, seq, token, as ?? "", forDelivery);
       }
     }
+    // The cursor applies here, after the threads are in. A caller keeps its cursor on
+    // `ts`, so the comparison is numeric on the same field.
+    const after = since === undefined ? 0 : Number(since);
+    const kept = after > 0 ? messages.filter((m) => Number(m.ts ?? 0) > after) : messages;
     if (droppedRoots > 0) {
       // A dropped root must never look like an empty thread. The cap truncates the
       // read, so the system reports it through the same problems channel a partial read
@@ -1926,7 +1942,7 @@ export class SlackBackend {
           `a message failed to post.`,
       );
     }
-    return { code: 0, messages, problems };
+    return { code: 0, messages: kept, problems };
   }
 
   /**

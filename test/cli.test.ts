@@ -1215,6 +1215,40 @@ describe("both monitors are reported on every send", () => {
   });
 });
 
+describe("reading the newest lines in one command", () => {
+  // An agent read a channel, waited past 120 seconds, and got a twelve-message
+  // window from the oldest end. The operator asked for the newest items to be one
+  // fast command.
+  test("`--last N` prints the newest N lines, newest first", async () => {
+    const cwd = scratchDir("read-last");
+    const { io, writes } = stubIo(cwd, async (u) => {
+      if (String(u).includes("conversations.history")) {
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            messages: [
+              { ts: "30", text: "newest", user: "U1" },
+              { ts: "20", text: "middle", user: "U1" },
+              { ts: "10", text: "oldest", user: "U1" },
+            ],
+          }),
+          { status: 200 },
+        );
+      }
+      return new Response(JSON.stringify({ ok: true, messages: [] }), { status: 200 });
+    });
+    writeSlackConfig(cwd, {
+      appToken: "xapp-1",
+      token: "xoxb-1",
+      channels: { general: "C1" },
+      agents: { dev: { token: "T", handle: "dev" } },
+    });
+    expect(await main(["message", "read", "--target", "general", "--as", "dev", "--last", "2", "--backend", "slack"], io)).toBe(0);
+    const seen = writes.filter((w) => w.startsWith("{")).map((w) => (JSON.parse(w) as { ts: string }).ts);
+    expect(seen).toEqual(["30", "20"]);
+  });
+});
+
 describe("markdown bullets reach Slack as a list", () => {
   // AN AGENT POSTED A SIX-ITEM LIST AND IT READ AS SIX DASHES. Slack's message
   // format carries no list syntax, so `- item` arrives as those characters.
