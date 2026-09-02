@@ -5090,17 +5090,36 @@ describe("doctor, and the warning an agent gets without asking", () => {
   // reports the machine.
   const EMPTY_PROC = scratchDir("doctor-empty-proc");
 
+  // A HEALTHY AGENT RUNS THE CANONICAL MONITOR, so these tests plant one. An agent
+  // ran a poll of its own against one channel, a mention in every other channel woke
+  // nothing, and this verb answered `ok` throughout; the operator's instruction is
+  // that a wrong setup cannot look healthy. The proc root below holds a listener for
+  // each name these tests use, and the test that asserts the failure uses a root of
+  // its own with nothing in it.
+  const ARMED_PROC = (() => {
+    const root = scratchDir("doctor-armed-proc");
+    for (const [pid, agent] of [
+      ["4101", "dev"],
+      ["4102", "alone"],
+    ] as Array<[string, string]>) {
+      const dir = join(root, pid);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(dir + "/cmdline", ["/x/bun", "/x/src/bin.ts", "listen", "--addressed", "--as", agent].join("\0"));
+    }
+    return root;
+  })();
+
   // An agent onboarded before a fix continues to run without that fix. No other
   // mechanism notifies a running agent that its configuration is out of date, which
   // is why this command and this warning exist.
-  function docIo(cwd: string, headers: Record<string, string>, body: Record<string, unknown>) {
+  function docIo(cwd: string, headers: Record<string, string>, body: Record<string, unknown>, proc?: string) {
     const writes: string[] = [];
     const errs: string[] = [];
     const io: Io = {
       write: (l) => writes.push(l),
       writeErr: (l) => errs.push(l),
       fetch: async () => new Response(JSON.stringify(body), { status: 200, headers }),
-      env: (n) => (n === "SCRAMBLE_PROC" ? EMPTY_PROC : undefined),
+      env: (n) => (n === "SCRAMBLE_PROC" ? (proc ?? ARMED_PROC) : undefined),
       cwd: () => cwd,
       sleep: async () => {},
       serve: async () => 0,
@@ -5113,6 +5132,21 @@ describe("doctor, and the warning an agent gets without asking", () => {
   // healthy against a list that no longer existed, which is the drift that let the
   // events go unchecked.
   const ALL = SCOPE_NAMES.join(",");
+
+  test("NO CANONICAL MONITOR IS A FAILURE, so a wrong setup cannot report ok", async () => {
+    // An agent ran a poll of its own against one channel. A mention in every other
+    // channel woke nothing, and this verb answered `ok` throughout. The operator's
+    // instruction after reviewing the missed messages: a wrong setup cannot look
+    // healthy.
+    const cwd = scratchDir("doc-nomonitor");
+    writeSlackConfig(cwd, { token: "xoxb-d", channels: {}, agents: { dev: { token: "T", handle: "dev_bot" } } });
+    const { io, errs, writes } = docIo(cwd, { "x-oauth-scopes": ALL }, { ok: true, user: "dev_bot" }, EMPTY_PROC);
+    expect(await main(["doctor", "--as", "dev", "--backend", "slack"], io)).toBe(1);
+    expect(errs.join(" ")).toContain("NO canonical monitor is running for dev");
+    expect(errs.join(" ")).toContain("scramble listen --addressed --as dev");
+    // The clean line is the thing that must NOT appear.
+    expect(writes.join(" ")).not.toContain('"doctor":"ok"');
+  });
 
   test("a healthy agent reports ok with its handle", async () => {
     const cwd = scratchDir("doc-ok");
@@ -5271,7 +5305,7 @@ describe("doctor, and the warning an agent gets without asking", () => {
           { status: 200 },
         );
       },
-      env: (n) => (n === "HOME" ? home : n === "SCRAMBLE_SLACK_CONFIG" ? join(home, ".scramble", "slack.json") : undefined),
+      env: (n) => (n === "SCRAMBLE_PROC" ? ARMED_PROC : n === "HOME" ? home : n === "SCRAMBLE_SLACK_CONFIG" ? join(home, ".scramble", "slack.json") : undefined),
       cwd: () => home,
       sleep: async () => {},
       serve: async () => 0,
@@ -5317,7 +5351,7 @@ describe("doctor, and the warning an agent gets without asking", () => {
           { status: 200 },
         );
       },
-      env: (n) => (n === "HOME" ? home : n === "SCRAMBLE_SLACK_CONFIG" ? join(home, ".scramble", "slack.json") : undefined),
+      env: (n) => (n === "SCRAMBLE_PROC" ? ARMED_PROC : n === "HOME" ? home : n === "SCRAMBLE_SLACK_CONFIG" ? join(home, ".scramble", "slack.json") : undefined),
       cwd: () => home,
       sleep: async () => {},
       serve: async () => 0,
@@ -5369,7 +5403,7 @@ describe("doctor, and the warning an agent gets without asking", () => {
           { status: 200 },
         );
       },
-      env: (n) => (n === "HOME" ? home : n === "SCRAMBLE_SLACK_CONFIG" ? join(home, ".scramble", "slack.json") : undefined),
+      env: (n) => (n === "SCRAMBLE_PROC" ? ARMED_PROC : n === "HOME" ? home : n === "SCRAMBLE_SLACK_CONFIG" ? join(home, ".scramble", "slack.json") : undefined),
       cwd: () => home,
       sleep: async () => {},
       serve: async () => 0,
@@ -5396,7 +5430,7 @@ describe("doctor, and the warning an agent gets without asking", () => {
           status: 200,
           headers: { "x-oauth-scopes": ALL },
         }),
-      env: (n) => (n === "HOME" ? home : n === "SCRAMBLE_SLACK_CONFIG" ? join(home, ".scramble", "slack.json") : undefined),
+      env: (n) => (n === "SCRAMBLE_PROC" ? ARMED_PROC : n === "HOME" ? home : n === "SCRAMBLE_SLACK_CONFIG" ? join(home, ".scramble", "slack.json") : undefined),
       cwd: () => home,
       sleep: async () => {},
       serve: async () => 0,
@@ -5427,7 +5461,7 @@ describe("doctor, and the warning an agent gets without asking", () => {
                 headers: { "x-oauth-scopes": ALL },
               })
             : new Response(JSON.stringify(exportOk ? { ok: true, manifest: {} } : { ok: false, error: "no" }), { status: 200 }),
-        env: (n) => (n === "HOME" ? home : n === "SCRAMBLE_SLACK_CONFIG" ? join(home, ".scramble", "slack.json") : undefined),
+        env: (n) => (n === "SCRAMBLE_PROC" ? ARMED_PROC : n === "HOME" ? home : n === "SCRAMBLE_SLACK_CONFIG" ? join(home, ".scramble", "slack.json") : undefined),
         cwd: () => home,
         sleep: async () => {},
         serve: async () => 0,
@@ -5471,7 +5505,7 @@ describe("doctor, and the warning an agent gets without asking", () => {
           status: 200,
           headers: { "x-oauth-scopes": ALL },
         }),
-      env: (n) => (n === "HOME" ? home : n === "SCRAMBLE_SLACK_CONFIG" ? join(home, ".scramble", "slack.json") : undefined),
+      env: (n) => (n === "SCRAMBLE_PROC" ? ARMED_PROC : n === "HOME" ? home : n === "SCRAMBLE_SLACK_CONFIG" ? join(home, ".scramble", "slack.json") : undefined),
       cwd: () => home,
       sleep: async () => {},
       serve: async () => 0,

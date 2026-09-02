@@ -4091,6 +4091,21 @@ async function cmdDoctor(argv: string[], io: Io): Promise<number> {
     }
   }
 
+  // NO CANONICAL MONITOR IS A PROBLEM, and it used to be an advisory. An agent ran a
+  // poll of its own against one channel, so a mention in any other channel woke
+  // nothing, and this verb answered `ok` the whole time. The operator's instruction:
+  // a wrong setup cannot look healthy.
+  // `--wake` needs the socket free, so it asks the caller to stop the listener
+  // first; a missing monitor there is the precondition for the probe.
+  const probing = (flags.get("wake") ?? "") !== "";
+  if (!probing && processesReadable(procRoot) && liveListeners(readProcesses(procRoot), name).length === 0) {
+    problems.push(
+      `NO canonical monitor is running for ${name}, so a delivery in any channel wakes nothing. ` +
+        `One command covers every channel this agent is in, and it sweeps on its own timer: ` +
+        `scramble listen --addressed --as ${name}. A poll of your own against one channel is the ` +
+        `setup this replaces.`,
+    );
+  }
   for (const f of fixed) io.write(JSON.stringify({ doctor: "fixed", agent: name, detail: f }));
   for (const p of problems) io.writeErr(`doctor: ${p}`);
   for (const a of advisories) io.writeErr(`doctor advisory: ${a}`);
